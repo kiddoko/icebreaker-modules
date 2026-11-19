@@ -1,0 +1,10 @@
+[
+  {
+    "id": "hello",
+    "kind": "plugin",
+    "name": "Hello",
+    "description": "The example module: a `hello` command, an app and a widget. Copy it to start yours",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/hello"
+  }
+]

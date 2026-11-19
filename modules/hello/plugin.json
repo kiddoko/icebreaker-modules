@@ -1,0 +1,8 @@
+{
+  "id": "hello",
+  "name": "HELLO",
+  "version": "0.1.0",
+  "description": "The example module: a `hello` command, an app and a widget",
+  "author": "icebreaker",
+  "permissions": ["vault:read"]
+}
