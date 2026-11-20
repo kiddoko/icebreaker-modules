@@ -5,14 +5,16 @@ line a step, each cell a note, an instrument and hex commands; a play sequence m
 It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's colours, with the
 keyboard, the mouse and a gamepad.
 
-> Work in progress. Steps 1 (read and play) and 2 (edit) are here; saving and the sampler come next.
+> Work in progress: reading, playing, editing and saving are here (8 tracks by default, 16 at
+> most, named); next come the exports, the sampler's tools, the synths, the drum machine, chords.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
 ## What it needs
 
 - **`audio`**: it plays its sound through the deck's sampler (`ib.audio`).
-- **`vault:read`**: it reads your songs from the vault (`.med`, `.mod`, `mod.xxx`).
+- **`vault:read`**: it reads your songs from the vault (`.bmed`, `.med`, `.mod`, `mod.xxx`).
+- **`vault:write`**: it saves your songs in the vault (`med save`).
 - Nothing online, no account, no AI. An ICEBREAKER with `ib.audio` and pages that play the keyboard: not
   released yet (ICEBREAKER's branch `claude/breakermed-core`); on an older deck it says so and stays off.
 
@@ -48,6 +50,9 @@ med                         what's loaded, where it is
 med open [file]             a song of the vault (no file: choose one)
 med ls                      the songs in the vault
 med demo                    a little song of ours, to try it right away
+med new [tracks]            a new song: 8 tracks (up to 16), the demo's instruments to start
+med save [file]             my-song.bmed (ours, the default) · song.mod · song.med (for other trackers)
+med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>
 med play [song|block] [position] [line]
 med stop
 med pos <position> [line]
@@ -62,6 +67,19 @@ med undo · med redo
 med effects                 every command, one line each
 med info                    the song's settings and instruments
 ```
+
+## Its own format: .bmed
+
+A song is a folder you can read: `song.json` holds the settings, the tracks (names, volume, pan),
+the sequence, the instruments and every block line by line, the way the page shows it
+(`C-3 01 0C20 | --- .. ....`); `samples/` holds each instrument's sound as a WAV file. `.med`
+(MMD1) and `.mod` are written too, for other trackers: `med save` says what they couldn't keep.
+
+## How it plays
+
+breakerMED computes its sound itself (every track, every instrument) and streams it to the deck
+(`ib.audio.stream`): about 30 ms from a key to the sound, and an export will be exactly what you
+hear. The track headers show the names: double-click one to rename it, right-click to mute or solo.
 
 ## Commands (OctaMED's numbering)
 

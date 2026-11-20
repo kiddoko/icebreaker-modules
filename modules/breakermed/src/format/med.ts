@@ -239,6 +239,7 @@ export function readMed(bytes: Uint8Array): Song {
     masterVolume: masterVol ? Math.min(64, masterVol) : 64,
     trackVolume: Array.from({ length: tracks }, (_, i) => Math.max(0, Math.min(64, trackVolume[i] ?? 64))),
     trackPan: trackPan && trackPan.length === tracks ? trackPan : amigaPan(tracks),
+    trackNames: new Array(tracks).fill(""),
     flags: {
       volHex: !!(flags & 0x10),
       vol7bit: h.version > 2,

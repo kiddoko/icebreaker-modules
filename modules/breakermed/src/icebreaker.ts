@@ -142,6 +142,9 @@ export interface IcebreakerAPI {
   palette: { register(a: { id: string; title: string; key?: string; run: () => unknown }): void };
   shell: { run(line: string): Promise<number> };
   vault: {
+    read(path: string): Promise<string>;
+    write(path: string, content: string): Promise<void>;
+    mkdir(path: string): Promise<void>;
     list(dir: string): Promise<VaultEntry[]>;
     readBytes(path: string): Promise<Uint8Array>;
     writeBytes(path: string, data: Uint8Array | ArrayBuffer): Promise<void>;
@@ -150,6 +153,7 @@ export interface IcebreakerAPI {
   ui: {
     notify(text: string, kind?: "info" | "success" | "warning" | "error"): void;
     choose(title: string, options: { label: string }[], opts?: { selected?: number }): Promise<number | null>;
+    prompt(title: string, opts?: { initial?: string; placeholder?: string }): Promise<string | null>;
     redraw(): void;
   };
   audio: {
@@ -159,6 +163,8 @@ export interface IcebreakerAPI {
     drop(id?: string): Promise<void>;
     schedule(events: object[]): Promise<void>;
     stop(): Promise<void>;
+    /** a line for sound the module computes itself: the deck asks for `frames` more when it runs low */
+    stream(): Promise<{ rate: number; low: number; high: number; onPull?: (frames: number, played: number, buffered: number) => void; write(left: Float32Array, right: Float32Array): void; close(): void }>;
     /** the user silenced the module (`audio stop`, the ♪ in the status bar) */
     onStop(fn: () => void): () => void;
     decode(bytes: Uint8Array | ArrayBuffer): Promise<{ rate: number; channels: Float32Array[] }>;
@@ -168,6 +174,8 @@ export interface IcebreakerAPI {
     t(english: string): string;
     addTranslations(lang: string, table: Record<string, string>): void;
     truncate(s: string, w: number): string;
+    /** a shell argument, quoted safely */
+    q(s: string): string;
     mix(a: RGB, b: RGB, k: number): RGB;
     parseFlags(args: string[]): { flags: Record<string, string | true>; rest: string[] };
     fmt: { green(s: string): string; cyan(s: string): string; dim(s: string): string };

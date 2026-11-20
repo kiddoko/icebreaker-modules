@@ -60,7 +60,7 @@ const LEFT = 22;
 const HEX = "0123456789abcdef";
 
 export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
-  const { BOLD, t, truncate, ListView, mix } = ib.lib;
+  const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
   const run = (line: string) => void ib.shell.run(line);
   const seqList = new ListView<number>();
   const instList = new ListView<number>();
@@ -148,6 +148,14 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const transpose = (semis: number) => ed()?.transpose(target(), semis);
   const say = (label: string | null, what: string) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
 
+  /** a track's new name, asked in a window (the command does it) */
+  const rename = async (tr: number) => {
+    const s = song();
+    if (!s) return;
+    const name = await ib.ui.prompt(t("TRACK NAME"), { initial: s.trackNames[tr] ?? "", placeholder: `${t("track")} ${tr + 1}` });
+    if (name !== null) run(`med track ${tr + 1} name ${q(name.trim())}`);
+  };
+
   /** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
   const cellMenu = (line: number, track: number): MenuEntry[] => {
     const inSel = !!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1;
@@ -172,6 +180,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("insert a line"), hint: "alt ⏎", run: () => ed()?.insertLine(blockNo(), line, [track]) },
     { label: t("delete the line"), hint: "⌫", run: () => ed()?.deleteLine(blockNo(), line, [track]) },
     { label: t("mute / unmute this track"), cmd: `med mute ${track + 1}` },
+    "-",
+    { label: t("save"), hint: "med save", cmd: "med save" },
   ];
 
   /** the cell (and column) under the mouse, from where the block was drawn */
@@ -267,8 +277,18 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const tr = firstTrack + k;
         const muted = engine.muted.has(tr);
         const hx = inner.x + numW + k * cw;
-        ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${t("track")} ${tr + 1}`, { fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle, attrs: tr === st.track ? BOLD : 0 }, cw - 1);
-        ui.hit({ x: hx, y: inner.y, w: cw - 1, h: 1 }, { cmd: `med mute ${tr + 1}`, tip: t("mute / unmute this track") });
+        const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
+        ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, { fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle, attrs: tr === st.track ? BOLD : 0 }, cw - 1);
+        ui.hit({ x: hx, y: inner.y, w: cw - 1, h: 1 }, {
+          onClick: () => (st.track = tr),
+          onDouble: () => void rename(tr),
+          tip: t("double-click: rename · right-click: mute, solo"),
+          menu: () => [
+            { label: t("rename…"), run: () => void rename(tr) },
+            { label: muted ? t("unmute") : t("mute"), cmd: `med mute ${tr + 1}` },
+            { label: t("solo"), cmd: `med solo ${tr + 1}` },
+          ],
+        });
       }
       // the lines: the cursor's line in the middle
       const rows = inner.h - 1;
@@ -416,6 +436,6 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       return false;
     },
 
-    menu: () => (st.song ? cellMenu(st.line, st.track) : [{ label: t("open a song…"), cmd: "med open" }, { label: t("the demo song"), cmd: "med demo" }]),
+    menu: () => (st.song ? cellMenu(st.line, st.track) : [{ label: t("open a song…"), cmd: "med open" }, { label: t("a new song"), cmd: "med new" }, { label: t("the demo song"), cmd: "med demo" }]),
   };
 }

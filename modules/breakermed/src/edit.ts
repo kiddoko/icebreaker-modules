@@ -5,7 +5,7 @@
  * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), then per
  * command page 4 more: the command's two digits, the parameter's two.
  */
-import { emptyCell, newBlock, NOTE_OFF, type Block, type Cell, type Song } from "./song";
+import { emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Song } from "./song";
 
 export const NOTE_COL = 0;
 /** how many columns a cell has */
@@ -96,13 +96,14 @@ export class Editor {
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
   private shape(label: string, fn: () => void): void {
-    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan] });
+    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames] });
     const put = (s: ReturnType<typeof take>) => {
       this.song.blocks = s.blocks.map(cloneBlock);
       this.song.sequence = [...s.sequence];
       this.song.tracks = s.tracks;
       this.song.trackVolume = [...s.vol];
       this.song.trackPan = [...s.pan];
+      this.song.trackNames = [...s.names];
     };
     const before = take();
     fn();
@@ -253,9 +254,9 @@ export class Editor {
     });
   }
 
-  /** how many tracks every block has (1–64) */
+  /** how many tracks every block has (1–16; a song read with more keeps what it has) */
   setTracks(n: number): void {
-    const tracks = Math.max(1, Math.min(64, Math.floor(n)));
+    const tracks = Math.max(1, Math.min(Math.max(MAX_TRACKS, this.song.tracks), Math.floor(n)));
     this.shape("tracks", () => {
       for (const b of this.song.blocks)
         for (const row of b.cells) {
@@ -265,7 +266,19 @@ export class Editor {
       const s = this.song;
       s.trackVolume = Array.from({ length: tracks }, (_, i) => s.trackVolume[i] ?? 64);
       s.trackPan = Array.from({ length: tracks }, (_, i) => s.trackPan[i] ?? ((i & 3) === 0 || (i & 3) === 3 ? -0.6 : 0.6));
+      s.trackNames = Array.from({ length: tracks }, (_, i) => s.trackNames[i] ?? "");
       s.tracks = tracks;
+    });
+  }
+
+  /** a track's name, volume (0–64) and pan (-1…1) */
+  setTrack(track: number, what: { name?: string; volume?: number; pan?: number }): void {
+    if (track < 0 || track >= this.song.tracks) return;
+    this.shape("track", () => {
+      const s = this.song;
+      if (what.name !== undefined) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
+      if (what.volume !== undefined) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
+      if (what.pan !== undefined) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
     });
   }
 

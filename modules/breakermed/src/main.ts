@@ -109,4 +109,12 @@ const FR: Record<string, string> = {
   sequence: "séquence",
   "open a song…": "ouvrir un morceau…",
   "the demo song": "le morceau de démo",
+  "double-click: rename · right-click: mute, solo": "double-clic : renommer · clic droit : couper, solo",
+  "rename…": "renommer…",
+  unmute: "rétablir",
+  mute: "couper",
+  solo: "solo",
+  "TRACK NAME": "NOM DE LA PISTE",
+  save: "enregistrer",
+  "a new song": "un nouveau morceau",
 };

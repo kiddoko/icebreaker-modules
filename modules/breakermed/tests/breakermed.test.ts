@@ -3,7 +3,8 @@ import { Writer } from "../src/format/bytes";
 import { readSong } from "../src/format";
 import { modToMed } from "../src/format/mod";
 import { Player, songLength } from "../src/replayer";
-import { Engine, type AudioPort } from "../src/engine";
+import { Engine, type AudioPort, type StreamLike } from "../src/engine";
+import { Renderer } from "../src/render";
 import { NOTE_OFF, PAULA_CLOCK, noteName, ptBpmOf, tickSeconds } from "../src/song";
 import { pianoKey } from "../src/keys";
 import { demoMod } from "../src/demo";
@@ -232,35 +233,69 @@ describe("breakerMED: the replayer", () => {
   });
 });
 
-// ── the engine, with a fake sampler ────────────────────────────────────────
+// ── the renderer and the engine, with a fake sound line ────────────────────
+
+describe("breakerMED: the renderer", () => {
+  it("a note starts on its tick's first frame, lines last speed × tick", () => {
+    const song = readSong(makeMod([{ "0:0": { period: 428, inst: 1 }, "1:0": { period: 428, inst: 1 } }]));
+    const r = new Renderer(song, 50_000);
+    r.play(0, 0);
+    const l = new Float32Array(20_000), rr = new Float32Array(20_000);
+    r.render(l, rr);
+    expect(r.marks.slice(0, 3).map((m) => [m.line, m.frame])).toEqual([[0, 0], [1, 6000], [2, 12000]]); // 6 ticks × 20 ms × 50 kHz
+    expect(Math.max(...l.slice(0, 100).map(Math.abs))).toBeGreaterThan(0.1); // the square, on the left
+    expect(Math.max(...rr.slice(0, 100).map(Math.abs))).toBeLessThan(0.2);
+  });
+
+  it("renders the same whatever the block size (an export and the live sound agree)", () => {
+    const song = readSong(demoMod());
+    const a = new Renderer(song, 44_100), b = new Renderer(song, 44_100);
+    a.play(0, 0);
+    b.play(0, 0);
+    const la = new Float32Array(44_100), ra = new Float32Array(44_100);
+    a.render(la, ra);
+    const lb = new Float32Array(44_100), rb = new Float32Array(44_100);
+    for (let at = 0; at < 44_100; at += 777) {
+      const n = Math.min(777, 44_100 - at);
+      const l = new Float32Array(n), r = new Float32Array(n);
+      b.render(l, r, n);
+      lb.set(l, at);
+      rb.set(r, at);
+    }
+    expect(la).toEqual(lb);
+    expect(ra).toEqual(rb);
+  });
+
+  it("a muted track is silent; a key previews on its own voice", () => {
+    const song = readSong(makeMod([{ "0:0": { period: 428, inst: 1 } }]));
+    const r = new Renderer(song, 48_000);
+    r.play(0, 0, { muted: new Set([0]) });
+    const l = new Float32Array(2000), rr = new Float32Array(2000);
+    r.render(l, rr);
+    expect(Math.max(...l.map(Math.abs))).toBe(0);
+    r.preview(0, 8287);
+    const l2 = new Float32Array(2000), r2 = new Float32Array(2000);
+    r.render(l2, r2);
+    expect(Math.max(...l2.map(Math.abs))).toBeGreaterThan(0.1);
+  });
+});
 
 describe("breakerMED: the engine", () => {
-  it("loads the instruments, schedules dated events ahead, stops", async () => {
-    let clock = 10;
-    const sent: Record<string, unknown>[] = [];
-    const calls: string[] = [];
-    const port: AudioPort = {
-      available: () => true,
-      now: async () => clock,
-      sample: async (id) => void calls.push(`sample ${id}`),
-      drop: async () => void calls.push("drop"),
-      schedule: async (evs) => void sent.push(...(evs as Record<string, unknown>[])),
-      stop: async () => void calls.push("stop"),
-    };
+  it("opens the line, writes ahead, answers the deck's requests, follows the line heard, stops", async () => {
+    const written: number[] = [];
+    let stopped = 0;
+    const line: StreamLike = { rate: 48_000, low: 768, high: 1536, write: (l) => void written.push(l.length), close: () => {} };
+    const port: AudioPort = { available: () => true, stream: async () => line, stop: async () => void stopped++ };
     const engine = new Engine(port);
     await engine.load(readSong(makeMod([{ "0:0": { period: 428, inst: 1 }, "1:1": { period: 428, inst: 1 } }])));
-    expect(calls).toContain("sample i0");
     await engine.play("song", { seq: 0, line: 0 });
-    await new Promise((r) => setTimeout(r, 300)); // the engine computes ~150 ms ahead, every 25 ms
+    expect(written).toEqual([1536]); // right away, before any request
+    for (let i = 0; i < 10; i++) line.onPull!(768, 0, 768);
+    expect(written.length).toBe(11);
+    expect(engine.current()?.line).toBe(1); // ~15 000 frames written, one line = 5 760 frames at 48 kHz
     engine.stop();
-    expect(calls).toContain("stop");
-    const play = sent.filter((e) => e.play === "i0");
-    expect(play.length).toBe(2);
-    expect(play[0].at as number).toBeGreaterThan(clock);
-    // the second note is one line (6 ticks of 20 ms) after the first
-    expect((play[1].at as number) - (play[0].at as number)).toBeCloseTo(0.12, 5);
-    expect(play[0].interp).toBe("none");
-    clock = 11;
+    expect(stopped).toBe(1);
+    expect(engine.current()).toBe(null);
   });
 });
 

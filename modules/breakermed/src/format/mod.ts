@@ -83,6 +83,7 @@ export function readMod(bytes: Uint8Array): Song {
     masterVolume: 64,
     trackVolume: new Array(tracks).fill(64),
     trackPan: amigaPan(tracks),
+    trackNames: new Array(tracks).fill(""),
     flags: { volHex: true, vol7bit: false, ptSlides: true, eightChannel: false, hardwareMix: true, filter: false },
   };
 

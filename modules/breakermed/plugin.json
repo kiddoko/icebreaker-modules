@@ -1,12 +1,13 @@
 {
   "id": "breakermed",
   "name": "breakerMED",
-  "version": "0.1.0",
-  "description": "A tracker like OctaMED and ProTracker: plays (and soon edits) .med and .mod songs, in ASCII, keyboard, mouse and gamepad",
+  "version": "0.2.0",
+  "description": "A tracker like OctaMED and ProTracker: plays and edits .med and .mod songs (and its own .bmed), 8 to 16 tracks, in ASCII, keyboard, mouse and gamepad",
   "author": "icebreaker",
   "icon": "♫",
   "permissions": [
     "audio",
-    "vault:read"
+    "vault:read",
+    "vault:write"
   ]
 }

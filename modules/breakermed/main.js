@@ -45,6 +45,35 @@ function emptyInstrument() {
 		decay: 0
 	};
 }
+function newSong(tracks = 8) {
+	return {
+		title: "",
+		format: "MMD1",
+		tracks,
+		blocks: [newBlock(tracks)],
+		sequence: [0],
+		restart: 0,
+		instruments: [],
+		tempoMode: "bpm",
+		tempo: 125,
+		speed: 6,
+		lpb: 4,
+		transpose: 0,
+		noteShift: 0,
+		masterVolume: 64,
+		trackVolume: new Array(tracks).fill(64),
+		trackPan: amigaPan(tracks),
+		trackNames: new Array(tracks).fill(""),
+		flags: {
+			volHex: true,
+			vol7bit: false,
+			ptSlides: false,
+			eightChannel: false,
+			hardwareMix: true,
+			filter: false
+		}
+	};
+}
 /** The Amiga's voices: left, right, right, left (again for more tracks), not quite hard. */
 function amigaPan(tracks, width = .6) {
 	return Array.from({ length: tracks }, (_, i) => (i & 3) === 0 || (i & 3) === 3 ? -width : width);
@@ -267,7 +296,8 @@ var Editor = class {
 			sequence: [...this.song.sequence],
 			tracks: this.song.tracks,
 			vol: [...this.song.trackVolume],
-			pan: [...this.song.trackPan]
+			pan: [...this.song.trackPan],
+			names: [...this.song.trackNames]
 		});
 		const put = (s) => {
 			this.song.blocks = s.blocks.map(cloneBlock);
@@ -275,6 +305,7 @@ var Editor = class {
 			this.song.tracks = s.tracks;
 			this.song.trackVolume = [...s.vol];
 			this.song.trackPan = [...s.pan];
+			this.song.trackNames = [...s.names];
 		};
 		const before = take();
 		fn();
@@ -413,9 +444,9 @@ var Editor = class {
 			b.lines = n;
 		});
 	}
-	/** how many tracks every block has (1–64) */
+	/** how many tracks every block has (1–16; a song read with more keeps what it has) */
 	setTracks(n) {
-		const tracks = Math.max(1, Math.min(64, Math.floor(n)));
+		const tracks = Math.max(1, Math.min(Math.max(16, this.song.tracks), Math.floor(n)));
 		this.shape("tracks", () => {
 			for (const b of this.song.blocks) for (const row of b.cells) {
 				if (row.length > tracks) row.length = tracks;
@@ -424,7 +455,18 @@ var Editor = class {
 			const s = this.song;
 			s.trackVolume = Array.from({ length: tracks }, (_, i) => s.trackVolume[i] ?? 64);
 			s.trackPan = Array.from({ length: tracks }, (_, i) => s.trackPan[i] ?? ((i & 3) === 0 || (i & 3) === 3 ? -.6 : .6));
+			s.trackNames = Array.from({ length: tracks }, (_, i) => s.trackNames[i] ?? "");
 			s.tracks = tracks;
+		});
+	}
+	/** a track's name, volume (0–64) and pan (-1…1) */
+	setTrack(track, what) {
+		if (track < 0 || track >= this.song.tracks) return;
+		this.shape("track", () => {
+			const s = this.song;
+			if (what.name !== void 0) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
+			if (what.volume !== void 0) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
+			if (what.pan !== void 0) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
 		});
 	}
 	/** put a block in the sequence at `pos` (before what's there) */
@@ -544,7 +586,7 @@ var colW = (col) => col === 0 ? 3 : 1;
 var LEFT = 22;
 var HEX = "0123456789abcdef";
 function makeApp(ib, engine, st) {
-	const { BOLD, t, truncate, ListView, mix } = ib.lib;
+	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
 	const run = (line) => void ib.shell.run(line);
 	const seqList = new ListView();
 	const instList = new ListView();
@@ -654,6 +696,16 @@ function makeApp(ib, engine, st) {
 	};
 	const transpose = (semis) => ed()?.transpose(target(), semis);
 	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
+	/** a track's new name, asked in a window (the command does it) */
+	const rename = async (tr) => {
+		const s = song();
+		if (!s) return;
+		const name = await ib.ui.prompt(t("TRACK NAME"), {
+			initial: s.trackNames[tr] ?? "",
+			placeholder: `${t("track")} ${tr + 1}`
+		});
+		if (name !== null) run(`med track ${tr + 1} name ${q(name.trim())}`);
+	};
 	/** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
 	const cellMenu = (line, track) => {
 		if (!(!!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1)) unselect();
@@ -723,6 +775,12 @@ function makeApp(ib, engine, st) {
 		{
 			label: t("mute / unmute this track"),
 			cmd: `med mute ${track + 1}`
+		},
+		"-",
+		{
+			label: t("save"),
+			hint: "med save",
+			cmd: "med save"
 		}
 	];
 	/** the cell (and column) under the mouse, from where the block was drawn */
@@ -851,7 +909,8 @@ function makeApp(ib, engine, st) {
 				const tr = firstTrack + k;
 				const muted = engine.muted.has(tr);
 				const hx = inner.x + numW + k * cw;
-				ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${t("track")} ${tr + 1}`, {
+				const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
+				ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, {
 					fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle,
 					attrs: tr === st.track ? BOLD : 0
 				}, cw - 1);
@@ -861,8 +920,23 @@ function makeApp(ib, engine, st) {
 					w: cw - 1,
 					h: 1
 				}, {
-					cmd: `med mute ${tr + 1}`,
-					tip: t("mute / unmute this track")
+					onClick: () => st.track = tr,
+					onDouble: () => void rename(tr),
+					tip: t("double-click: rename · right-click: mute, solo"),
+					menu: () => [
+						{
+							label: t("rename…"),
+							run: () => void rename(tr)
+						},
+						{
+							label: muted ? t("unmute") : t("mute"),
+							cmd: `med mute ${tr + 1}`
+						},
+						{
+							label: t("solo"),
+							cmd: `med solo ${tr + 1}`
+						}
+					]
 				});
 			}
 			const rows = inner.h - 1;
@@ -1051,13 +1125,20 @@ function makeApp(ib, engine, st) {
 			}
 			return false;
 		},
-		menu: () => st.song ? cellMenu(st.line, st.track) : [{
-			label: t("open a song…"),
-			cmd: "med open"
-		}, {
-			label: t("the demo song"),
-			cmd: "med demo"
-		}]
+		menu: () => st.song ? cellMenu(st.line, st.track) : [
+			{
+				label: t("open a song…"),
+				cmd: "med open"
+			},
+			{
+				label: t("a new song"),
+				cmd: "med new"
+			},
+			{
+				label: t("the demo song"),
+				cmd: "med demo"
+			}
+		]
 	};
 }
 // src/format/bytes.ts
@@ -1204,6 +1285,22 @@ var Writer = class {
 		return this.buf.slice(0, this.pos);
 	}
 };
+/** Floats → signed 8-bit bytes (rounded, clipped). */
+function floatsToS8(f) {
+	const out = new Uint8Array(f.length);
+	for (let i = 0; i < f.length; i++) out[i] = Math.max(-128, Math.min(127, Math.round(f[i] * 128))) & 255;
+	return out;
+}
+/** Floats → signed 16-bit big-endian bytes. */
+function floatsToS16be(f) {
+	const out = new Uint8Array(f.length * 2);
+	for (let i = 0; i < f.length; i++) {
+		const v = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32768))) & 65535;
+		out[2 * i] = v >> 8;
+		out[2 * i + 1] = v & 255;
+	}
+	return out;
+}
 // src/format/med.ts
 /**
 * OctaMED .med files (MMD0, MMD1, MMD2, MMD3): reading. Writing comes with
@@ -1434,6 +1531,7 @@ function readMed(bytes) {
 		masterVolume: masterVol ? Math.min(64, masterVol) : 64,
 		trackVolume: Array.from({ length: tracks }, (_, i) => Math.max(0, Math.min(64, trackVolume[i] ?? 64))),
 		trackPan: trackPan && trackPan.length === tracks ? trackPan : amigaPan(tracks),
+		trackNames: new Array(tracks).fill(""),
 		flags: {
 			volHex: !!(flags & 16),
 			vol7bit: h.version > 2,
@@ -1658,6 +1756,7 @@ function readMod(bytes) {
 		masterVolume: 64,
 		trackVolume: new Array(tracks).fill(64),
 		trackPan: amigaPan(tracks),
+		trackNames: new Array(tracks).fill(""),
 		flags: {
 			volHex: true,
 			vol7bit: false,
@@ -1884,6 +1983,543 @@ function demoMod() {
 	}
 	for (const s of samples) for (const v of s[1]) w.u8(v);
 	return w.done();
+}
+// src/format/wav.ts
+/** A WAV file: 16 or 24-bit integers, or 32-bit floats. */
+function writeWav(pcm, bits = 16) {
+	const ch = Math.max(1, pcm.channels.length);
+	const frames = pcm.channels[0]?.length ?? 0;
+	const bytes = bits / 8;
+	const float = bits === 32;
+	const dataLen = frames * ch * bytes;
+	const out = new Uint8Array(44 + dataLen);
+	const v = new DataView(out.buffer);
+	const tag = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+	tag(0, "RIFF");
+	v.setUint32(4, 36 + dataLen, true);
+	tag(8, "WAVE");
+	tag(12, "fmt ");
+	v.setUint32(16, 16, true);
+	v.setUint16(20, float ? 3 : 1, true);
+	v.setUint16(22, ch, true);
+	v.setUint32(24, Math.round(pcm.rate), true);
+	v.setUint32(28, Math.round(pcm.rate) * ch * bytes, true);
+	v.setUint16(32, ch * bytes, true);
+	v.setUint16(34, bits, true);
+	tag(36, "data");
+	v.setUint32(40, dataLen, true);
+	let o = 44;
+	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
+		const x = pcm.channels[c]?.[i] ?? 0;
+		const s = x > 1 ? 1 : x < -1 ? -1 : x === x ? x : 0;
+		if (float) v.setFloat32(o, s, true);
+		else if (bits === 16) v.setInt16(o, Math.round(s * 32767), true);
+		else {
+			const n = Math.round(s * 8388607);
+			v.setUint8(o, n & 255);
+			v.setUint8(o + 1, n >> 8 & 255);
+			v.setUint8(o + 2, n >> 16 & 255);
+		}
+		o += bytes;
+	}
+	return out;
+}
+/** Read a WAV file (null when it isn't one we can read). */
+function readWav(b) {
+	if (b.length < 12) return null;
+	const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+	if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+	let fmt = 0, ch = 0, rate = 0, bits = 0, data = -1, dataLen = 0;
+	for (let o = 12; o + 8 <= b.length;) {
+		const id = tag(o);
+		const len = v.getUint32(o + 4, true);
+		if (id === "fmt " && o + 24 <= b.length) {
+			fmt = v.getUint16(o + 8, true);
+			ch = v.getUint16(o + 10, true);
+			rate = v.getUint32(o + 12, true);
+			bits = v.getUint16(o + 22, true);
+			if (fmt === 65534 && len >= 40 && o + 34 <= b.length) fmt = v.getUint16(o + 32, true);
+		} else if (id === "data") {
+			data = o + 8;
+			dataLen = Math.min(len, b.length - data);
+			break;
+		}
+		o += 8 + len + (len & 1);
+	}
+	if (data < 0 || !ch || !rate || !(fmt === 1 || fmt === 3)) return null;
+	const bytes = bits / 8;
+	if (![
+		1,
+		2,
+		3,
+		4,
+		8
+	].includes(bytes) || fmt === 3 && bytes < 4) return null;
+	const frames = Math.floor(dataLen / (bytes * ch));
+	const channels = Array.from({ length: ch }, () => new Float32Array(frames));
+	let o = data;
+	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
+		let x;
+		if (fmt === 3) x = bytes === 8 ? v.getFloat64(o, true) : v.getFloat32(o, true);
+		else if (bytes === 1) x = (b[o] - 128) / 128;
+		else if (bytes === 2) x = v.getInt16(o, true) / 32768;
+		else if (bytes === 3) x = ((b[o + 2] << 24 | b[o + 1] << 16 | b[o] << 8) >> 8) / 8388608;
+		else x = v.getInt32(o, true) / 2147483648;
+		channels[c][i] = x === x ? x : 0;
+		o += bytes;
+	}
+	return {
+		rate,
+		channels
+	};
+}
+/** a note as text: "C-3", "^^^" (off), "---" (none); past octave 9, "N7F" (hex) */
+function noteText(n) {
+	if (!n) return "---";
+	if (n === 128) return "^^^";
+	const oct = Math.floor((n - 1) / 12) + 1;
+	return oct <= 9 ? `${NOTE_NAMES[(n - 1) % 12]}${oct}` : `N${hex(n)}`;
+}
+function parseNoteText(s) {
+	if (s === "---") return 0;
+	if (s === "^^^") return 128;
+	if (/^N[0-9A-F]{2}$/i.test(s)) return parseInt(s.slice(1), 16);
+	const m = /^([A-G])([#-])(\d)$/.exec(s.toUpperCase());
+	if (!m) throw new Error(`song.json: "${s}" isn't a note`);
+	const base = {
+		C: 0,
+		D: 2,
+		E: 4,
+		F: 5,
+		G: 7,
+		A: 9,
+		B: 11
+	}[m[1]];
+	return (+m[3] - 1) * 12 + base + (m[2] === "#" ? 1 : 0) + 1;
+}
+/** The files of a song saved as .bmed (paths relative to its folder). */
+function writeBmed(song) {
+	const files = [];
+	const sampleRate = 8363;
+	const wav = (path, data) => {
+		files.push({
+			path,
+			data: writeWav({
+				rate: sampleRate,
+				channels: [data]
+			}, 16)
+		});
+		return path;
+	};
+	const instruments = song.instruments.map((ins, i) => {
+		const n = String(i + 1).padStart(2, "0");
+		const j = {
+			name: ins.name,
+			kind: ins.kind,
+			loopStart: ins.loopStart,
+			loopLength: ins.loopLength,
+			volume: ins.volume
+		};
+		if (ins.kind !== "empty" && ins.data.length) j.file = wav(`samples/${n}.wav`, ins.data);
+		if (ins.right?.length) j.right = wav(`samples/${n}-right.wav`, ins.right);
+		if (ins.waves?.length) j.waves = ins.waves.map((w, k) => wav(`samples/${n}-wave${k}.wav`, w));
+		if (ins.pingPong) j.pingPong = true;
+		if (ins.gain !== 1) j.gain = ins.gain;
+		if (ins.finetune) j.finetune = ins.finetune;
+		if (ins.transpose) j.transpose = ins.transpose;
+		if (ins.hold) j.hold = ins.hold;
+		if (ins.decay) j.decay = ins.decay;
+		if (ins.bits16) j.bits16 = true;
+		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
+		return j;
+	});
+	const blocks = song.blocks.map((b) => ({
+		name: b.name,
+		lines: b.lines,
+		pages: b.pages,
+		rows: b.cells.map((row) => row.map((c) => {
+			let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}`;
+			for (let p = 0; p < b.pages; p++) s += c.cmd[p] || c.val[p] ? ` ${hex(c.cmd[p])}${hex(c.val[p])}` : " ....";
+			return s;
+		}).join(" | "))
+	}));
+	const json = {
+		breakermed: 1,
+		title: song.title,
+		from: song.format,
+		tempo: {
+			mode: song.tempoMode,
+			tempo: song.tempo,
+			speed: song.speed,
+			lpb: song.lpb
+		},
+		transpose: song.transpose,
+		noteShift: song.noteShift,
+		masterVolume: song.masterVolume,
+		restart: song.restart,
+		flags: song.flags,
+		tracks: Array.from({ length: song.tracks }, (_, t) => ({
+			name: song.trackNames[t] ?? "",
+			volume: song.trackVolume[t] ?? 64,
+			pan: song.trackPan[t] ?? 0
+		})),
+		sequence: song.sequence,
+		instruments,
+		blocks
+	};
+	files.unshift({
+		path: "song.json",
+		data: JSON.stringify(json, null, 1)
+	});
+	return files;
+}
+/** Read a .bmed song: its song.json, and a way to read the files next to it. */
+async function readBmed(jsonText, readFile) {
+	let j;
+	try {
+		j = JSON.parse(jsonText);
+	} catch {
+		throw new Error("song.json isn't valid JSON");
+	}
+	if (typeof j.breakermed !== "number") throw new Error("song.json isn't a breakerMED song");
+	if (j.breakermed > 1) throw new Error("this song was saved by a newer breakerMED: update the module");
+	const tracks = Math.max(1, Math.min(64, (j.tracks ?? []).length || 4));
+	const num = (v, d, lo = -Infinity, hi = Infinity) => typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d;
+	const sample = async (path) => {
+		if (!path || typeof path !== "string" || path.includes("..")) return /* @__PURE__ */ new Float32Array(0);
+		return readWav(await readFile(path))?.channels[0] ?? /* @__PURE__ */ new Float32Array(0);
+	};
+	const instruments = [];
+	for (const ij of (j.instruments ?? []).slice(0, 63)) {
+		const ins = emptyInstrument();
+		ins.name = String(ij.name ?? "").slice(0, 40);
+		ins.kind = [
+			"sample",
+			"synth",
+			"hybrid",
+			"empty"
+		].includes(ij.kind) ? ij.kind : "empty";
+		ins.data = await sample(ij.file);
+		if (ij.right) ins.right = await sample(ij.right);
+		if (Array.isArray(ij.waves)) ins.waves = await Promise.all(ij.waves.slice(0, 64).map((w) => sample(w)));
+		ins.loopStart = num(ij.loopStart, 0, 0);
+		ins.loopLength = num(ij.loopLength, 0, 0);
+		ins.pingPong = !!ij.pingPong;
+		ins.volume = num(ij.volume, 64, 0, 64);
+		ins.gain = num(ij.gain, 1, 0, 1);
+		ins.finetune = num(ij.finetune, 0, -8, 7);
+		ins.transpose = num(ij.transpose, 0, -48, 48);
+		ins.hold = num(ij.hold, 0, 0, 255);
+		ins.decay = num(ij.decay, 0, 0, 255);
+		ins.bits16 = !!ij.bits16;
+		if (Array.isArray(ij.volTable)) ins.volTable = ij.volTable, ins.waveTable = ij.waveTable ?? [], ins.volSpeed = ij.volSpeed, ins.waveSpeed = ij.waveSpeed;
+		if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
+		instruments.push(ins);
+	}
+	const blocks = (j.blocks ?? []).map((bj, n) => {
+		const lines = num(bj.lines, 64, 1, 3200);
+		const pages = num(bj.pages, 1, 1, 16);
+		const b = newBlock(tracks, lines, pages, String(bj.name ?? ""));
+		(bj.rows ?? []).slice(0, lines).forEach((row, l) => {
+			String(row).split("|").slice(0, tracks).forEach((cellText, t) => {
+				const parts = cellText.trim().split(/\s+/);
+				const c = emptyCell(pages);
+				c.note = parseNoteText(parts[0] ?? "---");
+				c.inst = parts[1] && parts[1] !== ".." ? Math.min(63, parseInt(parts[1], 16) || 0) : 0;
+				for (let p = 0; p < pages; p++) {
+					const x = parts[2 + p];
+					if (x && x !== "....") {
+						if (!/^[0-9a-f]{4}$/i.test(x)) throw new Error(`song.json: block ${n}, line ${l}: "${x}" isn't a command`);
+						c.cmd[p] = parseInt(x.slice(0, 2), 16);
+						c.val[p] = parseInt(x.slice(2), 16);
+					}
+				}
+				b.cells[l][t] = c;
+			});
+		});
+		return b;
+	});
+	const song = {
+		title: String(j.title ?? ""),
+		format: typeof j.from === "string" && /^(MMD[0-3]|MOD .{1,6}|BMED)$/.test(j.from) ? j.from : "BMED",
+		tracks,
+		blocks: blocks.length ? blocks : [newBlock(tracks)],
+		sequence: (Array.isArray(j.sequence) ? j.sequence : [0]).map((x) => num(x, 0, 0)).filter((x) => x < Math.max(1, blocks.length)),
+		restart: num(j.restart, 0, 0),
+		instruments,
+		tempoMode: [
+			"pt",
+			"spd",
+			"bpm"
+		].includes(j.tempo?.mode) ? j.tempo.mode : "bpm",
+		tempo: num(j.tempo?.tempo, 125, 1, 999),
+		speed: num(j.tempo?.speed, 6, 1, 32),
+		lpb: num(j.tempo?.lpb, 4, 1, 32),
+		transpose: num(j.transpose, 0, -48, 48),
+		noteShift: num(j.noteShift, 0, -48, 48),
+		masterVolume: num(j.masterVolume, 64, 0, 64),
+		trackVolume: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.volume, 64, 0, 64)),
+		trackPan: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.pan, amigaPan(tracks)[t], -1, 1)),
+		trackNames: Array.from({ length: tracks }, (_, t) => String(j.tracks?.[t]?.name ?? "").slice(0, 24)),
+		flags: Object.fromEntries(Object.entries({
+			volHex: true,
+			vol7bit: false,
+			ptSlides: false,
+			eightChannel: false,
+			hardwareMix: true,
+			filter: false
+		}).map(([k, d]) => [k, typeof j.flags?.[k] === "boolean" ? j.flags[k] : d]))
+	};
+	if (!song.sequence.length) song.sequence = [0];
+	return song;
+}
+// src/format/write.ts
+/**
+* Writing .mod (ProTracker) and .med (MMD1, read by OctaMED Pro and later, and
+* by OpenMPT): for sharing with other trackers. Our own format (.bmed) keeps
+* everything; these keep what they can and say what they couldn't
+* (`warnings`): more tracks than ProTracker reads, blocks that aren't 64 lines,
+* commands a .mod hasn't got, synths…
+*/
+/** 0C's value as a hex volume 0–64, whatever the song's convention */
+function volumeOf(song, v) {
+	if (song.flags.vol7bit) return Math.min(64, (v & 127) + 1 >> 1);
+	if (song.flags.volHex) return Math.min(64, v & 127);
+	return v < 153 ? Math.min(64, (v >> 4) * 10 + (v & 15)) : 64;
+}
+/** An OctaMED command as a ProTracker effect, or null when it has none. */
+function medToMod(song, cmd, v) {
+	switch (cmd) {
+		case 0: return v ? [0, v] : null;
+		case 1:
+		case 2:
+		case 3:
+		case 5:
+		case 6:
+		case 7:
+		case 10:
+		case 11: return [cmd, v];
+		case 13: return [10, v];
+		case 4: return [4, v & 240 | Math.min(15, (v & 15) * 2)];
+		case 20: return [4, v];
+		case 9: return v > 0 && v < 32 ? [15, v] : null;
+		case 12: return [12, volumeOf(song, v)];
+		case 15:
+			if (v === 0) return [13, 0];
+			if (v <= 240) {
+				const bpm = Math.round(ptBpmOf(song.tempoMode, v, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
+				return [15, Math.max(32, Math.min(255, bpm))];
+			}
+			return {
+				241: [14, 147],
+				242: [14, 211],
+				243: [14, 146],
+				248: [14, 1],
+				249: [14, 0],
+				254: [15, 0],
+				255: [14, 192]
+			}[v] ?? null;
+		case 17: return [14, 16 | v & 15];
+		case 18: return [14, 32 | v & 15];
+		case 21: return [14, 80 | v & 15];
+		case 22: return [14, 96 | v & 15];
+		case 24: return [14, 192 | Math.min(15, v)];
+		case 25: return [9, v];
+		case 26: return [14, 160 | v & 15];
+		case 27: return [14, 176 | v & 15];
+		case 29: return [13, Math.min(63, v) % 10 | Math.floor(Math.min(63, v) / 10) << 4];
+		case 30: return [14, 224 | Math.min(15, v)];
+		case 31: return v >> 4 ? [14, 208 | v >> 4] : v & 15 ? [14, 144 | v & 15] : null;
+		default: return null;
+	}
+}
+function writeMod(song) {
+	const warnings = [];
+	const w = new Writer();
+	const tracks = song.tracks;
+	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
+	const T = Math.min(32, tracks);
+	if (T !== 4) warnings.push(`${T} tracks: ProTracker itself plays 4 (OpenMPT, MilkyTracker… play more)`);
+	const tag = T === 4 ? "M.K." : T < 10 ? `${T}CHN` : `${T}CH`;
+	w.text(song.title, 20);
+	const insts = song.instruments.slice(0, 31);
+	if (song.instruments.filter((i) => i.kind !== "empty").length > 31) warnings.push("more than 31 instruments: the rest are left out");
+	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
+	if (song.instruments.some((i) => i.bits16)) warnings.push("16-bit samples are written in 8 bits");
+	const datas = insts.map((i) => i.kind === "empty" ? /* @__PURE__ */ new Float32Array(0) : i.data.length > 131070 ? (warnings.push(`instrument "${i.name}": longer than 128 kB, cut`), i.data.slice(0, 131070)) : i.data);
+	for (let i = 0; i < 31; i++) {
+		const ins = insts[i];
+		const words = (datas[i] ?? /* @__PURE__ */ new Float32Array(0)).length >> 1;
+		w.text(ins?.name ?? "", 22).u16(words).u8((ins?.finetune ?? 0) & 15).u8(Math.min(64, ins?.volume ?? 0));
+		const ls = ins && ins.loopLength > 2 ? Math.min(words, ins.loopStart >> 1) : 0;
+		const ll = ins && ins.loopLength > 2 ? Math.max(1, Math.min(words - ls, ins.loopLength >> 1)) : 1;
+		w.u16(ls).u16(ll);
+	}
+	const seq = song.sequence.slice(0, 128);
+	if (song.sequence.length > 128) warnings.push("a .mod's sequence holds 128 positions: the rest is cut");
+	const patOf = /* @__PURE__ */ new Map();
+	for (const b of seq) if (!patOf.has(b)) patOf.set(b, patOf.size);
+	w.u8(seq.length).u8(song.restart < seq.length ? song.restart : 127);
+	for (let i = 0; i < 128; i++) w.u8(i < seq.length ? patOf.get(seq[i]) : 0);
+	w.text(tag, 4);
+	let dropped = 0;
+	const first = seq[0];
+	for (const [b] of patOf) {
+		const block = song.blocks[b];
+		if (block.lines > 64) warnings.push(`block ${b}: ${block.lines} lines, a .mod pattern has 64 — cut`);
+		for (let line = 0; line < 64; line++) {
+			const free = [];
+			const cells = [];
+			for (let t = 0; t < T; t++) {
+				const c = line < block.lines ? block.cells[line][t] : void 0;
+				let period = 0, inst = 0, e = 0, p = 0;
+				if (c) {
+					inst = c.inst;
+					if (c.note && c.note !== 128) {
+						let s = c.note - 1 + song.transpose + song.noteShift;
+						while (s > 35) s -= 12;
+						while (s < 0) s += 12;
+						period = Math.round(periodOf(s));
+					} else if (c.note === 128) [e, p] = [14, 192];
+					for (let k = 0; k < c.cmd.length && !e; k++) {
+						if (!c.cmd[k] && !c.val[k]) continue;
+						const m = medToMod(song, c.cmd[k], c.val[k]);
+						if (m) [e, p] = m;
+						else dropped++;
+					}
+				}
+				if (!e && !p) free.push(t);
+				cells.push([
+					period,
+					inst,
+					e,
+					p
+				]);
+			}
+			if (line === block.lines - 1 && block.lines < 64) {
+				const t = free.shift();
+				if (t !== void 0) cells[t][2] = 13;
+				else warnings.push(`block ${b}: no free column for the break at line ${line}`);
+			}
+			if (b === first && line === 0) {
+				const bpm = Math.round(ptBpmOf(song.tempoMode, song.tempo, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
+				const want = [];
+				if (song.speed !== 6) want.push([15, Math.min(31, song.speed)]);
+				if (bpm !== 125) want.push([15, Math.max(32, Math.min(255, bpm))]);
+				for (const [e, p] of want) {
+					const t = free.shift();
+					if (t === void 0) warnings.push("no free column on the first line for the tempo");
+					else cells[t][2] = e, cells[t][3] = p;
+				}
+			}
+			for (const [period, inst, e, p] of cells) w.u8(inst & 240 | period >> 8 & 15).u8(period & 255).u8((inst & 15) << 4 | e).u8(p);
+		}
+	}
+	if (dropped) warnings.push(`${dropped} command(s) a .mod hasn't got were left out`);
+	for (const d of datas) w.bytes(floatsToS8(d.length & 1 ? d.slice(0, d.length - 1) : d));
+	return {
+		bytes: w.done(),
+		warnings
+	};
+}
+function writeMed(song) {
+	const warnings = [];
+	const w = new Writer();
+	const T = song.tracks;
+	const insts = song.instruments.slice(0, 63);
+	if (song.instruments.length > 63) warnings.push("more than 63 instruments: the rest are left out");
+	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
+	const seq = song.sequence.slice(0, 256);
+	if (song.sequence.length > 256) warnings.push("an MMD1 sequence holds 256 positions: the rest is cut");
+	w.text("MMD1", 4).u32(0).u32(52).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).zeros(11).u8(0);
+	for (let i = 0; i < 63; i++) {
+		const ins = insts[i];
+		const loop = ins && ins.loopLength > 2;
+		w.u16(loop ? ins.loopStart >> 1 : 0).u16(loop ? ins.loopLength >> 1 : 0).u8(0).u8(0).u8(Math.min(64, ins?.volume ?? 0)).u8((ins?.transpose ?? 0) & 255);
+	}
+	let tempo = song.tempo, lpb = song.lpb, mode = song.tempoMode;
+	if (mode === "pt") mode = "bpm", lpb = 4, tempo = Math.round(ptBpmOf("pt", song.tempo, 4));
+	w.u16(song.blocks.length).u16(seq.length);
+	for (let i = 0; i < 256; i++) w.u8(seq[i] ?? 0);
+	const flags = 16 | (song.flags.ptSlides ? 32 : 0) | (song.flags.eightChannel ? 64 : 0) | (song.flags.filter ? 1 : 0);
+	const flags2 = (mode === "bpm" ? 32 | Math.max(1, lpb) - 1 & 31 : 0) | (song.flags.hardwareMix ? 0 : 128);
+	w.u16(Math.max(1, Math.min(65535, tempo))).u8(song.transpose & 255).u8(flags).u8(flags2).u8(Math.max(1, Math.min(32, song.speed)));
+	for (let t = 0; t < 16; t++) w.u8(Math.min(64, song.trackVolume[t] ?? 64));
+	w.u8(Math.min(64, song.masterVolume)).u8(insts.length);
+	const blockArr = w.pos;
+	w.zeros(4 * song.blocks.length);
+	song.blocks.forEach((b, n) => {
+		w.align();
+		const at = w.pos;
+		w.patch32(blockArr + 4 * n, at);
+		w.u16(T).u16(b.lines - 1);
+		const infoPtr = w.pos;
+		w.u32(0);
+		const note = (x) => x === 128 ? 128 : x ? Math.max(1, Math.min(127, x + song.noteShift)) : 0;
+		const val = (cmd, v) => cmd === 12 ? volumeOf(song, v) : v;
+		for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
+			const c = b.cells[l][t];
+			w.u8(note(c.note)).u8(c.inst & 63).u8(c.cmd[0] ?? 0).u8(val(c.cmd[0] ?? 0, c.val[0] ?? 0));
+		}
+		if (b.pages > 1 || b.name) {
+			w.align();
+			const pages = [];
+			for (let p = 1; p < b.pages; p++) {
+				pages.push(w.pos);
+				for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
+					const c = b.cells[l][t];
+					w.u8(c.cmd[p] ?? 0).u8(val(c.cmd[p] ?? 0, c.val[p] ?? 0));
+				}
+			}
+			w.align();
+			let nameAt = 0;
+			if (b.name) nameAt = w.pos, w.text(b.name, b.name.length + 1);
+			w.align();
+			let tableAt = 0;
+			if (pages.length) {
+				tableAt = w.pos;
+				w.u16(pages.length).u16(0);
+				for (const p of pages) w.u32(p);
+			}
+			w.align();
+			const info = w.pos;
+			w.u32(0).u32(nameAt).u32(b.name ? b.name.length + 1 : 0).u32(tableAt).u32(0).zeros(16);
+			w.patch32(infoPtr, info);
+		}
+	});
+	w.align();
+	const sampleArr = w.pos;
+	w.zeros(4 * insts.length);
+	insts.forEach((ins, i) => {
+		if (ins.kind === "empty" || !ins.data.length) return;
+		w.align();
+		w.patch32(sampleArr + 4 * i, w.pos);
+		const bytes = ins.bits16 ? floatsToS16be(ins.data) : floatsToS8(ins.data);
+		w.u32(bytes.length).u16(ins.bits16 ? 16 : 0).bytes(bytes);
+	});
+	w.align();
+	const extAt = w.pos;
+	for (const ins of insts) {
+		const loop = ins.loopLength > 2;
+		w.u8(ins.hold & 255).u8(ins.decay & 255).u8(0).u8(ins.finetune & 255).u8(0).u8((loop ? 1 : 0) | (ins.pingPong ? 8 : 0)).u16(0).u8(0).u8(0);
+		w.u32(loop ? ins.loopStart : 0).u32(loop ? ins.loopLength : 0).u8(Math.max(0, Math.min(127, Math.round(ins.gain * 128) - 1))).u8(0).u8(0).u8(0);
+	}
+	const infoAt = w.pos;
+	for (const ins of insts) w.text(ins.name, 40);
+	let nameAt = 0;
+	if (song.title) nameAt = w.pos, w.text(song.title, song.title.length + 1);
+	w.align();
+	const exp = w.pos;
+	w.u32(0).u32(extAt).u16(insts.length).u16(22).u32(0).u32(0).u32(infoAt).u16(insts.length).u16(40).u32(0).u32(0).zeros(4).u32(0).u32(nameAt).u32(song.title ? song.title.length + 1 : 0).zeros(28);
+	w.patch32(4, w.pos);
+	w.patch32(16, blockArr);
+	w.patch32(24, sampleArr);
+	w.patch32(32, exp);
+	return {
+		bytes: w.done(),
+		warnings
+	};
 }
 // src/replayer.ts
 /**
@@ -2447,12 +3083,53 @@ function registerCommands(ib, engine, st) {
 	const find = async (dir = "", depth = 0, out = []) => {
 		if (depth > 5 || out.length > 500) return out;
 		for (const e of await ib.vault.list(dir).catch(() => [])) if (e.isDir) {
-			if (!e.name.startsWith(".")) await find(e.path, depth + 1, out);
+			if (e.name.toLowerCase().endsWith(".bmed")) out.push(e.path);
+			else if (!e.name.startsWith(".")) await find(e.path, depth + 1, out);
 		} else if (SONG_EXTS.some((x) => e.name.toLowerCase().endsWith(x) || e.name.toLowerCase().startsWith(x.slice(1) + "."))) out.push(e.path);
 		return out;
 	};
 	const open = async (ctx, path, given) => {
-		const song = readSong(given ?? await ib.vault.readBytes(path), path);
+		const p = path.replace(/\/+$/, "").replace(/\/song\.json$/i, "");
+		if (!given && /\.bmed$/i.test(p)) {
+			const song = await readBmed(await ib.vault.read(`${p}/song.json`), (f) => ib.vault.readBytes(`${p}/${f}`));
+			await adopt(ctx, song, p);
+		} else await adopt(ctx, readSong(given ?? await ib.vault.readBytes(p), p), p);
+		if (!given) await ib.storage.set("last", p);
+	};
+	/** Save the song: our own format (.bmed, a folder: everything), or .mod / .med for other trackers. */
+	const save = async (ctx, path) => {
+		const s = need();
+		const p = path.replace(/\/+$/, "");
+		let warnings = [];
+		if (/\.mod$/i.test(p) || /(^|\/)mod\.[^/]+$/i.test(p)) ({warnings} = await writeOut(p, writeMod(s)));
+		else if (/\.(med|mmd1)$/i.test(p)) ({warnings} = await writeOut(p, writeMed(s)));
+		else {
+			const dir = /\.bmed$/i.test(p) ? p : `${p}.bmed`;
+			await ib.vault.mkdir(`${dir}/samples`).catch(() => {});
+			for (const f of writeBmed(s)) if (typeof f.data === "string") await ib.vault.write(`${dir}/${f.path}`, f.data);
+			else await ib.vault.writeBytes(`${dir}/${f.path}`, f.data);
+			st.path = dir;
+			st.editor.dirty = false;
+			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
+			return;
+		}
+		for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
+		ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
+	};
+	const writeOut = async (path, w) => {
+		const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+		if (dir) await ib.vault.mkdir(dir).catch(() => {});
+		await ib.vault.writeBytes(path, w.bytes);
+		return w;
+	};
+	/** where a song is saved when you don't say: next to where it came from, as .bmed */
+	const defaultPath = () => {
+		if (/\.bmed$/i.test(st.path)) return st.path;
+		const base = (st.path.split("/").pop() || "untitled").replace(/\.(med|mod|mmd\d|bmed)$/i, "").replace(/^(mod|med)\./i, "") || "untitled";
+		return `${st.path.includes("/") ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs"}/${base}.bmed`;
+	};
+	/** this song is the one on the page now */
+	const adopt = async (ctx, song, path) => {
 		st.song = song;
 		st.editor = new Editor(song);
 		st.editor.onChange = () => ib.ui.redraw();
@@ -2465,7 +3142,6 @@ function registerCommands(ib, engine, st) {
 		await engine.load(song);
 		const len = songLength(song);
 		ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
-		if (!given) await ib.storage.set("last", path);
 	};
 	const need = () => {
 		if (!st.song) throw new Error("no song loaded (med open <file>)");
@@ -2479,6 +3155,9 @@ function registerCommands(ib, engine, st) {
 			"med open [file]            a .med / .mod of the vault (no file: choose one)",
 			"med ls                     the songs in the vault",
 			"med demo                   a little song of ours, to try it right away",
+			"med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
+			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
+			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
 			"med play [song|block] [position] [line]",
 			"med stop",
 			"med pos <position> [line]  move the cursor (and where play starts)",
@@ -2505,6 +3184,12 @@ function registerCommands(ib, engine, st) {
 			"open",
 			"ls",
 			"demo",
+			"new",
+			"save",
+			"track",
+			"name",
+			"vol",
+			"pan",
 			"edit",
 			"step",
 			"note",
@@ -2555,13 +3240,41 @@ function registerCommands(ib, engine, st) {
 						let path = rest.join(" ");
 						if (!path) {
 							const songs = await find();
-							if (!songs.length) return ctx.err("no .med / .mod in the vault (drop one in it)\n"), 1;
+							if (!songs.length) return ctx.err("no song in the vault (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
 							const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
 							if (i === null) return 1;
 							path = songs[i];
 						}
 						await open(ctx, ctx.resolve(path));
 						ib.apps.open("breakermed");
+						return 0;
+					}
+					case "save": {
+						need();
+						const path = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath();
+						await save(ctx, path);
+						return 0;
+					}
+					case "new": {
+						const n = rest[0] ? parseInt(rest[0], 10) : 8;
+						if (!(n >= 1 && n <= 16)) return ctx.err(`med new [tracks 1–16]\n`), 1;
+						const song = newSong(n);
+						song.instruments = readSong(demoMod()).instruments;
+						song.title = "untitled";
+						await adopt(ctx, song, "untitled.bmed");
+						ib.apps.open("breakermed");
+						return 0;
+					}
+					case "track": {
+						const s = need();
+						const tr = parseInt(rest[0] ?? "", 10) - 1;
+						const [, what, ...value] = rest;
+						if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
+						const v = value.join(" ");
+						if (what === "name") st.editor.setTrack(tr, { name: v });
+						else if (what === "vol" && /^\d+$/.test(v)) st.editor.setTrack(tr, { volume: +v });
+						else if (what === "pan" && /^-?\d+$/.test(v)) st.editor.setTrack(tr, { pan: Math.max(-100, Math.min(100, +v)) / 100 });
+						else return ctx.err(`med track <n> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
 						return 0;
 					}
 					case "demo":
@@ -2684,7 +3397,8 @@ function registerCommands(ib, engine, st) {
 					case "tracks": {
 						need();
 						const n = parseInt(rest[0] ?? "", 10);
-						if (!(n >= 1 && n <= 60)) return ctx.err("med tracks 1–60\n"), 1;
+						const most = Math.max(16, need().tracks);
+						if (!(n >= 1 && n <= most)) return ctx.err(`med tracks 1–${most}\n`), 1;
 						engine.stop();
 						st.editor.setTracks(n);
 						return 0;
@@ -2741,19 +3455,229 @@ function registerCommands(ib, engine, st) {
 		}
 	});
 }
+// src/dsp/voice.ts
+/**
+* A sample: read at `rate` frames a second, looped (ping-pong too), stepped
+* like the Amiga's Paula (nearest frame, its grit) or smooth (linear).
+*/
+var SampleVoice = class {
+	constructor(outRate) {
+		_defineProperty(this, "outRate", void 0);
+		_defineProperty(this, "on", false);
+		_defineProperty(this, "paula", true);
+		_defineProperty(this, "data", /* @__PURE__ */ new Float32Array(0));
+		_defineProperty(this, "loopStart", 0);
+		_defineProperty(this, "loopEnd", 0);
+		_defineProperty(this, "pingPong", false);
+		_defineProperty(this, "pos", 0);
+		_defineProperty(this, "dir", 1);
+		_defineProperty(this, "step", 1);
+		_defineProperty(this, "gl", 0);
+		_defineProperty(this, "gr", 0);
+		this.outRate = outRate;
+	}
+	start(n) {
+		const i = n.instrument;
+		this.data = i.data;
+		this.loopStart = i.loopLength > 2 ? i.loopStart : 0;
+		this.loopEnd = i.loopLength > 2 ? Math.min(i.data.length, i.loopStart + i.loopLength) : 0;
+		this.pingPong = i.pingPong && this.loopEnd > 0;
+		this.pos = Math.max(0, n.offset);
+		this.dir = 1;
+		this.step = Math.max(0, n.rate) / this.outRate;
+		this.on = this.pos < this.data.length;
+	}
+	set(rate, volume, pan) {
+		this.step = Math.max(0, rate) / this.outRate;
+		const v = Math.max(0, Math.min(1, volume));
+		this.gl = v * Math.min(1, 1 - pan);
+		this.gr = v * Math.min(1, 1 + pan);
+	}
+	stop() {
+		this.on = false;
+	}
+	render(left, right, from, to) {
+		if (!this.on) return;
+		const d = this.data;
+		const loops = this.loopEnd > this.loopStart;
+		const end = loops ? this.loopEnd : d.length;
+		const loopLen = this.loopEnd - this.loopStart;
+		let pos = this.pos;
+		for (let i = from; i < to; i++) {
+			if (this.dir > 0 && pos >= end) {
+				if (!loops) return void (this.on = false);
+				if (this.pingPong) this.dir = -1, pos = end - 1 - (pos - end);
+				else pos = this.loopStart + (pos - this.loopStart) % loopLen;
+			} else if (this.dir < 0 && pos < this.loopStart) this.dir = 1, pos = this.loopStart + (this.loopStart - pos);
+			const k = pos | 0;
+			let x = d[k] ?? 0;
+			if (!this.paula) {
+				const k1 = k + this.dir;
+				const y = k1 >= end ? loops ? d[this.loopStart] : x : k1 < 0 ? x : d[k1];
+				x += ((y ?? x) - x) * Math.abs(pos - k);
+			}
+			left[i] += x * this.gl;
+			right[i] += x * this.gr;
+			pos += this.step * this.dir;
+		}
+		this.pos = pos;
+	}
+};
+/** The voice an instrument plays with. Synths and drums come with their own (steps 6–8). */
+function voiceFor(_instrument, outRate, paula) {
+	const v = new SampleVoice(outRate);
+	v.paula = paula;
+	return v;
+}
+// src/render.ts
+/**
+* breakerMED — the renderer: the song turned into sound, frame by frame, here
+* in the module (the deck only plays what we hand it: ib.audio.stream). The
+* replayer says what each track does on each tick; the renderer starts and
+* changes the voices exactly on the tick's first frame and mixes them.
+*
+* The same code plays the song, previews the keys (a few voices past the
+* tracks) and, later, writes the exports (a rate of our choosing, as fast as
+* the computer goes, one track alone for a stem).
+*/
+/** keys played on the piano: a few voices of their own, in turn */
+var PREVIEWS = 4;
+var Renderer = class {
+	constructor(song, rate, paula = true) {
+		_defineProperty(this, "song", void 0);
+		_defineProperty(this, "rate", void 0);
+		_defineProperty(this, "paula", void 0);
+		_defineProperty(
+			this,
+			/** frames written so far */
+			"frame",
+			0
+		);
+		_defineProperty(
+			this,
+			/** where each line began (the page follows the one being heard) */
+			"marks",
+			[]
+		);
+		_defineProperty(this, "ended", false);
+		_defineProperty(this, "player", null);
+		_defineProperty(this, "voices", []);
+		_defineProperty(this, "previews", []);
+		_defineProperty(this, "nextPreview", 0);
+		_defineProperty(
+			this,
+			/** frames left in the current tick (and the fraction carried, so ticks don't drift) */
+			"tickLeft",
+			0
+		);
+		_defineProperty(this, "carry", 0);
+		this.song = song;
+		this.rate = rate;
+		this.paula = paula;
+	}
+	/** Play from a position (the song, or one block again and again). */
+	play(seq, line, opts = {}) {
+		this.player = new Player(this.song, opts);
+		this.player.jump(seq, line);
+		this.tickLeft = 0;
+		this.carry = 0;
+		this.ended = false;
+		for (const v of this.voices) v?.stop();
+	}
+	stop() {
+		this.player = null;
+		for (const v of this.voices) v?.stop();
+	}
+	get playing() {
+		return !!this.player && !this.ended;
+	}
+	/** something to hear: the song, or a key still ringing */
+	get busy() {
+		return this.playing || this.previews.some((p) => p.voice.on && p.until > this.frame) || this.voices.some((v) => v?.on);
+	}
+	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
+	preview(inst, rate, seconds = .6) {
+		const instrument = this.song.instruments[inst];
+		if (!instrument || instrument.kind === "empty") return;
+		const slot = this.nextPreview++ % PREVIEWS;
+		const voice = voiceFor(instrument, this.rate, this.paula);
+		voice.start({
+			instrument,
+			rate,
+			offset: 0
+		});
+		voice.set(rate, .45 * instrument.gain * (instrument.volume / 64), 0);
+		this.previews[slot] = {
+			voice,
+			until: this.frame + Math.round(seconds * this.rate)
+		};
+	}
+	/** The next `n` frames, added into left / right (they start at zero). */
+	render(left, right, n = left.length) {
+		let at = 0;
+		while (at < n) {
+			if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
+			const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
+			for (const v of this.voices) v?.render(left, right, at, at + span);
+			for (const p of this.previews) {
+				if (!p) continue;
+				if (p.until <= this.frame + at) p.voice.stop();
+				else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
+			}
+			at += span;
+			this.tickLeft -= span;
+		}
+		this.frame += n;
+	}
+	tick(at) {
+		const t = this.player.step();
+		if (t.line) this.marks.push({
+			frame: this.frame + at,
+			...t.line
+		});
+		for (const e of t.events) this.apply(e);
+		if (t.ended) {
+			this.ended = true;
+			return;
+		}
+		const exact = t.seconds * this.rate + this.carry;
+		this.tickLeft = Math.max(1, Math.floor(exact));
+		this.carry = exact - this.tickLeft;
+		if (this.marks.length > 512) this.marks.splice(0, this.marks.length - 256);
+	}
+	apply(e) {
+		if (e.stop) {
+			this.voices[e.voice]?.stop();
+			return;
+		}
+		if (e.play !== void 0) {
+			const instrument = this.song.instruments[e.play];
+			if (!instrument) return;
+			const v = voiceFor(instrument, this.rate, this.paula);
+			v.start({
+				instrument,
+				rate: e.rate ?? 8363,
+				offset: e.offset ?? 0
+			});
+			this.voices[e.voice] = v;
+		}
+		const v = this.voices[e.voice];
+		if (!v) return;
+		const s = v;
+		s.lastRate = e.rate ?? s.lastRate ?? 8363;
+		s.lastVol = e.volume ?? s.lastVol ?? 0;
+		s.lastPan = e.pan ?? s.lastPan ?? 0;
+		v.set(s.lastRate, s.lastVol, s.lastPan);
+	}
+};
 // src/engine.ts
 /**
-* breakerMED — the engine: it runs the replayer a little ahead of the sound
-* (LOOKAHEAD) and sends what it plays to the deck's sampler (ib.audio), each
-* event dated on the audio clock. The deck plays them on the exact frame, so
-* the song never stutters even when the screen is busy. It also remembers when
-* each line sounds, so the page can follow the song as it's heard.
+* breakerMED — the engine: it computes the sound here, in the module (the
+* renderer: render.ts), and hands it to the deck through ib.audio.stream. The
+* deck asks for more whenever it runs low (~16 ms left): about 30 ms from a key
+* to the sound, and a song that never stutters. It also knows which line is
+* being heard (what was written minus what still waits), for the page to follow.
 */
-/** seconds of song computed ahead of the sound */
-var LOOKAHEAD = .15;
-var PUMP_MS = 25;
-/** how long a note played on the keyboard lasts (the deck says when a key goes down, not up) */
-var PREVIEW_SECONDS = .6;
 var Engine = class {
 	constructor(audio) {
 		_defineProperty(this, "audio", void 0);
@@ -2767,80 +3691,48 @@ var Engine = class {
 		);
 		_defineProperty(this, "muted", /* @__PURE__ */ new Set());
 		_defineProperty(this, "onChange", void 0);
-		_defineProperty(this, "player", null);
-		_defineProperty(this, "uploaded", /* @__PURE__ */ new Map());
-		_defineProperty(this, "timer", null);
+		_defineProperty(this, "line", null);
+		_defineProperty(this, "opening", null);
+		_defineProperty(this, "r", null);
 		_defineProperty(
 			this,
-			/** audio time of the next tick */
-			"next",
-			0
+			/** at the last request: frames written then, frames still waiting, when (ms) */
+			"clock",
+			{
+				written: 0,
+				waiting: 0,
+				at: 0
+			}
 		);
-		_defineProperty(
-			this,
-			/** audio time − performance time (s), measured at start, checked now and then */
-			"skew",
-			0
-		);
-		_defineProperty(this, "synced", 0);
-		_defineProperty(this, "lines", []);
-		_defineProperty(this, "busy", false);
-		_defineProperty(this, "previews", 0);
 		this.audio = audio;
 	}
-	/** A new song: its instruments go to the sampler. */
+	/** A new song (nothing to upload: the module plays its instruments itself). */
 	async load(song) {
 		this.stop();
 		this.song = song;
-		this.lines = [];
-		await this.audio.drop().catch(() => {});
-		this.uploaded.clear();
-		await this.upload();
-	}
-	/** Send the instruments that changed (or every one). */
-	async upload() {
-		const s = this.song;
-		if (!s) return;
-		for (let i = 0; i < s.instruments.length; i++) {
-			const inst = s.instruments[i];
-			if (this.uploaded.get(i) === inst) continue;
-			if (inst.kind === "empty" || !inst.data.length) continue;
-			await this.audio.sample(`i${i}`, inst.data, {
-				loopStart: inst.loopStart,
-				loopLength: inst.loopLength
-			});
-			this.uploaded.set(i, inst);
-		}
+		this.r = null;
 	}
 	get playing() {
 		return this.mode !== null;
 	}
 	/** Play the song (or one block, again and again) from a position. */
 	async play(mode, from) {
-		const s = this.song;
-		if (!s) throw new Error("no song loaded (med open <file>)");
+		if (!this.song) throw new Error("no song loaded (med open <file>)");
 		if (!this.audio.available()) throw new Error("no sound output here");
-		this.stop();
-		await this.upload();
-		this.player = new Player(s, {
+		const r = await this.renderer();
+		r.paula = this.paula;
+		r.play(from.seq, from.line, {
 			loopBlock: mode === "block",
 			muted: this.muted
 		});
-		this.player.jump(from.seq, from.line);
-		await this.sync();
-		this.next = this.audioNow() + .05;
-		this.lines = [];
 		this.mode = mode;
-		this.timer = setInterval(() => void this.pump(), PUMP_MS);
-		await this.pump();
+		this.push(this.line.high);
 		this.onChange?.();
 	}
 	stop() {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = null;
 		const was = this.mode;
 		this.mode = null;
-		this.player = null;
+		this.r?.stop();
 		if (was) {
 			this.audio.stop().catch(() => {});
 			this.onChange?.();
@@ -2848,96 +3740,71 @@ var Engine = class {
 	}
 	/** The line being heard now (null when stopped). */
 	current() {
-		if (!this.mode || !this.lines.length) return null;
-		const now = this.audioNow();
-		let pos = this.lines[0].pos;
-		for (const l of this.lines) {
-			if (l.at > now) break;
-			pos = l.pos;
+		const r = this.r;
+		if (!this.mode || !r || !r.marks.length || !this.line) return null;
+		const heard = Math.min(r.frame, this.clock.written - this.clock.waiting + (performance.now() - this.clock.at) / 1e3 * this.line.rate);
+		let pos = r.marks[0];
+		for (const m of r.marks) {
+			if (m.frame > heard) break;
+			pos = m;
 		}
-		return pos;
+		return {
+			seq: pos.seq,
+			block: pos.block,
+			line: pos.line
+		};
 	}
-	/** One note now (the keyboard as a piano), on a voice past the song's tracks. */
-	async preview(instrument, rate, voice) {
-		const s = this.song;
-		if (!s) return;
-		await this.upload();
-		const v = voice ?? Math.min(63, s.tracks + this.previews++ % 4);
-		if (!this.synced) await this.sync();
-		await this.audio.schedule([{
-			voice: v,
-			play: `i${instrument}`,
-			offset: 0,
-			rate,
-			volume: .45,
-			pan: 0,
-			interp: this.paula ? "none" : "linear"
-		}, {
-			at: this.audioNow() + PREVIEW_SECONDS,
-			voice: v,
-			stop: true
-		}]);
+	/** A key played on the piano: instrument `inst` at `rate`, heard ~30 ms later. */
+	async preview(inst, rate) {
+		if (!this.song) return;
+		const r = await this.renderer();
+		r.paula = this.paula;
+		r.preview(inst, rate);
+		if (!this.mode) this.push(this.line.high);
 	}
-	audioNow() {
-		return performance.now() / 1e3 + this.skew;
+	/** the renderer for this song at the line's rate (the line opens the first time) */
+	async renderer() {
+		const line = await this.open();
+		if (!this.r || this.r.song !== this.song || this.r.rate !== line.rate) this.r = new Renderer(this.song, line.rate, this.paula);
+		return this.r;
 	}
-	async sync() {
-		const before = performance.now();
-		const t = await this.audio.now();
-		const after = performance.now();
-		this.skew = t - (before + after) / 2e3;
-		this.synced = after;
+	open() {
+		if (this.line) return Promise.resolve(this.line);
+		this.opening ??= this.audio.stream().then((s) => {
+			s.onPull = (frames, _played, waiting) => this.pull(frames, waiting);
+			this.line = s;
+			return s;
+		}, (e) => {
+			this.opening = null;
+			throw e;
+		});
+		return this.opening;
 	}
-	/** Compute what's due in the next LOOKAHEAD seconds and send it. */
-	async pump() {
-		if (this.busy || !this.player || !this.mode) return;
-		this.busy = true;
-		try {
-			if (performance.now() - this.synced > 2e3) await this.sync();
-			const now = this.audioNow();
-			if (this.next < now - .2) this.next = now + .02;
-			const out = [];
-			const p = this.player;
-			while (this.next < now + LOOKAHEAD && this.player === p) {
-				const t = p.step();
-				if (t.line) this.lines.push({
-					at: this.next,
-					pos: t.line
-				});
-				for (const e of t.events) out.push(this.event(e, this.next));
-				if (t.ended) {
-					this.mode = null;
-					break;
-				}
-				this.next += t.seconds;
-			}
-			while (this.lines.length > 2 && this.lines[1].at < now - 1) this.lines.shift();
-			if (out.length) await this.audio.schedule(out);
-			if (!this.mode) {
-				if (this.timer) clearInterval(this.timer);
-				this.timer = null;
-				this.player = null;
+	/** the deck wants more: what it asks for, while there's something to hear */
+	pull(frames, waiting) {
+		const r = this.r;
+		if (!r) return;
+		this.clock = {
+			written: r.frame,
+			waiting,
+			at: performance.now()
+		};
+		if (!r.busy) {
+			if (this.mode && r.ended) {
+				this.mode = null;
 				this.onChange?.();
 			}
-		} finally {
-			this.busy = false;
+			return;
 		}
+		this.push(frames);
 	}
-	event(e, at) {
-		const o = {
-			at,
-			voice: e.voice
-		};
-		if (e.stop) o.stop = true;
-		if (e.play !== void 0) {
-			o.play = `i${e.play}`;
-			o.offset = e.offset ?? 0;
-			o.interp = this.paula ? "none" : "linear";
-		}
-		if (e.rate !== void 0) o.rate = e.rate;
-		if (e.volume !== void 0) o.volume = e.volume;
-		if (e.pan !== void 0) o.pan = e.pan;
-		return o;
+	push(frames) {
+		const r = this.r, line = this.line;
+		if (!r || !line || frames <= 0) return;
+		const n = Math.min(16384, Math.ceil(frames));
+		const left = new Float32Array(n), right = new Float32Array(n);
+		r.render(left, right, n);
+		line.write(left, right);
 	}
 };
 // src/main.ts
@@ -3031,6 +3898,14 @@ var FR = {
 	tracks: "pistes",
 	sequence: "séquence",
 	"open a song…": "ouvrir un morceau…",
-	"the demo song": "le morceau de démo"
+	"the demo song": "le morceau de démo",
+	"double-click: rename · right-click: mute, solo": "double-clic : renommer · clic droit : couper, solo",
+	"rename…": "renommer…",
+	unmute: "rétablir",
+	mute: "couper",
+	solo: "solo",
+	"TRACK NAME": "NOM DE LA PISTE",
+	save: "enregistrer",
+	"a new song": "un nouveau morceau"
 };
 export { activate, deactivate };

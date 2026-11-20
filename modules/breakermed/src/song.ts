@@ -50,6 +50,8 @@ export interface Song {
   trackVolume: number[];
   /** each track's pan -1…1 */
   trackPan: number[];
+  /** each track's name ("" = "track 3") */
+  trackNames: string[];
   flags: SongFlags;
 }
 
@@ -132,7 +134,14 @@ export function emptyInstrument(): Instrument {
   return { name: "", kind: "empty", data: new Float32Array(0), bits16: false, loopStart: 0, loopLength: 0, pingPong: false, volume: 64, gain: 1, finetune: 0, transpose: 0, hold: 0, decay: 0 };
 }
 
-export function newSong(tracks = 4): Song {
+/** a new song's tracks, and how many a song may have (a light tracker: OctaMED went to 64) */
+export const DEFAULT_TRACKS = 8;
+export const MAX_TRACKS = 16;
+
+/** A track's name as shown. */
+export const trackName = (s: Song, t: number) => s.trackNames[t]?.trim() || `track ${t + 1}`;
+
+export function newSong(tracks = DEFAULT_TRACKS): Song {
   return {
     title: "",
     format: "MMD1",
@@ -150,6 +159,7 @@ export function newSong(tracks = 4): Song {
     masterVolume: 64,
     trackVolume: new Array(tracks).fill(64),
     trackPan: amigaPan(tracks),
+    trackNames: new Array(tracks).fill(""),
     flags: { volHex: true, vol7bit: false, ptSlides: false, eightChannel: false, hardwareMix: true, filter: false },
   };
 }
