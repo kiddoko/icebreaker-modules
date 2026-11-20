@@ -87,6 +87,8 @@ export function writeMod(song: Song): Written {
   w.text(tag, 4);
   let dropped = 0;
   const first = seq[0];
+  // the instrument each track plays (a .mod has no transpose: an instrument's own goes into its notes)
+  const lastInst = new Array(T).fill(0);
   for (const [b] of patOf) {
     const block = song.blocks[b];
     if (block.lines > 64) warnings.push(`block ${b}: ${block.lines} lines, a .mod pattern has 64 — cut`);
@@ -98,8 +100,9 @@ export function writeMod(song: Song): Written {
         let period = 0, inst = 0, e = 0, p = 0;
         if (c) {
           inst = c.inst;
+          if (c.inst) lastInst[t] = c.inst;
           if (c.note && c.note !== NOTE_OFF) {
-            let s = c.note - 1 + song.transpose + song.noteShift;
+            let s = c.note - 1 + song.transpose + song.noteShift + (song.instruments[lastInst[t] - 1]?.transpose ?? 0);
             while (s > 35) s -= 12;
             while (s < 0) s += 12;
             period = Math.round(periodOf(s));

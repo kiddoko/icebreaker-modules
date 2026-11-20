@@ -46,10 +46,12 @@ export interface State {
   sel: Selection | null;
   clip: Clip | null;
   error: string;
+  /** what the right side shows: the block, or the instrument's tools (alt I / alt B) */
+  screen: "block" | "instrument";
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "" };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block" };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -147,6 +149,78 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   };
   const transpose = (semis: number) => ed()?.transpose(target(), semis);
   const say = (label: string | null, what: string) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
+
+  /** The INSTRUMENT screen: the sound drawn in braille dots (the loop lit), what it is, a button a tool. */
+  const drawInstrument = (ui: UI, r: Rect, focused: boolean) => {
+    const c = ui.c;
+    const s = st.song!;
+    const ins = s.instruments[st.inst];
+    const n = hex(st.inst + 1);
+    const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
+    if (!ins || ins.kind === "empty" || !ins.data.length) {
+      ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound:"), { fg: c.muted }, inner.w - 2);
+      ui.button(inner.x + 1, inner.y + 3, t("load…"), () => {}, { cmd: `med sample ${n} load`, tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault") });
+      return;
+    }
+    // the wave: each cell is 2 × 4 dots; each dot column the min…max of its part of the sound
+    const waveH = Math.max(3, Math.min(10, inner.h - 9));
+    const W = inner.w - 2;
+    const d = ins.data;
+    const cols = W * 2, rows = waveH * 4;
+    const loopA = ins.loopLength ? ins.loopStart : -1, loopB = ins.loopLength ? ins.loopStart + ins.loopLength : -1;
+    for (let cx = 0; cx < W; cx++) {
+      const cells = new Array(waveH).fill(0);
+      let inLoop = false;
+      for (let sub = 0; sub < 2; sub++) {
+        const col = cx * 2 + sub;
+        const a = Math.floor((col / cols) * d.length), b = Math.max(a + 1, Math.floor(((col + 1) / cols) * d.length));
+        let lo = 1, hi = -1;
+        for (let i = a; i < b && i < d.length; i++) (lo = Math.min(lo, d[i])), (hi = Math.max(hi, d[i]));
+        if (a >= loopA && a < loopB) inLoop = true;
+        const top = Math.max(0, Math.min(rows - 1, Math.floor(((1 - hi) / 2) * rows)));
+        const bot = Math.max(0, Math.min(rows - 1, Math.floor(((1 - lo) / 2) * rows)));
+        for (let y = top; y <= bot; y++) {
+          const row = y % 4;
+          const bit = row === 3 ? (sub ? 7 : 6) : sub ? 3 + row : row;
+          cells[Math.floor(y / 4)] |= 1 << bit;
+        }
+      }
+      cells.forEach((bits, k) => bits && ui.text(inner.x + 1 + cx, inner.y + k, String.fromCharCode(0x2800 + bits), { fg: inLoop ? c.accentAlt : c.accent }));
+    }
+    let y = inner.y + waveH;
+    const secs = d.length / (16574 * (ins.transpose >= 12 ? 2 : 1));
+    ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
+    y++;
+    const tools: [string, string, string][] = [
+      ["load…", `med sample ${n} load`, "replace this sound with a file of the vault"],
+      ["chop 4", `med sample ${n} chop 4`, "4 equal slices → new instruments"],
+      ["chop 8", `med sample ${n} chop 8`, "8 equal slices → new instruments"],
+      ["chop at attacks", `med sample ${n} chop onsets`, "a slice at each attack"],
+      ["stretch ×2", `med sample ${n} stretch 2`, "twice as long, same pitch (Amiga grains)"],
+      ["stretch ×½", `med sample ${n} stretch 0.5`, "half as long, same pitch"],
+      ["fade in", `med sample ${n} fade in`, ""],
+      ["fade out", `med sample ${n} fade out`, ""],
+      ["pitch +12", `med sample ${n} pitch 12`, "an octave up (half the frames)"],
+      ["pitch −12", `med sample ${n} pitch -12`, "an octave down"],
+      ["reverse", `med sample ${n} reverse`, ""],
+      ["8-bit", `med sample ${n} crush 8`, "destructive 8 bits: the grit"],
+      ["4-bit ×2", `med sample ${n} crush 4 2`, "4 bits, half the rate: more grit"],
+      ["normalize", `med sample ${n} normalize`, ""],
+      ["trim", `med sample ${n} trim`, "remove the silence at both ends"],
+      ["loop off", `med sample ${n} loop off`, ""],
+      ["ping-pong", `med sample ${n} loop pingpong`, "the loop goes back and forth"],
+      ["bounce block", "med bounce", "this block, rendered into a new instrument"],
+      [s.flags.filter ? "LED filter off" : "LED filter on", `med filter ${s.flags.filter ? "off" : "on"}`, "the A500's low-pass (0FF9 / 0FF8)"],
+    ];
+    let x = inner.x + 1;
+    for (const [label, cmd, tip] of tools) {
+      const w = label.length + 2;
+      if (x + w > inner.x + inner.w - 1) (x = inner.x + 1), y++;
+      if (y >= inner.y + inner.h) break;
+      x += ui.button(x, y, t(label), () => {}, { cmd, tip: tip ? t(tip) : undefined }) + 1;
+    }
+    ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
+  };
 
   /** a track's new name, asked in a window (the command does it) */
   const rename = async (tr: number) => {
@@ -259,6 +333,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
+      if (st.screen === "instrument") return drawInstrument(ui, { x: body.x + leftW, y: body.y, w: body.w - leftW, h: body.h }, focused);
+
       // ── right: the block ──
       const bn = blockNo();
       const b = s.blocks[bn];
@@ -359,6 +435,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const digit = /^Digit(\d)$/.exec(k.code);
         if (digit) return (st.step = +digit[1]), true;
         switch (k.code) {
+          case "KeyI": return (st.screen = "instrument"), true;
+          case "KeyB": return (st.screen = "block"), true;
           case "ArrowUp": return (st.octave = Math.min(7, st.octave + 1)), true;
           case "ArrowDown": return (st.octave = Math.max(0, st.octave - 1)), true;
           case "ArrowLeft": return (st.inst = Math.max(0, st.inst - 1)), true;

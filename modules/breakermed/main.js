@@ -202,14 +202,6 @@ function _defineProperty(e, r, t) {
 		writable: !0
 	}) : e[r] = t, e;
 }
-// src/edit.ts
-/**
-* breakerMED — editing a song: what the page's keys and the `med` commands
-* change, in one place, each change undoable. No UI here (tests/edit.test.ts).
-*
-* A cell has columns: 0 the note, 1–2 the instrument (two hex digits), then per
-* command page 4 more: the command's two digits, the parameter's two.
-*/
 /** how many columns a cell has */
 var colsOf = (pages) => 3 + 4 * pages;
 /** what a column is: the note, the instrument, or a page's command / parameter (and which digit) */
@@ -299,7 +291,8 @@ var Editor = class {
 			tracks: this.song.tracks,
 			vol: [...this.song.trackVolume],
 			pan: [...this.song.trackPan],
-			names: [...this.song.trackNames]
+			names: [...this.song.trackNames],
+			insts: [...this.song.instruments]
 		});
 		const put = (s) => {
 			this.song.blocks = s.blocks.map(cloneBlock);
@@ -308,6 +301,7 @@ var Editor = class {
 			this.song.trackVolume = [...s.vol];
 			this.song.trackPan = [...s.pan];
 			this.song.trackNames = [...s.names];
+			this.song.instruments = [...s.insts];
 		};
 		const before = take();
 		fn();
@@ -471,6 +465,45 @@ var Editor = class {
 			if (what.pan !== void 0) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
 		});
 	}
+	/**
+	* Change an instrument (its sound, its loop, its settings), undoably: `fn` gets a copy
+	* (the sound arrays are replaced, never changed in place, so ⌘Z brings the old ones back).
+	*/
+	instrument(index, label, fn) {
+		const old = this.song.instruments[index];
+		if (!old) return;
+		this.shape(label, () => {
+			const copy = { ...old };
+			fn(copy);
+			if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
+			if (copy.loopLength <= 2) copy.loopStart = 0, copy.loopLength = 0;
+			copy.kind = copy.data.length ? copy.kind === "empty" ? "sample" : copy.kind : "empty";
+			this.song.instruments[index] = copy;
+		});
+	}
+	/** put instruments in the first free slots (or at `at`): their numbers (0-based), as many as fit */
+	addInstruments(list, at) {
+		const placed = [];
+		this.shape("instruments", () => {
+			const s = this.song;
+			for (const ins of list) {
+				let i = at !== void 0 && placed.length === 0 ? at : s.instruments.findIndex((x, k) => x.kind === "empty" && !placed.includes(k));
+				if (i < 0) i = s.instruments.length;
+				if (i >= 63) break;
+				while (s.instruments.length < i) s.instruments.push({
+					...ins,
+					name: "",
+					kind: "empty",
+					data: /* @__PURE__ */ new Float32Array(0),
+					loopStart: 0,
+					loopLength: 0
+				});
+				s.instruments[i] = ins;
+				placed.push(i);
+			}
+		});
+		return placed;
+	}
 	/** put a block in the sequence at `pos` (before what's there) */
 	seqInsert(pos, block) {
 		if (!this.song.blocks[block]) return;
@@ -578,7 +611,8 @@ function newState() {
 		step: 1,
 		sel: null,
 		clip: null,
-		error: ""
+		error: "",
+		screen: "block"
 	};
 }
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -698,6 +732,161 @@ function makeApp(ib, engine, st) {
 	};
 	const transpose = (semis) => ed()?.transpose(target(), semis);
 	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
+	/** The INSTRUMENT screen: the sound drawn in braille dots (the loop lit), what it is, a button a tool. */
+	const drawInstrument = (ui, r, focused) => {
+		const c = ui.c;
+		const s = st.song;
+		const ins = s.instruments[st.inst];
+		const n = hex(st.inst + 1);
+		const inner = ui.box(r, {
+			title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`,
+			focused
+		});
+		if (!ins || ins.kind === "empty" || !ins.data.length) {
+			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound:"), { fg: c.muted }, inner.w - 2);
+			ui.button(inner.x + 1, inner.y + 3, t("load…"), () => {}, {
+				cmd: `med sample ${n} load`,
+				tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault")
+			});
+			return;
+		}
+		const waveH = Math.max(3, Math.min(10, inner.h - 9));
+		const W = inner.w - 2;
+		const d = ins.data;
+		const cols = W * 2, rows = waveH * 4;
+		const loopA = ins.loopLength ? ins.loopStart : -1, loopB = ins.loopLength ? ins.loopStart + ins.loopLength : -1;
+		for (let cx = 0; cx < W; cx++) {
+			const cells = new Array(waveH).fill(0);
+			let inLoop = false;
+			for (let sub = 0; sub < 2; sub++) {
+				const col = cx * 2 + sub;
+				const a = Math.floor(col / cols * d.length), b = Math.max(a + 1, Math.floor((col + 1) / cols * d.length));
+				let lo = 1, hi = -1;
+				for (let i = a; i < b && i < d.length; i++) lo = Math.min(lo, d[i]), hi = Math.max(hi, d[i]);
+				if (a >= loopA && a < loopB) inLoop = true;
+				const top = Math.max(0, Math.min(rows - 1, Math.floor((1 - hi) / 2 * rows)));
+				const bot = Math.max(0, Math.min(rows - 1, Math.floor((1 - lo) / 2 * rows)));
+				for (let y = top; y <= bot; y++) {
+					const row = y % 4;
+					const bit = row === 3 ? sub ? 7 : 6 : sub ? 3 + row : row;
+					cells[Math.floor(y / 4)] |= 1 << bit;
+				}
+			}
+			cells.forEach((bits, k) => bits && ui.text(inner.x + 1 + cx, inner.y + k, String.fromCharCode(10240 + bits), { fg: inLoop ? c.accentAlt : c.accent }));
+		}
+		let y = inner.y + waveH;
+		const secs = d.length / (16574 * (ins.transpose >= 12 ? 2 : 1));
+		ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
+		y++;
+		const tools = [
+			[
+				"load…",
+				`med sample ${n} load`,
+				"replace this sound with a file of the vault"
+			],
+			[
+				"chop 4",
+				`med sample ${n} chop 4`,
+				"4 equal slices → new instruments"
+			],
+			[
+				"chop 8",
+				`med sample ${n} chop 8`,
+				"8 equal slices → new instruments"
+			],
+			[
+				"chop at attacks",
+				`med sample ${n} chop onsets`,
+				"a slice at each attack"
+			],
+			[
+				"stretch ×2",
+				`med sample ${n} stretch 2`,
+				"twice as long, same pitch (Amiga grains)"
+			],
+			[
+				"stretch ×½",
+				`med sample ${n} stretch 0.5`,
+				"half as long, same pitch"
+			],
+			[
+				"fade in",
+				`med sample ${n} fade in`,
+				""
+			],
+			[
+				"fade out",
+				`med sample ${n} fade out`,
+				""
+			],
+			[
+				"pitch +12",
+				`med sample ${n} pitch 12`,
+				"an octave up (half the frames)"
+			],
+			[
+				"pitch −12",
+				`med sample ${n} pitch -12`,
+				"an octave down"
+			],
+			[
+				"reverse",
+				`med sample ${n} reverse`,
+				""
+			],
+			[
+				"8-bit",
+				`med sample ${n} crush 8`,
+				"destructive 8 bits: the grit"
+			],
+			[
+				"4-bit ×2",
+				`med sample ${n} crush 4 2`,
+				"4 bits, half the rate: more grit"
+			],
+			[
+				"normalize",
+				`med sample ${n} normalize`,
+				""
+			],
+			[
+				"trim",
+				`med sample ${n} trim`,
+				"remove the silence at both ends"
+			],
+			[
+				"loop off",
+				`med sample ${n} loop off`,
+				""
+			],
+			[
+				"ping-pong",
+				`med sample ${n} loop pingpong`,
+				"the loop goes back and forth"
+			],
+			[
+				"bounce block",
+				"med bounce",
+				"this block, rendered into a new instrument"
+			],
+			[
+				s.flags.filter ? "LED filter off" : "LED filter on",
+				`med filter ${s.flags.filter ? "off" : "on"}`,
+				"the A500's low-pass (0FF9 / 0FF8)"
+			]
+		];
+		let x = inner.x + 1;
+		for (const [label, cmd, tip] of tools) {
+			const w = label.length + 2;
+			if (x + w > inner.x + inner.w - 1) x = inner.x + 1, y++;
+			if (y >= inner.y + inner.h) break;
+			x += ui.button(x, y, t(label), () => {}, {
+				cmd,
+				tip: tip ? t(tip) : void 0
+			}) + 1;
+		}
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
+	};
 	/** a track's new name, asked in a window (the command does it) */
 	const rename = async (tr) => {
 		const s = song();
@@ -892,6 +1081,12 @@ function makeApp(ib, engine, st) {
 					attrs: sel ? BOLD : 0
 				}, row.w);
 			});
+			if (st.screen === "instrument") return drawInstrument(ui, {
+				x: body.x + leftW,
+				y: body.y,
+				w: body.w - leftW,
+				h: body.h
+			}, focused);
 			const bn = blockNo();
 			const b = s.blocks[bn];
 			const px = body.x + leftW;
@@ -1062,6 +1257,8 @@ function makeApp(ib, engine, st) {
 				const digit = /^Digit(\d)$/.exec(k.code);
 				if (digit) return st.step = +digit[1], true;
 				switch (k.code) {
+					case "KeyI": return st.screen = "instrument", true;
+					case "KeyB": return st.screen = "block", true;
 					case "ArrowUp": return st.octave = Math.min(7, st.octave + 1), true;
 					case "ArrowDown": return st.octave = Math.max(0, st.octave - 1), true;
 					case "ArrowLeft": return st.inst = Math.max(0, st.inst - 1), true;
@@ -2351,6 +2548,54 @@ function writeAiff(pcm, bits = 16) {
 	}
 	return out;
 }
+/** an 80-bit extended number back (AIFF's sample rate) */
+function fromExtended(b, o) {
+	const exp = (b[o] & 127) << 8 | b[o + 1];
+	let mant = 0;
+	for (let i = 0; i < 8; i++) mant = mant * 256 + b[o + 2 + i];
+	return exp === 0 && mant === 0 ? 0 : mant * 2 ** (exp - 16383 - 63);
+}
+/** Read an AIFF / AIFF-C file (integers, "sowt" little-endian, 32/64-bit float); null when it isn't one. */
+function readAiff(b) {
+	if (b.length < 12) return null;
+	const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+	if (tag(0) !== "FORM" || tag(8) !== "AIFF" && tag(8) !== "AIFC") return null;
+	const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	let ch = 0, frames = 0, bits = 0, rate = 0, comp = "NONE", data = -1;
+	for (let o = 12; o + 8 <= b.length;) {
+		const id = tag(o), len = v.getUint32(o + 4);
+		if (id === "COMM" && o + 26 <= b.length) {
+			ch = v.getUint16(o + 8);
+			frames = v.getUint32(o + 10);
+			bits = v.getUint16(o + 14);
+			rate = fromExtended(b, o + 16);
+			if (tag(8) === "AIFC" && len >= 22) comp = tag(o + 26);
+		} else if (id === "SSND") data = o + 16 + v.getUint32(o + 8);
+		o += 8 + len + (len & 1);
+	}
+	if (data < 0 || !ch || !rate) return null;
+	const float = comp === "fl32" || comp === "FL32" || comp === "fl64";
+	const little = comp === "sowt";
+	if (!float && !little && comp !== "NONE" && comp !== "twos") return null;
+	const bytes = comp === "fl64" ? 8 : float ? 4 : Math.ceil(bits / 8);
+	const n = Math.min(frames, Math.floor((b.length - data) / (bytes * ch)));
+	const channels = Array.from({ length: ch }, () => new Float32Array(n));
+	let o = data;
+	for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) {
+		let x;
+		if (float) x = bytes === 8 ? v.getFloat64(o) : v.getFloat32(o);
+		else if (bytes === 1) x = v.getInt8(o) / 128;
+		else if (bytes === 2) x = v.getInt16(o, little) / 32768;
+		else if (bytes === 3) x = little ? ((b[o + 2] << 24 | b[o + 1] << 16 | b[o] << 8) >> 8) / 8388608 : ((b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8) >> 8) / 8388608;
+		else x = v.getInt32(o, little) / 2147483648;
+		channels[c][i] = x === x ? x : 0;
+		o += bytes;
+	}
+	return {
+		rate,
+		channels
+	};
+}
 // src/format/flac.ts
 var BLOCK = 4096;
 var Bits = class {
@@ -3179,6 +3424,30 @@ var Renderer = class {
 		_defineProperty(this, "nextPreview", 0);
 		_defineProperty(
 			this,
+			/** the A500's "LED" filter: a 12 dB low-pass at ~3.3 kHz, on when the song says (0FF9 / med filter on) */
+			"led",
+			{
+				b0: 0,
+				b1: 0,
+				b2: 0,
+				a1: 0,
+				a2: 0,
+				x: [
+					0,
+					0,
+					0,
+					0
+				],
+				y: [
+					0,
+					0,
+					0,
+					0
+				]
+			}
+		);
+		_defineProperty(
+			this,
 			/** frames left in the current tick (and the fraction carried, so ticks don't drift) */
 			"tickLeft",
 			0
@@ -3187,6 +3456,13 @@ var Renderer = class {
 		this.song = song;
 		this.rate = rate;
 		this.paula = paula;
+		const w = Math.tan(Math.PI * Math.min(3275, rate * .45) / rate);
+		const n = 1 / (1 + Math.SQRT2 * w + w * w);
+		this.led.b0 = w * w * n;
+		this.led.b1 = 2 * this.led.b0;
+		this.led.b2 = this.led.b0;
+		this.led.a1 = 2 * (w * w - 1) * n;
+		this.led.a2 = (1 - Math.SQRT2 * w + w * w) * n;
 	}
 	/** Play from a position (the song, or one block again and again). */
 	play(seq, line, opts = {}) {
@@ -3241,10 +3517,36 @@ var Renderer = class {
 				if (p.until <= this.frame + at) p.voice.stop();
 				else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
 			}
+			if (this.song.flags.filter) this.filter(left, right, at, at + span);
 			at += span;
 			this.tickLeft -= span;
 		}
 		this.frame += n;
+	}
+	filter(left, right, from, to) {
+		const f = this.led;
+		const [xl1, xl2, yl1, yl2] = [
+			f.x[0],
+			f.x[1],
+			f.y[0],
+			f.y[1]
+		];
+		let a = xl1, b = xl2, c = yl1, d = yl2;
+		for (let i = from; i < to; i++) {
+			const x = left[i];
+			const y = f.b0 * x + f.b1 * a + f.b2 * b - f.a1 * c - f.a2 * d;
+			b = a, a = x, d = c, c = y;
+			left[i] = y;
+		}
+		f.x[0] = a, f.x[1] = b, f.y[0] = c, f.y[1] = d;
+		let e = f.x[2], g = f.x[3], h = f.y[2], k = f.y[3];
+		for (let i = from; i < to; i++) {
+			const x = right[i];
+			const y = f.b0 * x + f.b1 * e + f.b2 * g - f.a1 * h - f.a2 * k;
+			g = e, e = x, k = h, h = y;
+			right[i] = y;
+		}
+		f.x[2] = e, f.x[3] = g, f.y[2] = h, f.y[3] = k;
 	}
 	tick(at) {
 		const t = this.player.step();
@@ -3374,6 +3676,397 @@ function trackUsed(song, t) {
 	const used = new Set(song.sequence);
 	return song.blocks.some((b, n) => used.has(n) && b.cells.some((row) => !!row[t]?.note));
 }
+/** our imports and bounces: twice that (and the instrument transposed an octave up), for a clean sound */
+var HQ_RATE = 3546895 / 214 * 2;
+function chop(d, slices) {
+	const n = Math.max(1, Math.min(64, Math.floor(slices)));
+	const len = Math.floor(d.length / n);
+	return Array.from({ length: n }, (_, i) => d.slice(i * len, i === n - 1 ? d.length : (i + 1) * len));
+}
+/** Where the attacks are: a jump of the short-term energy over the recent average (at most `max`). */
+function onsets(d, max = 32, win = 256) {
+	const out = [0];
+	let avg = 0;
+	let last = 0;
+	for (let at = 0; at + win <= d.length; at += win) {
+		let e = 0;
+		for (let i = at; i < at + win; i++) e += d[i] * d[i];
+		e /= win;
+		if (at > 0 && e > .002 && e > avg * 4 && at - last > win * 8) {
+			out.push(at);
+			last = at;
+			if (out.length >= max) break;
+		}
+		avg = avg * .9 + e * .1;
+	}
+	return out;
+}
+/** Cut at these frames. */
+function sliceAt(d, cuts) {
+	const c = [...new Set(cuts.filter((x) => x >= 0 && x < d.length))].sort((a, b) => a - b);
+	if (!c.length || c[0] !== 0) c.unshift(0);
+	return c.map((s, i) => d.slice(s, c[i + 1] ?? d.length)).filter((x) => x.length > 0);
+}
+/**
+* Amiga-style timestretch: the sample cut in grains of `grain` frames, each
+* played as it is, repeated or skipped to reach `factor` × the length (2 = twice
+* as long, same pitch). No crossfade: the clicks and the stutter are the sound.
+*/
+function stretch(d, factor, grain = 512) {
+	const f = Math.max(.1, Math.min(8, factor));
+	const g = Math.max(16, Math.floor(grain));
+	const out = new Float32Array(Math.max(1, Math.round(d.length * f)));
+	for (let o = 0; o < out.length; o += g) {
+		const src = Math.min(d.length - 1, Math.floor(o / f / g) * g);
+		for (let i = 0; i < g && o + i < out.length; i++) out[o + i] = d[Math.min(d.length - 1, src + i)];
+	}
+	return out;
+}
+function fade(d, dir, frames = d.length) {
+	const out = d.slice();
+	const n = Math.max(1, Math.min(d.length, Math.floor(frames)));
+	for (let i = 0; i < n; i++) {
+		const g = i / n;
+		if (dir === "in") out[i] *= g;
+		else out[d.length - 1 - i] *= g;
+	}
+	return out;
+}
+/** Resample by `ratio` (2 = an octave up: half the frames). Stepped (nearest, Paula's way) or linear. */
+function resample(d, ratio, smooth = false) {
+	const r = Math.max(1 / 16, Math.min(16, ratio));
+	const out = new Float32Array(Math.max(1, Math.floor(d.length / r)));
+	for (let i = 0; i < out.length; i++) {
+		const p = i * r;
+		const k = Math.floor(p);
+		out[i] = smooth && k + 1 < d.length ? d[k] + (d[k + 1] - d[k]) * (p - k) : d[Math.min(d.length - 1, k)];
+	}
+	return out;
+}
+/** a pitch change in semitones */
+var pitch = (d, semitones, smooth = false) => resample(d, 2 ** (semitones / 12), smooth);
+function reverse(d) {
+	return d.slice().reverse();
+}
+/** Fewer bits (1–16) and a lower rate (every `hold` frames the same value): destructive, the real 8-bit grit. */
+function crush(d, bits = 8, hold = 1) {
+	const b = Math.max(1, Math.min(16, Math.floor(bits)));
+	const h = Math.max(1, Math.min(64, Math.floor(hold)));
+	const steps = 2 ** (b - 1);
+	const out = new Float32Array(d.length);
+	let v = 0;
+	for (let i = 0; i < d.length; i++) {
+		if (i % h === 0) v = Math.round(d[i] * steps) / steps;
+		out[i] = Math.max(-1, Math.min(1, v));
+	}
+	return out;
+}
+function normalize(d, peak = 1) {
+	let m = 0;
+	for (const x of d) m = Math.max(m, Math.abs(x));
+	if (m < 1e-6) return d.slice();
+	const g = peak / m;
+	return d.map((x) => x * g);
+}
+/** The silence at both ends removed (below `threshold`). Returns the frames and where they started. */
+function trim(d, threshold = .004) {
+	let a = 0, b = d.length - 1;
+	while (a < d.length && Math.abs(d[a]) < threshold) a++;
+	while (b > a && Math.abs(d[b]) < threshold) b--;
+	return a > b ? {
+		data: /* @__PURE__ */ new Float32Array(0),
+		start: 0
+	} : {
+		data: d.slice(a, b + 1),
+		start: a
+	};
+}
+/** Mono from any number of channels (their average), resampled to `to` frames a second. */
+function toMono(channels, rate, to) {
+	const n = channels[0]?.length ?? 0;
+	const mono = new Float32Array(n);
+	for (const c of channels) for (let i = 0; i < n; i++) mono[i] += c[i] / channels.length;
+	return Math.abs(rate - to) < .5 ? mono : resample(mono, rate / to, true);
+}
+// src/format/iff.ts
+var FIB = [
+	-34,
+	-21,
+	-13,
+	-8,
+	-5,
+	-3,
+	-2,
+	-1,
+	0,
+	1,
+	2,
+	3,
+	5,
+	8,
+	13,
+	21
+];
+function read8svx(b) {
+	if (b.length < 12) return null;
+	const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+	if (tag(0) !== "FORM" || tag(8) !== "8SVX") return null;
+	const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	let oneShot = 0, repeat = 0, rate = 8363, comp = 0, volume = 64, name = "", body = null;
+	for (let o = 12; o + 8 <= b.length;) {
+		const id = tag(o), len = v.getUint32(o + 4);
+		const end = Math.min(b.length, o + 8 + len);
+		if (id === "VHDR" && len >= 20) {
+			oneShot = v.getUint32(o + 8);
+			repeat = v.getUint32(o + 12);
+			rate = v.getUint16(o + 20) || 8363;
+			comp = b[o + 23];
+			volume = Math.round(v.getUint32(o + 24) / 65536 * 64);
+		} else if (id === "NAME") name = String.fromCharCode(...b.subarray(o + 8, end)).replace(/\0.*$/, "");
+		else if (id === "BODY") body = b.subarray(o + 8, end);
+		o += 8 + len + (len & 1);
+	}
+	if (!body) return null;
+	let frames;
+	if (comp === 1) {
+		frames = new Int8Array((body.length - 2) * 2);
+		let x = body[1] << 24 >> 24;
+		for (let i = 2, k = 0; i < body.length; i++) {
+			x = Math.max(-128, Math.min(127, x + FIB[body[i] >> 4]));
+			frames[k++] = x;
+			x = Math.max(-128, Math.min(127, x + FIB[body[i] & 15]));
+			frames[k++] = x;
+		}
+	} else frames = new Int8Array(body.buffer, body.byteOffset, body.length);
+	const len = Math.min(frames.length, oneShot + repeat || frames.length);
+	const data = Float32Array.from(frames.subarray(0, len), (x) => x / 128);
+	return {
+		rate,
+		channels: [data],
+		name,
+		loopStart: repeat ? oneShot : 0,
+		loopLength: repeat,
+		volume: Math.max(0, Math.min(64, volume))
+	};
+}
+// src/format/sample.ts
+/**
+* One way to read a sound file into an instrument: WAV, AIFF, IFF 8SVX (our
+* own readers), anything else (MP3, M4A, OGG…) through the system's decoder
+* (ib.audio.decode). The sound becomes mono at HQ_RATE, the instrument an
+* octave up, so C-3 plays it as recorded.
+*/
+var SAMPLE_EXTS = [
+	".wav",
+	".aif",
+	".aiff",
+	".aifc",
+	".iff",
+	".8svx",
+	".mp3",
+	".m4a",
+	".aac",
+	".ogg",
+	".oga",
+	".opus",
+	".flac",
+	".caf"
+];
+async function readSample(bytes, name, decode, amiga = false) {
+	const inst = emptyInstrument();
+	inst.name = (name.split("/").pop() ?? name).replace(/\.[^.]+$/, "").slice(0, 40);
+	let pcm = readWav(bytes) ?? readAiff(bytes);
+	const iff = pcm ? null : read8svx(bytes);
+	if (iff) {
+		pcm = iff;
+		if (iff.name) inst.name = iff.name.slice(0, 40);
+		inst.volume = iff.volume || 64;
+	}
+	if (!pcm) {
+		if (!decode) throw new Error("not a WAV, AIFF or IFF file");
+		pcm = await decode(bytes);
+	}
+	const to = amiga ? HQ_RATE / 2 : HQ_RATE;
+	inst.data = toMono(pcm.channels, pcm.rate, to);
+	if (!amiga) inst.transpose = 12;
+	if (iff?.loopLength) {
+		const k = to / iff.rate;
+		inst.loopStart = Math.round(iff.loopStart * k);
+		inst.loopLength = Math.round(iff.loopLength * k);
+	}
+	inst.kind = inst.data.length ? "sample" : "empty";
+	return inst;
+}
+// src/commands-sample.ts
+var SAMPLE_USAGE = [
+	"med sample <n|.> load [file] [--amiga]   a sound file of the vault (wav, aif, iff/8svx, mp3, m4a, ogg…)",
+	"med sample <n|.> chop <slices> | chop onsets    slices become new instruments",
+	"med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)",
+	"med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse",
+	"med sample <n|.> crush [bits] [hold]     destructive 8-bit (default) and lower rate (hold > 1)",
+	"med sample <n|.> normalize · trim · loop <start> <length> | off | pingpong",
+	"med sample <n|.> name <text> · vol <0–64> · fine <-8…7> · transpose <semitones> · clear · info",
+	"med bounce [--tracks 1,3] [--song]       the block (or the song) rendered into a new instrument",
+	"med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8)"
+];
+async function sampleCommand(ib, st, ctx, rest, flags) {
+	const { fmt } = ib.lib;
+	const song = st.song;
+	const e = st.editor;
+	if (!song || !e) return ctx.err("no song loaded (med open <file>)\n"), 1;
+	const [which, op, ...args] = rest;
+	const n = which === "." || which === void 0 ? st.inst : parseInt(which, 16) - 1;
+	if (!(n >= 0 && n < 63)) return ctx.err("med sample <01–3F | .> <tool> … (med -h)\n"), 1;
+	while (song.instruments.length <= n) song.instruments.push(emptyInstrument());
+	const ins = song.instruments[n];
+	const name = `${hex(n + 1)} ${ins.name || "(no name)"}`;
+	const needSound = () => {
+		if (!ins.data.length) throw new Error(`instrument ${hex(n + 1)} is empty (med sample ${hex(n + 1)} load <file>)`);
+	};
+	const ms = (x, d) => Math.round((x !== void 0 ? parseFloat(x) : d) / 1e3 * HQ_RATE);
+	const change = (label, fn) => {
+		needSound();
+		e.instrument(n, label, fn);
+		ctx.out(`${fmt.green("✓")} ${name}: ${label}\n`);
+	};
+	switch (op) {
+		case void 0:
+		case "info": {
+			const secs = ins.data.length / HQ_RATE * (ins.transpose >= 12 ? 1 : 2);
+			ctx.out(`${name} · ${ins.kind} · ${ins.data.length} frames (~${secs.toFixed(2)} s at C-3) · vol ${ins.volume} · fine ${ins.finetune} · transpose ${ins.transpose}${ins.loopLength ? ` · loop ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ping-pong" : ""}` : ""}\n`);
+			return 0;
+		}
+		case "load": {
+			let file = args.join(" ");
+			if (!file) {
+				const found = [];
+				const walk = async (dir, depth) => {
+					if (depth > 4 || found.length > 300) return;
+					for (const x of await ib.vault.list(dir).catch(() => [])) if (x.isDir) {
+						if (!x.name.startsWith(".") && !x.name.endsWith(".bmed")) await walk(x.path, depth + 1);
+					} else if (SAMPLE_EXTS.some((ext) => x.name.toLowerCase().endsWith(ext))) found.push(x.path);
+				};
+				await walk("", 0);
+				if (!found.length) return ctx.err("no sound file in the vault (drop a .wav, .aif, .mp3… in it)\n"), 1;
+				const i = await ib.ui.choose("LOAD A SOUND", found.map((p) => ({ label: p })));
+				if (i === null) return 1;
+				file = found[i];
+			} else file = ctx.resolve(file);
+			const loaded = await readSample(await ib.vault.readBytes(file), file, (b) => ib.audio.decode(b), !!flags.amiga);
+			e.addInstruments([loaded], n);
+			st.inst = n;
+			ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${loaded.name}: ${loaded.data.length} frames${flags.amiga ? " (Amiga rate)" : ""}\n`);
+			return 0;
+		}
+		case "chop": {
+			needSound();
+			const parts = args[0] === "onsets" ? sliceAt(ins.data, onsets(ins.data)) : chop(ins.data, parseInt(args[0] ?? "4", 10) || 4);
+			const made = e.addInstruments(parts.map((d, k) => ({
+				...ins,
+				name: `${ins.name || "slice"} ${k + 1}`.slice(0, 40),
+				data: d,
+				loopStart: 0,
+				loopLength: 0,
+				pingPong: false
+			})));
+			ctx.out(`${fmt.green("✓")} ${name}: ${made.length} slice(s) → ${made.map((k) => hex(k + 1)).join(" ")}${made.length < parts.length ? fmt.dim(` (${parts.length - made.length} didn't fit: 63 instruments at most)`) : ""}\n`);
+			return 0;
+		}
+		case "stretch": {
+			const f = parseFloat(args[0] ?? "2");
+			if (!(f > 0)) return ctx.err("med sample <n> stretch <factor, e.g. 2 or 0.5> [grain]\n"), 1;
+			change(`stretch ×${f}`, (i) => i.data = stretch(i.data, f, parseInt(args[1] ?? "512", 10) || 512));
+			return 0;
+		}
+		case "fade": {
+			const dir = args[0] === "in" ? "in" : args[0] === "out" ? "out" : null;
+			if (!dir) return ctx.err("med sample <n> fade in|out [ms]\n"), 1;
+			change(`fade ${dir}`, (i) => i.data = fade(i.data, dir, args[1] ? ms(args[1], 0) : i.data.length));
+			return 0;
+		}
+		case "pitch": {
+			const s = parseFloat(args[0] ?? "");
+			if (!Number.isFinite(s)) return ctx.err("med sample <n> pitch <semitones> [--smooth]\n"), 1;
+			change(`pitch ${s > 0 ? "+" : ""}${s}`, (i) => {
+				const k = 2 ** (s / 12);
+				i.data = pitch(i.data, s, !!flags.smooth);
+				i.loopStart = Math.round(i.loopStart / k);
+				i.loopLength = Math.round(i.loopLength / k);
+			});
+			return 0;
+		}
+		case "reverse":
+			change("reverse", (i) => (i.data = reverse(i.data), i.loopLength = 0));
+			return 0;
+		case "crush": {
+			const bits = parseInt(args[0] ?? "8", 10) || 8, hold = parseInt(args[1] ?? "1", 10) || 1;
+			change(`crush ${bits} bits${hold > 1 ? ` ×${hold}` : ""}`, (i) => i.data = crush(i.data, bits, hold));
+			return 0;
+		}
+		case "normalize":
+			change("normalize", (i) => i.data = normalize(i.data));
+			return 0;
+		case "trim":
+			change("trim", (i) => {
+				const r = trim(i.data);
+				i.data = r.data;
+				i.loopStart = Math.max(0, i.loopStart - r.start);
+			});
+			return 0;
+		case "loop":
+			if (args[0] === "off") change("no loop", (i) => (i.loopStart = 0, i.loopLength = 0, i.pingPong = false));
+			else if (args[0] === "pingpong") change("ping-pong loop", (i) => (i.pingPong = !i.pingPong, i.loopLength || (i.loopStart = 0, i.loopLength = i.data.length)));
+			else {
+				const a = parseInt(args[0] ?? "", 10), b = parseInt(args[1] ?? "", 10);
+				if (!(a >= 0 && b > 2)) return ctx.err("med sample <n> loop <start> <length> | off | pingpong\n"), 1;
+				change(`loop ${a}+${b}`, (i) => (i.loopStart = a, i.loopLength = b));
+			}
+			return 0;
+		case "name":
+			e.instrument(n, "name", (i) => i.name = args.join(" ").slice(0, 40));
+			return 0;
+		case "vol":
+		case "fine":
+		case "transpose": {
+			const v = parseInt(args[0] ?? "", 10);
+			const [lo, hi] = op === "vol" ? [0, 64] : op === "fine" ? [-8, 7] : [-48, 48];
+			if (!(v >= lo && v <= hi)) return ctx.err(`med sample <n> ${op} ${lo}…${hi}\n`), 1;
+			e.instrument(n, op, (i) => op === "vol" ? i.volume = v : op === "fine" ? i.finetune = v : i.transpose = v);
+			return 0;
+		}
+		case "clear":
+			e.instrument(n, "clear", (i) => Object.assign(i, emptyInstrument()));
+			return 0;
+		default: return ctx.err(`med sample: unknown "${op}"\n${SAMPLE_USAGE.join("\n")}\n`), 1;
+	}
+}
+/** `med bounce`: the block (or the song) with these tracks, rendered into a new instrument. */
+async function bounce(ib, engine, st, ctx, flags) {
+	const song = st.song, e = st.editor;
+	if (!song || !e) return ctx.err("no song loaded\n"), 1;
+	const solo = flags.tracks ? String(flags.tracks).split(",").map((x) => parseInt(x, 10) - 1).filter((t) => t >= 0 && t < song.tracks) : void 0;
+	const pcm = await renderSong(flags.song ? song : {
+		...song,
+		sequence: [song.sequence[st.seq] ?? 0]
+	}, {
+		rate: Math.round(HQ_RATE),
+		bits: 32,
+		paula: engine.paula,
+		solo,
+		muted: engine.muted,
+		tail: .25
+	});
+	const ins = emptyInstrument();
+	ins.name = `bounce ${solo ? solo.map((t) => trackName(song, t)).join("+") : "all"}`.slice(0, 40);
+	ins.data = toMono(pcm.channels, pcm.rate, pcm.rate);
+	ins.transpose = 12;
+	ins.kind = "sample";
+	const [k] = e.addInstruments([ins]);
+	if (k === void 0) return ctx.err("no free instrument (63 at most)\n"), 1;
+	st.inst = k;
+	ctx.out(`${ib.lib.fmt.green("✓")} ${hex(k + 1)} ${ins.name}: ${ins.data.length} frames (C-3 plays it as it was)\n`);
+	return 0;
+}
 // src/format/write.ts
 /**
 * Writing .mod (ProTracker) and .med (MMD1, read by OctaMED Pro and later, and
@@ -3465,6 +4158,7 @@ function writeMod(song) {
 	w.text(tag, 4);
 	let dropped = 0;
 	const first = seq[0];
+	const lastInst = new Array(T).fill(0);
 	for (const [b] of patOf) {
 		const block = song.blocks[b];
 		if (block.lines > 64) warnings.push(`block ${b}: ${block.lines} lines, a .mod pattern has 64 — cut`);
@@ -3476,8 +4170,9 @@ function writeMod(song) {
 				let period = 0, inst = 0, e = 0, p = 0;
 				if (c) {
 					inst = c.inst;
+					if (c.inst) lastInst[t] = c.inst;
 					if (c.note && c.note !== 128) {
-						let s = c.note - 1 + song.transpose + song.noteShift;
+						let s = c.note - 1 + song.transpose + song.noteShift + (song.instruments[lastInst[t] - 1]?.transpose ?? 0);
 						while (s > 35) s -= 12;
 						while (s < 0) s += 12;
 						period = Math.round(periodOf(s));
@@ -3739,6 +4434,7 @@ function registerCommands(ib, engine, st) {
 			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
 			"med undo · med redo",
+			...SAMPLE_USAGE,
 			"med effects                every command (00–2E) in one line each",
 			"med info                   the song's settings"
 		].join("\n"),
@@ -3757,6 +4453,21 @@ function registerCommands(ib, engine, st) {
 			"new",
 			"save",
 			"export",
+			"sample",
+			"bounce",
+			"filter",
+			"load",
+			"chop",
+			"onsets",
+			"stretch",
+			"fade",
+			"pitch",
+			"reverse",
+			"crush",
+			"normalize",
+			"trim",
+			"loop",
+			"pingpong",
 			"--rate",
 			"--bits",
 			"--stems",
@@ -3804,6 +4515,12 @@ function registerCommands(ib, engine, st) {
 				"tracks",
 				"tail"
 			]);
+			if (positional[0] === "sample" || positional[0] === "smp") try {
+				return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
+			} catch (err) {
+				return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
+			}
+			if (positional[0] === "bounce") return bounce(ib, engine, st, ctx, flags);
 			const [sub = "", ...rest] = positional;
 			try {
 				switch (sub) {
@@ -3829,6 +4546,13 @@ function registerCommands(ib, engine, st) {
 						}
 						await open(ctx, ctx.resolve(path));
 						ib.apps.open("breakermed");
+						return 0;
+					}
+					case "filter": {
+						const s = need();
+						s.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !s.flags.filter;
+						st.editor.dirty = true;
+						ctx.out(s.flags.filter ? "the A500's LED filter: on (a soft, warm top)\n" : "the A500's LED filter: off\n");
 						return 0;
 					}
 					case "export": {
@@ -4330,6 +5054,45 @@ var FR = {
 	"TRACK NAME": "NOM DE LA PISTE",
 	save: "enregistrer",
 	"export (WAV + tracks)": "exporter (WAV + pistes)",
+	INSTRUMENT: "INSTRUMENT",
+	"empty — load a sound:": "vide — charge un son :",
+	"load…": "charger…",
+	"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault": "un .wav, .aif, .iff, .mp3, .m4a, .ogg… du vault",
+	frames: "trames",
+	"at C-3": "en C-3",
+	loop: "boucle",
+	"LED filter": "filtre LED",
+	"chop 4": "découper en 4",
+	"chop 8": "découper en 8",
+	"chop at attacks": "découper aux attaques",
+	"stretch ×2": "étirer ×2",
+	"stretch ×½": "étirer ×½",
+	"fade in": "fondu d'entrée",
+	"fade out": "fondu de sortie",
+	"pitch +12": "hauteur +12",
+	"pitch −12": "hauteur −12",
+	reverse: "à l'envers",
+	normalize: "normaliser",
+	trim: "rogner",
+	"loop off": "sans boucle",
+	"ping-pong": "aller-retour",
+	"bounce block": "bloc → sample",
+	"LED filter on": "filtre LED",
+	"LED filter off": "sans filtre LED",
+	"replace this sound with a file of the vault": "remplacer ce son par un fichier du vault",
+	"4 equal slices → new instruments": "4 tranches égales → nouveaux instruments",
+	"8 equal slices → new instruments": "8 tranches égales → nouveaux instruments",
+	"a slice at each attack": "une tranche à chaque attaque",
+	"twice as long, same pitch (Amiga grains)": "deux fois plus long, même hauteur (grains Amiga)",
+	"half as long, same pitch": "deux fois plus court, même hauteur",
+	"an octave up (half the frames)": "une octave plus haut",
+	"destructive 8 bits: the grit": "8 bits destructif : le grain",
+	"4 bits, half the rate: more grit": "4 bits, moitié de la fréquence : plus de grain",
+	"remove the silence at both ends": "enlever le silence aux deux bouts",
+	"the loop goes back and forth": "la boucle va et vient",
+	"this block, rendered into a new instrument": "ce bloc, rendu en un nouvel instrument",
+	"the A500's low-pass (0FF9 / 0FF8)": "le passe-bas de l'A500 (0FF9 / 0FF8)",
+	"the keys play it · alt ←→ another · alt B the block · med sample -h": "les touches le jouent · alt ←→ un autre · alt B le bloc · med sample -h",
 	"a new song": "un nouveau morceau"
 };
 export { activate, deactivate };

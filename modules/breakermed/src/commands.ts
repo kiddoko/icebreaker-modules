@@ -8,6 +8,7 @@ import { readSong, SONG_EXTS } from "./format";
 import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
 import { checkFormat, encode, renderSong, trackUsed, type ExportFormat } from "./export";
+import { bounce, sampleCommand, SAMPLE_USAGE } from "./commands-sample";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
 import { DEFAULT_TRACKS, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
@@ -144,13 +145,22 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
       "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
       "med undo · med redo",
+      ...SAMPLE_USAGE,
       "med effects                every command (00–2E) in one line each",
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
+      if (positional[0] === "sample" || positional[0] === "smp") {
+        try {
+          return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
+        } catch (err) {
+          return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
+        }
+      }
+      if (positional[0] === "bounce") return bounce(ib, engine, st, ctx, flags);
       const [sub = "", ...rest] = positional;
       try {
         switch (sub) {
@@ -176,6 +186,13 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             }
             await open(ctx, ctx.resolve(path));
             void ib.apps.open("breakermed");
+            return 0;
+          }
+          case "filter": {
+            const s = need();
+            s.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !s.flags.filter;
+            st.editor!.dirty = true;
+            ctx.out(s.flags.filter ? "the A500's LED filter: on (a soft, warm top)\n" : "the A500's LED filter: off\n");
             return 0;
           }
           case "export": {

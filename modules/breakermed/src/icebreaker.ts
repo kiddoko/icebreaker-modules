@@ -78,6 +78,8 @@ export interface UI {
   tint(r: Rect, fg?: RGB, bg?: RGB): void;
   box(r: Rect, o?: { title?: string; focused?: boolean }): Rect;
   hit(rect: Rect, h: Hit): void;
+  /** the kit's button; returns its width */
+  button(x: number, y: number, label: string, onClick: () => void, o?: { cmd?: string; tip?: string; selected?: boolean; quiet?: boolean; disabled?: boolean }): number;
 }
 
 export interface App {
@@ -155,6 +157,7 @@ export interface IcebreakerAPI {
     choose(title: string, options: { label: string }[], opts?: { selected?: number }): Promise<number | null>;
     prompt(title: string, opts?: { initial?: string; placeholder?: string }): Promise<string | null>;
     redraw(): void;
+    pickFile?(title: string, exts?: string[]): Promise<string | null>;
   };
   audio: {
     available(): boolean;

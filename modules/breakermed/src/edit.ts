@@ -5,7 +5,10 @@
  * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), then per
  * command page 4 more: the command's two digits, the parameter's two.
  */
-import { emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Song } from "./song";
+import { emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
+
+/** a song holds 63 instruments at most (OctaMED's limit) */
+export const MAX_INSTRUMENTS = 63;
 
 export const NOTE_COL = 0;
 /** how many columns a cell has */
@@ -96,7 +99,7 @@ export class Editor {
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
   private shape(label: string, fn: () => void): void {
-    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames] });
+    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], insts: [...this.song.instruments] });
     const put = (s: ReturnType<typeof take>) => {
       this.song.blocks = s.blocks.map(cloneBlock);
       this.song.sequence = [...s.sequence];
@@ -104,6 +107,7 @@ export class Editor {
       this.song.trackVolume = [...s.vol];
       this.song.trackPan = [...s.pan];
       this.song.trackNames = [...s.names];
+      this.song.instruments = [...s.insts];
     };
     const before = take();
     fn();
@@ -280,6 +284,40 @@ export class Editor {
       if (what.volume !== undefined) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
       if (what.pan !== undefined) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
     });
+  }
+
+  /**
+   * Change an instrument (its sound, its loop, its settings), undoably: `fn` gets a copy
+   * (the sound arrays are replaced, never changed in place, so ⌘Z brings the old ones back).
+   */
+  instrument(index: number, label: string, fn: (ins: Instrument) => void): void {
+    const old = this.song.instruments[index];
+    if (!old) return;
+    this.shape(label, () => {
+      const copy: Instrument = { ...old };
+      fn(copy);
+      if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
+      if (copy.loopLength <= 2) (copy.loopStart = 0), (copy.loopLength = 0);
+      copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
+      this.song.instruments[index] = copy;
+    });
+  }
+
+  /** put instruments in the first free slots (or at `at`): their numbers (0-based), as many as fit */
+  addInstruments(list: Instrument[], at?: number): number[] {
+    const placed: number[] = [];
+    this.shape("instruments", () => {
+      const s = this.song;
+      for (const ins of list) {
+        let i = at !== undefined && placed.length === 0 ? at : s.instruments.findIndex((x, k) => x.kind === "empty" && !placed.includes(k));
+        if (i < 0) i = s.instruments.length;
+        if (i >= MAX_INSTRUMENTS) break;
+        while (s.instruments.length < i) s.instruments.push({ ...ins, name: "", kind: "empty", data: new Float32Array(0), loopStart: 0, loopLength: 0 });
+        s.instruments[i] = ins;
+        placed.push(i);
+      }
+    });
+    return placed;
   }
 
   /** put a block in the sequence at `pos` (before what's there) */

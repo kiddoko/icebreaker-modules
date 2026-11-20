@@ -76,3 +76,51 @@ export function writeAiff(pcm: Pcm, bits: 16 | 24 | 32 = 16): Uint8Array {
     }
   return out;
 }
+
+/** an 80-bit extended number back (AIFF's sample rate) */
+function fromExtended(b: Uint8Array, o: number): number {
+  const exp = ((b[o] & 0x7f) << 8) | b[o + 1];
+  let mant = 0;
+  for (let i = 0; i < 8; i++) mant = mant * 256 + b[o + 2 + i];
+  return exp === 0 && mant === 0 ? 0 : mant * 2 ** (exp - 16383 - 63);
+}
+
+/** Read an AIFF / AIFF-C file (integers, "sowt" little-endian, 32/64-bit float); null when it isn't one. */
+export function readAiff(b: Uint8Array): Pcm | null {
+  if (b.length < 12) return null;
+  const tag = (o: number) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+  if (tag(0) !== "FORM" || (tag(8) !== "AIFF" && tag(8) !== "AIFC")) return null;
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let ch = 0, frames = 0, bits = 0, rate = 0, comp = "NONE", data = -1;
+  for (let o = 12; o + 8 <= b.length; ) {
+    const id = tag(o), len = v.getUint32(o + 4);
+    if (id === "COMM" && o + 26 <= b.length) {
+      ch = v.getUint16(o + 8);
+      frames = v.getUint32(o + 10);
+      bits = v.getUint16(o + 14);
+      rate = fromExtended(b, o + 16);
+      if (tag(8) === "AIFC" && len >= 22) comp = tag(o + 26);
+    } else if (id === "SSND") data = o + 16 + v.getUint32(o + 8);
+    o += 8 + len + (len & 1);
+  }
+  if (data < 0 || !ch || !rate) return null;
+  const float = comp === "fl32" || comp === "FL32" || comp === "fl64";
+  const little = comp === "sowt";
+  if (!float && !little && comp !== "NONE" && comp !== "twos") return null;
+  const bytes = comp === "fl64" ? 8 : float ? 4 : Math.ceil(bits / 8);
+  const n = Math.min(frames, Math.floor((b.length - data) / (bytes * ch)));
+  const channels = Array.from({ length: ch }, () => new Float32Array(n));
+  let o = data;
+  for (let i = 0; i < n; i++)
+    for (let c = 0; c < ch; c++) {
+      let x: number;
+      if (float) x = bytes === 8 ? v.getFloat64(o) : v.getFloat32(o);
+      else if (bytes === 1) x = v.getInt8(o) / 128;
+      else if (bytes === 2) x = v.getInt16(o, little) / 32768;
+      else if (bytes === 3) x = little ? (((b[o + 2] << 24) | (b[o + 1] << 16) | (b[o] << 8)) >> 8) / 8388608 : (((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8)) >> 8) / 8388608;
+      else x = v.getInt32(o, little) / 2147483648;
+      channels[c][i] = x === x ? x : 0;
+      o += bytes;
+    }
+  return { rate, channels };
+}

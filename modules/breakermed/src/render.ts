@@ -33,6 +33,8 @@ export class Renderer {
   private voices: (Voice | null)[] = [];
   private previews: { voice: Voice; until: number }[] = [];
   private nextPreview = 0;
+  /** the A500's "LED" filter: a 12 dB low-pass at ~3.3 kHz, on when the song says (0FF9 / med filter on) */
+  private led = { b0: 0, b1: 0, b2: 0, a1: 0, a2: 0, x: [0, 0, 0, 0], y: [0, 0, 0, 0] };
   /** frames left in the current tick (and the fraction carried, so ticks don't drift) */
   private tickLeft = 0;
   private carry = 0;
@@ -41,7 +43,16 @@ export class Renderer {
     readonly song: Song,
     readonly rate: number,
     public paula = true,
-  ) {}
+  ) {
+    // a Butterworth low-pass (two poles) at 3275 Hz, the LED filter's corner
+    const w = Math.tan((Math.PI * Math.min(3275, rate * 0.45)) / rate);
+    const n = 1 / (1 + Math.SQRT2 * w + w * w);
+    this.led.b0 = w * w * n;
+    this.led.b1 = 2 * this.led.b0;
+    this.led.b2 = this.led.b0;
+    this.led.a1 = 2 * (w * w - 1) * n;
+    this.led.a2 = (1 - Math.SQRT2 * w + w * w) * n;
+  }
 
   /** Play from a position (the song, or one block again and again). */
   play(seq: number, line: number, opts: PlayOptions = {}): void {
@@ -95,10 +106,32 @@ export class Renderer {
         if (p.until <= this.frame + at) p.voice.stop();
         else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
       }
+      if (this.song.flags.filter) this.filter(left, right, at, at + span);
       at += span;
       this.tickLeft -= span;
     }
     this.frame += n;
+  }
+
+  private filter(left: Float32Array, right: Float32Array, from: number, to: number): void {
+    const f = this.led;
+    const [xl1, xl2, yl1, yl2] = [f.x[0], f.x[1], f.y[0], f.y[1]];
+    let a = xl1, b = xl2, c = yl1, d = yl2;
+    for (let i = from; i < to; i++) {
+      const x = left[i];
+      const y = f.b0 * x + f.b1 * a + f.b2 * b - f.a1 * c - f.a2 * d;
+      b = a, a = x, d = c, c = y;
+      left[i] = y;
+    }
+    f.x[0] = a, f.x[1] = b, f.y[0] = c, f.y[1] = d;
+    let e = f.x[2], g = f.x[3], h = f.y[2], k = f.y[3];
+    for (let i = from; i < to; i++) {
+      const x = right[i];
+      const y = f.b0 * x + f.b1 * e + f.b2 * g - f.a1 * h - f.a2 * k;
+      g = e, e = x, k = h, h = y;
+      right[i] = y;
+    }
+    f.x[2] = e, f.x[3] = g, f.y[2] = h, f.y[3] = k;
   }
 
   private tick(at: number): void {
