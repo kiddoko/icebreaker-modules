@@ -116,5 +116,6 @@ const FR: Record<string, string> = {
   solo: "solo",
   "TRACK NAME": "NOM DE LA PISTE",
   save: "enregistrer",
+  "export (WAV + tracks)": "exporter (WAV + pistes)",
   "a new song": "un nouveau morceau",
 };

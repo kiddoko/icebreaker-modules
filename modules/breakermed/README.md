@@ -53,6 +53,7 @@ med demo                    a little song of ours, to try it right away
 med new [tracks]            a new song: 8 tracks (up to 16), the demo's instruments to start
 med save [file]             my-song.bmed (ours, the default) · song.mod · song.med (for other trackers)
 med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>
+med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]
 med play [song|block] [position] [line]
 med stop
 med pos <position> [line]
@@ -74,6 +75,15 @@ A song is a folder you can read: `song.json` holds the settings, the tracks (nam
 the sequence, the instruments and every block line by line, the way the page shows it
 (`C-3 01 0C20 | --- .. ....`); `samples/` holds each instrument's sound as a WAV file. `.med`
 (MMD1) and `.mod` are written too, for other trackers: `med save` says what they couldn't keep.
+
+## Export
+
+`med export` computes the song again, here, at the rate you choose (22.05 to 96 kHz, whatever the
+sound card's), and writes **WAV** (16 or 24 bits, or 32-bit float), **AIFF** (32-bit float as
+AIFF-C) or **FLAC** (16 / 24 bits, lossless, our own encoder). `--stems` adds **each track on its
+own** (`<name> stems/01 lead.wav`…), `--only-stems` only those, `--tracks 1,3` the ones you say.
+Muted tracks stay muted; the end rings out for `--tail` seconds, then fades; 16 bits get a little
+dither. MP3 / M4A / OGG come later, through an encoder pack the deck downloads on request.
 
 ## How it plays
 

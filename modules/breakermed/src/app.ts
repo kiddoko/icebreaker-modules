@@ -182,6 +182,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("mute / unmute this track"), cmd: `med mute ${track + 1}` },
     "-",
     { label: t("save"), hint: "med save", cmd: "med save" },
+    { label: t("export (WAV + tracks)"), hint: "med export", cmd: "med export --stems" },
   ];
 
   /** the cell (and column) under the mouse, from where the block was drawn */

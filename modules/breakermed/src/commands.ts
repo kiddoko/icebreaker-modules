@@ -7,9 +7,10 @@ import type { Engine } from "./engine";
 import { readSong, SONG_EXTS } from "./format";
 import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
+import { checkFormat, encode, renderSong, trackUsed, type ExportFormat } from "./export";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
-import { DEFAULT_TRACKS, hex, MAX_TRACKS, newSong, noteName, type Song } from "./song";
+import { DEFAULT_TRACKS, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { Editor, parseNote } from "./edit";
 import type { State } from "./app";
 
@@ -129,6 +130,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med demo                   a little song of ours, to try it right away",
       "med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
+      "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
       "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
       "med play [song|block] [position] [line]",
       "med stop",
@@ -145,10 +147,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med effects                every command (00–2E) in one line each",
       "med info                   the song's settings",
     ].join("\n"),
-    examples: [["med open songs/axel.mod", "load a song"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
-      const { rest: positional } = parseFlags(ctx.args);
+      const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
       const [sub = "", ...rest] = positional;
       try {
         switch (sub) {
@@ -174,6 +176,42 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             }
             await open(ctx, ctx.resolve(path));
             void ib.apps.open("breakermed");
+            return 0;
+          }
+          case "export": {
+            const s = need();
+            const target = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath().replace(/\.bmed$/i, ".wav");
+            const ext = (/\.(wav|aiff?|flac)$/i.exec(target)?.[1] ?? "wav").toLowerCase();
+            const format: ExportFormat = ext.startsWith("aif") ? "aiff" : (ext as ExportFormat);
+            const rate = flags.rate ? parseInt(String(flags.rate), 10) : 48000;
+            const bits = (flags.bits ? parseInt(String(flags.bits), 10) : format === "flac" ? 16 : 24) as 16 | 24 | 32;
+            if (![16, 24, 32].includes(bits)) return ctx.err("med export: --bits 16, 24 or 32\n"), 1;
+            const why = checkFormat(format, bits, rate);
+            if (why) return ctx.err(`med export: ${why}\n`), 1;
+            const base = /\.(wav|aiff?|flac)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
+            const dir = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "";
+            const opts = { rate, bits, paula: engine.paula, muted: engine.muted, normalize: !!flags.normalize, tail: flags.tail ? Math.max(0, Math.min(10, parseFloat(String(flags.tail)) || 0)) : 1.5 };
+            const jobs: { path: string; solo?: number[]; label: string }[] = [];
+            if (!flags["only-stems"]) jobs.push({ path: `${base}.${format === "aiff" ? "aif" : format}`, label: "master" });
+            if (flags.stems || flags["only-stems"] || flags.tracks) {
+              const wanted = flags.tracks ? String(flags.tracks).split(",").map((x) => parseInt(x, 10) - 1).filter((t) => t >= 0 && t < s.tracks) : [...Array(s.tracks).keys()].filter((t) => trackUsed(s, t));
+              for (const t of wanted) {
+                const name = trackName(s, t).replace(/[\\/:*?"<>|]/g, "-");
+                jobs.push({ path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${format === "aiff" ? "aif" : format}`, solo: [t], label: name });
+              }
+            }
+            if (dir) await ib.vault.mkdir(dir).catch(() => {});
+            if (jobs.some((j) => j.solo)) await ib.vault.mkdir(`${base} stems`).catch(() => {});
+            for (const job of jobs) {
+              let shown = 0;
+              const pcm = await renderSong(s, { ...opts, solo: job.solo }, (p) => {
+                if (p - shown >= 0.25 && p < 1) (shown = p), ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
+              });
+              const bytes = encode(pcm, format, bits);
+              await ib.vault.writeBytes(job.path, bytes);
+              ctx.out(`${fmt.green("✓")} ${job.path} ${fmt.dim(`(${(bytes.length / 1048576).toFixed(1)} MB)`)}\n`);
+            }
+            ctx.out(fmt.dim(`  ${format.toUpperCase()} · ${bits === 32 ? "32-bit float" : `${bits} bits`} · ${rate} Hz${opts.normalize ? " · normalized" : ""}\n`));
             return 0;
           }
           case "save": {

@@ -177,7 +177,8 @@ export interface IcebreakerAPI {
     /** a shell argument, quoted safely */
     q(s: string): string;
     mix(a: RGB, b: RGB, k: number): RGB;
-    parseFlags(args: string[]): { flags: Record<string, string | true>; rest: string[] };
+    /** `withValue`: the flags that take the next word as their value (--rate 48000) */
+    parseFlags(args: string[], withValue?: string[]): { flags: Record<string, string | true>; rest: string[] };
     fmt: { green(s: string): string; cyan(s: string): string; dim(s: string): string };
     ListView: new <T>() => ListView<T>;
   };

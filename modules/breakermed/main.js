@@ -45,6 +45,8 @@ function emptyInstrument() {
 		decay: 0
 	};
 }
+/** A track's name as shown. */
+var trackName = (s, t) => s.trackNames[t]?.trim() || `track ${t + 1}`;
 function newSong(tracks = 8) {
 	return {
 		title: "",
@@ -781,6 +783,11 @@ function makeApp(ib, engine, st) {
 			label: t("save"),
 			hint: "med save",
 			cmd: "med save"
+		},
+		{
+			label: t("export (WAV + tracks)"),
+			hint: "med export",
+			cmd: "med export --stems"
 		}
 	];
 	/** the cell (and column) under the mouse, from where the block was drawn */
@@ -2274,252 +2281,260 @@ async function readBmed(jsonText, readFile) {
 	if (!song.sequence.length) song.sequence = [0];
 	return song;
 }
-// src/format/write.ts
-/**
-* Writing .mod (ProTracker) and .med (MMD1, read by OctaMED Pro and later, and
-* by OpenMPT): for sharing with other trackers. Our own format (.bmed) keeps
-* everything; these keep what they can and say what they couldn't
-* (`warnings`): more tracks than ProTracker reads, blocks that aren't 64 lines,
-* commands a .mod hasn't got, synths…
-*/
-/** 0C's value as a hex volume 0–64, whatever the song's convention */
-function volumeOf(song, v) {
-	if (song.flags.vol7bit) return Math.min(64, (v & 127) + 1 >> 1);
-	if (song.flags.volHex) return Math.min(64, v & 127);
-	return v < 153 ? Math.min(64, (v >> 4) * 10 + (v & 15)) : 64;
+// src/format/aiff.ts
+/** an IEEE 754 80-bit extended number (AIFF's sample rate; whole rates below 2³² are exact) */
+function extended(n) {
+	const out = /* @__PURE__ */ new Uint8Array(10);
+	if (n <= 0) return out;
+	const e = Math.floor(Math.log2(n));
+	const exp = e + 16383;
+	out[0] = exp >> 8 & 127;
+	out[1] = exp & 255;
+	const hi = Math.floor(n * 2 ** (31 - e));
+	out[2] = hi >>> 24 & 255;
+	out[3] = hi >>> 16 & 255;
+	out[4] = hi >>> 8 & 255;
+	out[5] = hi & 255;
+	return out;
 }
-/** An OctaMED command as a ProTracker effect, or null when it has none. */
-function medToMod(song, cmd, v) {
-	switch (cmd) {
-		case 0: return v ? [0, v] : null;
-		case 1:
-		case 2:
-		case 3:
-		case 5:
-		case 6:
-		case 7:
-		case 10:
-		case 11: return [cmd, v];
-		case 13: return [10, v];
-		case 4: return [4, v & 240 | Math.min(15, (v & 15) * 2)];
-		case 20: return [4, v];
-		case 9: return v > 0 && v < 32 ? [15, v] : null;
-		case 12: return [12, volumeOf(song, v)];
-		case 15:
-			if (v === 0) return [13, 0];
-			if (v <= 240) {
-				const bpm = Math.round(ptBpmOf(song.tempoMode, v, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
-				return [15, Math.max(32, Math.min(255, bpm))];
-			}
-			return {
-				241: [14, 147],
-				242: [14, 211],
-				243: [14, 146],
-				248: [14, 1],
-				249: [14, 0],
-				254: [15, 0],
-				255: [14, 192]
-			}[v] ?? null;
-		case 17: return [14, 16 | v & 15];
-		case 18: return [14, 32 | v & 15];
-		case 21: return [14, 80 | v & 15];
-		case 22: return [14, 96 | v & 15];
-		case 24: return [14, 192 | Math.min(15, v)];
-		case 25: return [9, v];
-		case 26: return [14, 160 | v & 15];
-		case 27: return [14, 176 | v & 15];
-		case 29: return [13, Math.min(63, v) % 10 | Math.floor(Math.min(63, v) / 10) << 4];
-		case 30: return [14, 224 | Math.min(15, v)];
-		case 31: return v >> 4 ? [14, 208 | v >> 4] : v & 15 ? [14, 144 | v & 15] : null;
-		default: return null;
+function writeAiff(pcm, bits = 16) {
+	const ch = Math.max(1, pcm.channels.length);
+	const frames = pcm.channels[0]?.length ?? 0;
+	const float = bits === 32;
+	const bytes = bits / 8;
+	const comm = float ? 36 : 18;
+	const data = frames * ch * bytes;
+	const size = 4 + (8 + comm) + (16 + data) + (float ? 12 : 0);
+	const out = new Uint8Array(8 + size);
+	const v = new DataView(out.buffer);
+	let o = 0;
+	const tag = (s) => [...s].forEach((c) => v.setUint8(o++, c.charCodeAt(0)));
+	const u32 = (x) => (v.setUint32(o, x), o += 4);
+	const u16 = (x) => (v.setUint16(o, x), o += 2);
+	tag("FORM");
+	u32(size);
+	tag(float ? "AIFC" : "AIFF");
+	if (float) {
+		tag("FVER");
+		u32(4);
+		u32(2726318400);
 	}
-}
-function writeMod(song) {
-	const warnings = [];
-	const w = new Writer();
-	const tracks = song.tracks;
-	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
-	const T = Math.min(32, tracks);
-	if (T !== 4) warnings.push(`${T} tracks: ProTracker itself plays 4 (OpenMPT, MilkyTracker… play more)`);
-	const tag = T === 4 ? "M.K." : T < 10 ? `${T}CHN` : `${T}CH`;
-	w.text(song.title, 20);
-	const insts = song.instruments.slice(0, 31);
-	if (song.instruments.filter((i) => i.kind !== "empty").length > 31) warnings.push("more than 31 instruments: the rest are left out");
-	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
-	if (song.instruments.some((i) => i.bits16)) warnings.push("16-bit samples are written in 8 bits");
-	const datas = insts.map((i) => i.kind === "empty" ? /* @__PURE__ */ new Float32Array(0) : i.data.length > 131070 ? (warnings.push(`instrument "${i.name}": longer than 128 kB, cut`), i.data.slice(0, 131070)) : i.data);
-	for (let i = 0; i < 31; i++) {
-		const ins = insts[i];
-		const words = (datas[i] ?? /* @__PURE__ */ new Float32Array(0)).length >> 1;
-		w.text(ins?.name ?? "", 22).u16(words).u8((ins?.finetune ?? 0) & 15).u8(Math.min(64, ins?.volume ?? 0));
-		const ls = ins && ins.loopLength > 2 ? Math.min(words, ins.loopStart >> 1) : 0;
-		const ll = ins && ins.loopLength > 2 ? Math.max(1, Math.min(words - ls, ins.loopLength >> 1)) : 1;
-		w.u16(ls).u16(ll);
+	tag("COMM");
+	u32(comm);
+	u16(ch);
+	u32(frames);
+	u16(bits);
+	out.set(extended(pcm.rate), o);
+	o += 10;
+	if (float) {
+		tag("fl32");
+		out[o++] = 12;
+		tag("32-bit float");
+		out[o++] = 0;
 	}
-	const seq = song.sequence.slice(0, 128);
-	if (song.sequence.length > 128) warnings.push("a .mod's sequence holds 128 positions: the rest is cut");
-	const patOf = /* @__PURE__ */ new Map();
-	for (const b of seq) if (!patOf.has(b)) patOf.set(b, patOf.size);
-	w.u8(seq.length).u8(song.restart < seq.length ? song.restart : 127);
-	for (let i = 0; i < 128; i++) w.u8(i < seq.length ? patOf.get(seq[i]) : 0);
-	w.text(tag, 4);
-	let dropped = 0;
-	const first = seq[0];
-	for (const [b] of patOf) {
-		const block = song.blocks[b];
-		if (block.lines > 64) warnings.push(`block ${b}: ${block.lines} lines, a .mod pattern has 64 — cut`);
-		for (let line = 0; line < 64; line++) {
-			const free = [];
-			const cells = [];
-			for (let t = 0; t < T; t++) {
-				const c = line < block.lines ? block.cells[line][t] : void 0;
-				let period = 0, inst = 0, e = 0, p = 0;
-				if (c) {
-					inst = c.inst;
-					if (c.note && c.note !== 128) {
-						let s = c.note - 1 + song.transpose + song.noteShift;
-						while (s > 35) s -= 12;
-						while (s < 0) s += 12;
-						period = Math.round(periodOf(s));
-					} else if (c.note === 128) [e, p] = [14, 192];
-					for (let k = 0; k < c.cmd.length && !e; k++) {
-						if (!c.cmd[k] && !c.val[k]) continue;
-						const m = medToMod(song, c.cmd[k], c.val[k]);
-						if (m) [e, p] = m;
-						else dropped++;
-					}
-				}
-				if (!e && !p) free.push(t);
-				cells.push([
-					period,
-					inst,
-					e,
-					p
-				]);
-			}
-			if (line === block.lines - 1 && block.lines < 64) {
-				const t = free.shift();
-				if (t !== void 0) cells[t][2] = 13;
-				else warnings.push(`block ${b}: no free column for the break at line ${line}`);
-			}
-			if (b === first && line === 0) {
-				const bpm = Math.round(ptBpmOf(song.tempoMode, song.tempo, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
-				const want = [];
-				if (song.speed !== 6) want.push([15, Math.min(31, song.speed)]);
-				if (bpm !== 125) want.push([15, Math.max(32, Math.min(255, bpm))]);
-				for (const [e, p] of want) {
-					const t = free.shift();
-					if (t === void 0) warnings.push("no free column on the first line for the tempo");
-					else cells[t][2] = e, cells[t][3] = p;
-				}
-			}
-			for (const [period, inst, e, p] of cells) w.u8(inst & 240 | period >> 8 & 15).u8(period & 255).u8((inst & 15) << 4 | e).u8(p);
+	tag("SSND");
+	u32(8 + data);
+	u32(0);
+	u32(0);
+	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
+		const x = pcm.channels[c]?.[i] ?? 0;
+		const s = x > 1 ? 1 : x < -1 ? -1 : x === x ? x : 0;
+		if (float) v.setFloat32(o, s);
+		else if (bits === 16) v.setInt16(o, Math.round(s * 32767));
+		else {
+			const n = Math.round(s * 8388607);
+			out[o] = n >> 16 & 255;
+			out[o + 1] = n >> 8 & 255;
+			out[o + 2] = n & 255;
 		}
+		o += bytes;
 	}
-	if (dropped) warnings.push(`${dropped} command(s) a .mod hasn't got were left out`);
-	for (const d of datas) w.bytes(floatsToS8(d.length & 1 ? d.slice(0, d.length - 1) : d));
-	return {
-		bytes: w.done(),
-		warnings
+	return out;
+}
+// src/format/flac.ts
+var BLOCK = 4096;
+var Bits = class {
+	constructor() {
+		_defineProperty(this, "buf", /* @__PURE__ */ new Uint8Array(65536));
+		_defineProperty(this, "len", 0);
+		_defineProperty(this, "acc", 0);
+		_defineProperty(this, "n", 0);
+	}
+	room(extra) {
+		if (this.len + extra + 8 <= this.buf.length) return;
+		let size = this.buf.length * 2;
+		while (size < this.len + extra + 8) size *= 2;
+		const b = new Uint8Array(size);
+		b.set(this.buf.subarray(0, this.len));
+		this.buf = b;
+	}
+	/** write the low `count` bits of `v` (count ≤ 24 at a time) */
+	put(v, count) {
+		if (count > 24) {
+			this.put(Math.floor(v / 2 ** 24) & (1 << count - 24) - 1, count - 24);
+			this.put(v & 16777215, 24);
+			return;
+		}
+		this.room(4);
+		this.acc = this.acc << count | v & (1 << count) - 1;
+		this.n += count;
+		while (this.n >= 8) {
+			this.n -= 8;
+			this.buf[this.len++] = this.acc >>> this.n & 255;
+		}
+		this.acc &= (1 << this.n) - 1;
+	}
+	/** a signed value in `count` bits (two's complement) */
+	putSigned(v, count) {
+		this.put(v < 0 ? v + 2 ** count : v, count);
+	}
+	/** q zeros then a one */
+	unary(q) {
+		while (q >= 24) this.put(0, 24), q -= 24;
+		this.put(1, q + 1);
+	}
+	align() {
+		if (this.n) this.put(0, 8 - this.n);
+	}
+	get bytes() {
+		return this.len;
+	}
+	slice(from, to = this.len) {
+		return this.buf.slice(from, to);
+	}
+	done() {
+		this.align();
+		return this.buf.slice(0, this.len);
+	}
+};
+function crc8(b) {
+	let c = 0;
+	for (const x of b) {
+		c ^= x;
+		for (let i = 0; i < 8; i++) c = c & 128 ? (c << 1 ^ 7) & 255 : c << 1 & 255;
+	}
+	return c;
+}
+function crc16(b) {
+	let c = 0;
+	for (const x of b) {
+		c ^= x << 8;
+		for (let i = 0; i < 8; i++) c = c & 32768 ? (c << 1 ^ 32773) & 65535 : c << 1 & 65535;
+	}
+	return c;
+}
+/** the residual of FLAC's fixed predictor of this order */
+function residual(x, order) {
+	const r = new Int32Array(x.length - order);
+	for (let i = order; i < x.length; i++) {
+		const p = order === 0 ? 0 : order === 1 ? x[i - 1] : order === 2 ? 2 * x[i - 1] - x[i - 2] : order === 3 ? 3 * x[i - 1] - 3 * x[i - 2] + x[i - 3] : 4 * x[i - 1] - 6 * x[i - 2] + 4 * x[i - 3] - x[i - 4];
+		r[i - order] = x[i] - p;
+	}
+	return r;
+}
+var zigzag = (v) => v >= 0 ? 2 * v : -2 * v - 1;
+/** the best Rice parameter for these values, and how many bits they take with it */
+function rice(r) {
+	let sum = 0;
+	for (const v of r) sum += zigzag(v);
+	let best = {
+		k: 0,
+		bits: Infinity
 	};
+	const guess = Math.max(0, Math.floor(Math.log2(Math.max(1, sum / Math.max(1, r.length)))));
+	for (let k = Math.max(0, guess - 1); k <= Math.min(14, guess + 2); k++) {
+		let bits = 0;
+		for (const v of r) bits += Math.floor(zigzag(v) / 2 ** k) + 1 + k;
+		if (bits < best.bits) best = {
+			k,
+			bits
+		};
+	}
+	return best;
 }
-function writeMed(song) {
-	const warnings = [];
-	const w = new Writer();
-	const T = song.tracks;
-	const insts = song.instruments.slice(0, 63);
-	if (song.instruments.length > 63) warnings.push("more than 63 instruments: the rest are left out");
-	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
-	const seq = song.sequence.slice(0, 256);
-	if (song.sequence.length > 256) warnings.push("an MMD1 sequence holds 256 positions: the rest is cut");
-	w.text("MMD1", 4).u32(0).u32(52).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).zeros(11).u8(0);
-	for (let i = 0; i < 63; i++) {
-		const ins = insts[i];
-		const loop = ins && ins.loopLength > 2;
-		w.u16(loop ? ins.loopStart >> 1 : 0).u16(loop ? ins.loopLength >> 1 : 0).u8(0).u8(0).u8(Math.min(64, ins?.volume ?? 0)).u8((ins?.transpose ?? 0) & 255);
+function subframe(w, x, bps) {
+	let best = null;
+	for (let order = 0; order <= Math.min(4, x.length - 1); order++) {
+		const r = residual(x, order);
+		const { k, bits } = rice(r);
+		const total = 8 + order * bps + 2 + 4 + 4 + bits;
+		if (!best || total < best.bits) best = {
+			order,
+			k,
+			bits: total,
+			r
+		};
 	}
-	let tempo = song.tempo, lpb = song.lpb, mode = song.tempoMode;
-	if (mode === "pt") mode = "bpm", lpb = 4, tempo = Math.round(ptBpmOf("pt", song.tempo, 4));
-	w.u16(song.blocks.length).u16(seq.length);
-	for (let i = 0; i < 256; i++) w.u8(seq[i] ?? 0);
-	const flags = 16 | (song.flags.ptSlides ? 32 : 0) | (song.flags.eightChannel ? 64 : 0) | (song.flags.filter ? 1 : 0);
-	const flags2 = (mode === "bpm" ? 32 | Math.max(1, lpb) - 1 & 31 : 0) | (song.flags.hardwareMix ? 0 : 128);
-	w.u16(Math.max(1, Math.min(65535, tempo))).u8(song.transpose & 255).u8(flags).u8(flags2).u8(Math.max(1, Math.min(32, song.speed)));
-	for (let t = 0; t < 16; t++) w.u8(Math.min(64, song.trackVolume[t] ?? 64));
-	w.u8(Math.min(64, song.masterVolume)).u8(insts.length);
-	const blockArr = w.pos;
-	w.zeros(4 * song.blocks.length);
-	song.blocks.forEach((b, n) => {
-		w.align();
-		const at = w.pos;
-		w.patch32(blockArr + 4 * n, at);
-		w.u16(T).u16(b.lines - 1);
-		const infoPtr = w.pos;
-		w.u32(0);
-		const note = (x) => x === 128 ? 128 : x ? Math.max(1, Math.min(127, x + song.noteShift)) : 0;
-		const val = (cmd, v) => cmd === 12 ? volumeOf(song, v) : v;
-		for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
-			const c = b.cells[l][t];
-			w.u8(note(c.note)).u8(c.inst & 63).u8(c.cmd[0] ?? 0).u8(val(c.cmd[0] ?? 0, c.val[0] ?? 0));
-		}
-		if (b.pages > 1 || b.name) {
-			w.align();
-			const pages = [];
-			for (let p = 1; p < b.pages; p++) {
-				pages.push(w.pos);
-				for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
-					const c = b.cells[l][t];
-					w.u8(c.cmd[p] ?? 0).u8(val(c.cmd[p] ?? 0, c.val[p] ?? 0));
-				}
-			}
-			w.align();
-			let nameAt = 0;
-			if (b.name) nameAt = w.pos, w.text(b.name, b.name.length + 1);
-			w.align();
-			let tableAt = 0;
-			if (pages.length) {
-				tableAt = w.pos;
-				w.u16(pages.length).u16(0);
-				for (const p of pages) w.u32(p);
-			}
-			w.align();
-			const info = w.pos;
-			w.u32(0).u32(nameAt).u32(b.name ? b.name.length + 1 : 0).u32(tableAt).u32(0).zeros(16);
-			w.patch32(infoPtr, info);
-		}
-	});
-	w.align();
-	const sampleArr = w.pos;
-	w.zeros(4 * insts.length);
-	insts.forEach((ins, i) => {
-		if (ins.kind === "empty" || !ins.data.length) return;
-		w.align();
-		w.patch32(sampleArr + 4 * i, w.pos);
-		const bytes = ins.bits16 ? floatsToS16be(ins.data) : floatsToS8(ins.data);
-		w.u32(bytes.length).u16(ins.bits16 ? 16 : 0).bytes(bytes);
-	});
-	w.align();
-	const extAt = w.pos;
-	for (const ins of insts) {
-		const loop = ins.loopLength > 2;
-		w.u8(ins.hold & 255).u8(ins.decay & 255).u8(0).u8(ins.finetune & 255).u8(0).u8((loop ? 1 : 0) | (ins.pingPong ? 8 : 0)).u16(0).u8(0).u8(0);
-		w.u32(loop ? ins.loopStart : 0).u32(loop ? ins.loopLength : 0).u8(Math.max(0, Math.min(127, Math.round(ins.gain * 128) - 1))).u8(0).u8(0).u8(0);
+	const verbatim = 8 + x.length * bps;
+	if (!best || best.bits >= verbatim || best.k > 14) {
+		w.put(2, 8);
+		for (const v of x) w.putSigned(v, bps);
+		return;
 	}
-	const infoAt = w.pos;
-	for (const ins of insts) w.text(ins.name, 40);
-	let nameAt = 0;
-	if (song.title) nameAt = w.pos, w.text(song.title, song.title.length + 1);
-	w.align();
-	const exp = w.pos;
-	w.u32(0).u32(extAt).u16(insts.length).u16(22).u32(0).u32(0).u32(infoAt).u16(insts.length).u16(40).u32(0).u32(0).zeros(4).u32(0).u32(nameAt).u32(song.title ? song.title.length + 1 : 0).zeros(28);
-	w.patch32(4, w.pos);
-	w.patch32(16, blockArr);
-	w.patch32(24, sampleArr);
-	w.patch32(32, exp);
-	return {
-		bytes: w.done(),
-		warnings
-	};
+	w.put((8 | best.order) << 1, 8);
+	for (let i = 0; i < best.order; i++) w.putSigned(x[i], bps);
+	w.put(0, 2);
+	w.put(0, 4);
+	w.put(best.k, 4);
+	for (const v of best.r) {
+		const u = zigzag(v);
+		w.unary(Math.floor(u / 2 ** best.k));
+		if (best.k) w.put(u & (1 << best.k) - 1, best.k);
+	}
+}
+/** a frame number the way FLAC writes it (like UTF-8) */
+function utf8(n) {
+	if (n < 128) return [n];
+	if (n < 2048) return [192 | n >> 6, 128 | n & 63];
+	if (n < 65536) return [
+		224 | n >> 12,
+		128 | n >> 6 & 63,
+		128 | n & 63
+	];
+	return [
+		240 | n >> 18,
+		128 | n >> 12 & 63,
+		128 | n >> 6 & 63,
+		128 | n & 63
+	];
+}
+function writeFlac(pcm, bits = 16) {
+	const ch = Math.max(1, Math.min(8, pcm.channels.length));
+	const frames = pcm.channels[0]?.length ?? 0;
+	const max = 2 ** (bits - 1) - 1;
+	const w = new Bits();
+	for (const c of "fLaC") w.put(c.charCodeAt(0), 8);
+	w.put(128, 8);
+	w.put(34, 24);
+	w.put(BLOCK, 16);
+	w.put(BLOCK, 16);
+	w.put(0, 24);
+	w.put(0, 24);
+	w.put(Math.round(pcm.rate), 20);
+	w.put(ch - 1, 3);
+	w.put(bits - 1, 5);
+	w.put(Math.floor(frames / 2 ** 32), 4);
+	w.put(Math.floor(frames / 2 ** 16) & 65535, 16);
+	w.put(frames & 65535, 16);
+	for (let i = 0; i < 16; i++) w.put(0, 8);
+	const ints = pcm.channels.slice(0, ch).map((c) => Int32Array.from(c, (x) => Math.max(-max - 1, Math.min(max, Math.round((x === x ? x : 0) * max)))));
+	for (let start = 0, n = 0; start < frames; start += BLOCK, n++) {
+		const size = Math.min(BLOCK, frames - start);
+		const frameAt = w.bytes;
+		w.put(65528, 16);
+		w.put(size === BLOCK ? 12 : 7, 4);
+		w.put(0, 4);
+		w.put(ch - 1, 4);
+		w.put(0, 3);
+		w.put(0, 1);
+		for (const b of utf8(n)) w.put(b, 8);
+		if (size !== BLOCK) w.put(size - 1, 16);
+		w.put(crc8(w.slice(frameAt)), 8);
+		for (let c = 0; c < ch; c++) subframe(w, ints[c].subarray(start, start + size), bits);
+		w.align();
+		w.put(crc16(w.slice(frameAt)), 16);
+	}
+	return w.done();
 }
 // src/replayer.ts
 /**
@@ -3053,6 +3068,559 @@ function songLength(song, maxSeconds = 3600) {
 		lines
 	};
 }
+// src/dsp/voice.ts
+/**
+* A sample: read at `rate` frames a second, looped (ping-pong too), stepped
+* like the Amiga's Paula (nearest frame, its grit) or smooth (linear).
+*/
+var SampleVoice = class {
+	constructor(outRate) {
+		_defineProperty(this, "outRate", void 0);
+		_defineProperty(this, "on", false);
+		_defineProperty(this, "paula", true);
+		_defineProperty(this, "data", /* @__PURE__ */ new Float32Array(0));
+		_defineProperty(this, "loopStart", 0);
+		_defineProperty(this, "loopEnd", 0);
+		_defineProperty(this, "pingPong", false);
+		_defineProperty(this, "pos", 0);
+		_defineProperty(this, "dir", 1);
+		_defineProperty(this, "step", 1);
+		_defineProperty(this, "gl", 0);
+		_defineProperty(this, "gr", 0);
+		this.outRate = outRate;
+	}
+	start(n) {
+		const i = n.instrument;
+		this.data = i.data;
+		this.loopStart = i.loopLength > 2 ? i.loopStart : 0;
+		this.loopEnd = i.loopLength > 2 ? Math.min(i.data.length, i.loopStart + i.loopLength) : 0;
+		this.pingPong = i.pingPong && this.loopEnd > 0;
+		this.pos = Math.max(0, n.offset);
+		this.dir = 1;
+		this.step = Math.max(0, n.rate) / this.outRate;
+		this.on = this.pos < this.data.length;
+	}
+	set(rate, volume, pan) {
+		this.step = Math.max(0, rate) / this.outRate;
+		const v = Math.max(0, Math.min(1, volume));
+		this.gl = v * Math.min(1, 1 - pan);
+		this.gr = v * Math.min(1, 1 + pan);
+	}
+	stop() {
+		this.on = false;
+	}
+	render(left, right, from, to) {
+		if (!this.on) return;
+		const d = this.data;
+		const loops = this.loopEnd > this.loopStart;
+		const end = loops ? this.loopEnd : d.length;
+		const loopLen = this.loopEnd - this.loopStart;
+		let pos = this.pos;
+		for (let i = from; i < to; i++) {
+			if (this.dir > 0 && pos >= end) {
+				if (!loops) return void (this.on = false);
+				if (this.pingPong) this.dir = -1, pos = end - 1 - (pos - end);
+				else pos = this.loopStart + (pos - this.loopStart) % loopLen;
+			} else if (this.dir < 0 && pos < this.loopStart) this.dir = 1, pos = this.loopStart + (this.loopStart - pos);
+			const k = pos | 0;
+			let x = d[k] ?? 0;
+			if (!this.paula) {
+				const k1 = k + this.dir;
+				const y = k1 >= end ? loops ? d[this.loopStart] : x : k1 < 0 ? x : d[k1];
+				x += ((y ?? x) - x) * Math.abs(pos - k);
+			}
+			left[i] += x * this.gl;
+			right[i] += x * this.gr;
+			pos += this.step * this.dir;
+		}
+		this.pos = pos;
+	}
+};
+/** The voice an instrument plays with. Synths and drums come with their own (steps 6–8). */
+function voiceFor(_instrument, outRate, paula) {
+	const v = new SampleVoice(outRate);
+	v.paula = paula;
+	return v;
+}
+// src/render.ts
+/**
+* breakerMED — the renderer: the song turned into sound, frame by frame, here
+* in the module (the deck only plays what we hand it: ib.audio.stream). The
+* replayer says what each track does on each tick; the renderer starts and
+* changes the voices exactly on the tick's first frame and mixes them.
+*
+* The same code plays the song, previews the keys (a few voices past the
+* tracks) and, later, writes the exports (a rate of our choosing, as fast as
+* the computer goes, one track alone for a stem).
+*/
+/** keys played on the piano: a few voices of their own, in turn */
+var PREVIEWS = 4;
+var Renderer = class {
+	constructor(song, rate, paula = true) {
+		_defineProperty(this, "song", void 0);
+		_defineProperty(this, "rate", void 0);
+		_defineProperty(this, "paula", void 0);
+		_defineProperty(
+			this,
+			/** frames written so far */
+			"frame",
+			0
+		);
+		_defineProperty(
+			this,
+			/** where each line began (the page follows the one being heard) */
+			"marks",
+			[]
+		);
+		_defineProperty(this, "ended", false);
+		_defineProperty(this, "player", null);
+		_defineProperty(this, "voices", []);
+		_defineProperty(this, "previews", []);
+		_defineProperty(this, "nextPreview", 0);
+		_defineProperty(
+			this,
+			/** frames left in the current tick (and the fraction carried, so ticks don't drift) */
+			"tickLeft",
+			0
+		);
+		_defineProperty(this, "carry", 0);
+		this.song = song;
+		this.rate = rate;
+		this.paula = paula;
+	}
+	/** Play from a position (the song, or one block again and again). */
+	play(seq, line, opts = {}) {
+		this.player = new Player(this.song, opts);
+		this.player.jump(seq, line);
+		this.tickLeft = 0;
+		this.carry = 0;
+		this.ended = false;
+		for (const v of this.voices) v?.stop();
+	}
+	stop() {
+		this.player = null;
+		for (const v of this.voices) v?.stop();
+	}
+	/** The song ends here, but what's ringing keeps ringing (an export's tail). */
+	finish() {
+		this.player = null;
+	}
+	get playing() {
+		return !!this.player && !this.ended;
+	}
+	/** something to hear: the song, or a key still ringing */
+	get busy() {
+		return this.playing || this.previews.some((p) => p.voice.on && p.until > this.frame) || this.voices.some((v) => v?.on);
+	}
+	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
+	preview(inst, rate, seconds = .6) {
+		const instrument = this.song.instruments[inst];
+		if (!instrument || instrument.kind === "empty") return;
+		const slot = this.nextPreview++ % PREVIEWS;
+		const voice = voiceFor(instrument, this.rate, this.paula);
+		voice.start({
+			instrument,
+			rate,
+			offset: 0
+		});
+		voice.set(rate, .45 * instrument.gain * (instrument.volume / 64), 0);
+		this.previews[slot] = {
+			voice,
+			until: this.frame + Math.round(seconds * this.rate)
+		};
+	}
+	/** The next `n` frames, added into left / right (they start at zero). */
+	render(left, right, n = left.length) {
+		let at = 0;
+		while (at < n) {
+			if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
+			const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
+			for (const v of this.voices) v?.render(left, right, at, at + span);
+			for (const p of this.previews) {
+				if (!p) continue;
+				if (p.until <= this.frame + at) p.voice.stop();
+				else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
+			}
+			at += span;
+			this.tickLeft -= span;
+		}
+		this.frame += n;
+	}
+	tick(at) {
+		const t = this.player.step();
+		if (t.line) this.marks.push({
+			frame: this.frame + at,
+			...t.line
+		});
+		for (const e of t.events) this.apply(e);
+		if (t.ended) {
+			this.ended = true;
+			return;
+		}
+		const exact = t.seconds * this.rate + this.carry;
+		this.tickLeft = Math.max(1, Math.floor(exact));
+		this.carry = exact - this.tickLeft;
+		if (this.marks.length > 512) this.marks.splice(0, this.marks.length - 256);
+	}
+	apply(e) {
+		if (e.stop) {
+			this.voices[e.voice]?.stop();
+			return;
+		}
+		if (e.play !== void 0) {
+			const instrument = this.song.instruments[e.play];
+			if (!instrument) return;
+			const v = voiceFor(instrument, this.rate, this.paula);
+			v.start({
+				instrument,
+				rate: e.rate ?? 8363,
+				offset: e.offset ?? 0
+			});
+			this.voices[e.voice] = v;
+		}
+		const v = this.voices[e.voice];
+		if (!v) return;
+		const s = v;
+		s.lastRate = e.rate ?? s.lastRate ?? 8363;
+		s.lastVol = e.volume ?? s.lastVol ?? 0;
+		s.lastPan = e.pan ?? s.lastPan ?? 0;
+		v.set(s.lastRate, s.lastVol, s.lastPan);
+	}
+};
+// src/export.ts
+/**
+* breakerMED — exports: the song computed again, here, at the rate you choose
+* (independent of the sound card), as fast as the computer goes, then written
+* as WAV (16 / 24 bits, 32-bit float), AIFF or FLAC. The master, or one track
+* alone (a stem): the same renderer as what you hear, so the file is what you
+* heard. MP3 / M4A / OGG come later (the deck's encoder pack).
+*/
+var RATES = [
+	22050,
+	32e3,
+	44100,
+	48e3,
+	88200,
+	96e3
+];
+/** what a format can do */
+function checkFormat(format, bits, rate) {
+	if (format === "flac" && bits === 32) return "FLAC goes up to 24 bits (32-bit float: WAV or AIFF)";
+	if (!RATES.includes(rate)) return `a rate among ${RATES.join(", ")}`;
+	return null;
+}
+/** The song as sound: once through, plus its tail. `onProgress(0…1)`; it yields now and then. */
+async function renderSong(song, o, onProgress) {
+	const r = new Renderer(song, o.rate, o.paula);
+	const muted = new Set(o.muted ?? []);
+	if (o.solo?.length) {
+		for (let t = 0; t < song.tracks; t++) if (!o.solo.includes(t)) muted.add(t);
+	}
+	r.play(0, 0, { muted });
+	const body = Math.ceil(songLength(song).seconds * o.rate);
+	const tail = Math.round((o.tail ?? 1.5) * o.rate);
+	const total = body + tail;
+	const left = new Float32Array(total), right = new Float32Array(total);
+	const CHUNK = 8192;
+	let lastYield = 0;
+	for (let at = 0, n = 0; at < total; at += n) {
+		if (at === body) r.finish();
+		n = Math.min(CHUNK, at < body ? body - at : total - at);
+		const l = new Float32Array(n), rr = new Float32Array(n);
+		r.render(l, rr, n);
+		left.set(l, at);
+		right.set(rr, at);
+		if (at - lastYield > o.rate / 2) {
+			lastYield = at;
+			onProgress?.(at / total);
+			await new Promise((ok) => setTimeout(ok, 0));
+		}
+	}
+	const fade = Math.min(tail, Math.round(.5 * o.rate));
+	for (let i = 0; i < fade; i++) {
+		const g = 1 - i / fade;
+		left[total - fade + i] *= g;
+		right[total - fade + i] *= g;
+	}
+	if (o.normalize) {
+		let peak = 0;
+		for (let i = 0; i < total; i++) peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
+		if (peak > 1e-6) {
+			const g = .966 / peak;
+			for (let i = 0; i < total; i++) left[i] *= g, right[i] *= g;
+		}
+	}
+	onProgress?.(1);
+	return {
+		rate: o.rate,
+		channels: [left, right]
+	};
+}
+/** 16 bits: a whisper of noise (TPDF dither) so quiet passages don't turn to grit — unless you asked for grit */
+function dither16(pcm) {
+	let seed = 22222;
+	const rnd = () => (seed = seed * 1103515245 + 12345 & 2147483647) / 2147483647;
+	const lsb = 1 / 32768;
+	for (const c of pcm.channels) for (let i = 0; i < c.length; i++) c[i] += (rnd() - rnd()) * lsb;
+}
+function encode(pcm, format, bits, dither = true) {
+	if (bits === 16 && dither) dither16(pcm);
+	if (format === "aiff") return writeAiff(pcm, bits);
+	if (format === "flac") return writeFlac(pcm, bits === 32 ? 24 : bits);
+	return writeWav(pcm, bits);
+}
+/** Does this track play anything (a stem worth writing)? */
+function trackUsed(song, t) {
+	const used = new Set(song.sequence);
+	return song.blocks.some((b, n) => used.has(n) && b.cells.some((row) => !!row[t]?.note));
+}
+// src/format/write.ts
+/**
+* Writing .mod (ProTracker) and .med (MMD1, read by OctaMED Pro and later, and
+* by OpenMPT): for sharing with other trackers. Our own format (.bmed) keeps
+* everything; these keep what they can and say what they couldn't
+* (`warnings`): more tracks than ProTracker reads, blocks that aren't 64 lines,
+* commands a .mod hasn't got, synths…
+*/
+/** 0C's value as a hex volume 0–64, whatever the song's convention */
+function volumeOf(song, v) {
+	if (song.flags.vol7bit) return Math.min(64, (v & 127) + 1 >> 1);
+	if (song.flags.volHex) return Math.min(64, v & 127);
+	return v < 153 ? Math.min(64, (v >> 4) * 10 + (v & 15)) : 64;
+}
+/** An OctaMED command as a ProTracker effect, or null when it has none. */
+function medToMod(song, cmd, v) {
+	switch (cmd) {
+		case 0: return v ? [0, v] : null;
+		case 1:
+		case 2:
+		case 3:
+		case 5:
+		case 6:
+		case 7:
+		case 10:
+		case 11: return [cmd, v];
+		case 13: return [10, v];
+		case 4: return [4, v & 240 | Math.min(15, (v & 15) * 2)];
+		case 20: return [4, v];
+		case 9: return v > 0 && v < 32 ? [15, v] : null;
+		case 12: return [12, volumeOf(song, v)];
+		case 15:
+			if (v === 0) return [13, 0];
+			if (v <= 240) {
+				const bpm = Math.round(ptBpmOf(song.tempoMode, v, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
+				return [15, Math.max(32, Math.min(255, bpm))];
+			}
+			return {
+				241: [14, 147],
+				242: [14, 211],
+				243: [14, 146],
+				248: [14, 1],
+				249: [14, 0],
+				254: [15, 0],
+				255: [14, 192]
+			}[v] ?? null;
+		case 17: return [14, 16 | v & 15];
+		case 18: return [14, 32 | v & 15];
+		case 21: return [14, 80 | v & 15];
+		case 22: return [14, 96 | v & 15];
+		case 24: return [14, 192 | Math.min(15, v)];
+		case 25: return [9, v];
+		case 26: return [14, 160 | v & 15];
+		case 27: return [14, 176 | v & 15];
+		case 29: return [13, Math.min(63, v) % 10 | Math.floor(Math.min(63, v) / 10) << 4];
+		case 30: return [14, 224 | Math.min(15, v)];
+		case 31: return v >> 4 ? [14, 208 | v >> 4] : v & 15 ? [14, 144 | v & 15] : null;
+		default: return null;
+	}
+}
+function writeMod(song) {
+	const warnings = [];
+	const w = new Writer();
+	const tracks = song.tracks;
+	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
+	const T = Math.min(32, tracks);
+	if (T !== 4) warnings.push(`${T} tracks: ProTracker itself plays 4 (OpenMPT, MilkyTracker… play more)`);
+	const tag = T === 4 ? "M.K." : T < 10 ? `${T}CHN` : `${T}CH`;
+	w.text(song.title, 20);
+	const insts = song.instruments.slice(0, 31);
+	if (song.instruments.filter((i) => i.kind !== "empty").length > 31) warnings.push("more than 31 instruments: the rest are left out");
+	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
+	if (song.instruments.some((i) => i.bits16)) warnings.push("16-bit samples are written in 8 bits");
+	const datas = insts.map((i) => i.kind === "empty" ? /* @__PURE__ */ new Float32Array(0) : i.data.length > 131070 ? (warnings.push(`instrument "${i.name}": longer than 128 kB, cut`), i.data.slice(0, 131070)) : i.data);
+	for (let i = 0; i < 31; i++) {
+		const ins = insts[i];
+		const words = (datas[i] ?? /* @__PURE__ */ new Float32Array(0)).length >> 1;
+		w.text(ins?.name ?? "", 22).u16(words).u8((ins?.finetune ?? 0) & 15).u8(Math.min(64, ins?.volume ?? 0));
+		const ls = ins && ins.loopLength > 2 ? Math.min(words, ins.loopStart >> 1) : 0;
+		const ll = ins && ins.loopLength > 2 ? Math.max(1, Math.min(words - ls, ins.loopLength >> 1)) : 1;
+		w.u16(ls).u16(ll);
+	}
+	const seq = song.sequence.slice(0, 128);
+	if (song.sequence.length > 128) warnings.push("a .mod's sequence holds 128 positions: the rest is cut");
+	const patOf = /* @__PURE__ */ new Map();
+	for (const b of seq) if (!patOf.has(b)) patOf.set(b, patOf.size);
+	w.u8(seq.length).u8(song.restart < seq.length ? song.restart : 127);
+	for (let i = 0; i < 128; i++) w.u8(i < seq.length ? patOf.get(seq[i]) : 0);
+	w.text(tag, 4);
+	let dropped = 0;
+	const first = seq[0];
+	for (const [b] of patOf) {
+		const block = song.blocks[b];
+		if (block.lines > 64) warnings.push(`block ${b}: ${block.lines} lines, a .mod pattern has 64 — cut`);
+		for (let line = 0; line < 64; line++) {
+			const free = [];
+			const cells = [];
+			for (let t = 0; t < T; t++) {
+				const c = line < block.lines ? block.cells[line][t] : void 0;
+				let period = 0, inst = 0, e = 0, p = 0;
+				if (c) {
+					inst = c.inst;
+					if (c.note && c.note !== 128) {
+						let s = c.note - 1 + song.transpose + song.noteShift;
+						while (s > 35) s -= 12;
+						while (s < 0) s += 12;
+						period = Math.round(periodOf(s));
+					} else if (c.note === 128) [e, p] = [14, 192];
+					for (let k = 0; k < c.cmd.length && !e; k++) {
+						if (!c.cmd[k] && !c.val[k]) continue;
+						const m = medToMod(song, c.cmd[k], c.val[k]);
+						if (m) [e, p] = m;
+						else dropped++;
+					}
+				}
+				if (!e && !p) free.push(t);
+				cells.push([
+					period,
+					inst,
+					e,
+					p
+				]);
+			}
+			if (line === block.lines - 1 && block.lines < 64) {
+				const t = free.shift();
+				if (t !== void 0) cells[t][2] = 13;
+				else warnings.push(`block ${b}: no free column for the break at line ${line}`);
+			}
+			if (b === first && line === 0) {
+				const bpm = Math.round(ptBpmOf(song.tempoMode, song.tempo, song.lpb, song.flags.eightChannel, song.flags.hardwareMix));
+				const want = [];
+				if (song.speed !== 6) want.push([15, Math.min(31, song.speed)]);
+				if (bpm !== 125) want.push([15, Math.max(32, Math.min(255, bpm))]);
+				for (const [e, p] of want) {
+					const t = free.shift();
+					if (t === void 0) warnings.push("no free column on the first line for the tempo");
+					else cells[t][2] = e, cells[t][3] = p;
+				}
+			}
+			for (const [period, inst, e, p] of cells) w.u8(inst & 240 | period >> 8 & 15).u8(period & 255).u8((inst & 15) << 4 | e).u8(p);
+		}
+	}
+	if (dropped) warnings.push(`${dropped} command(s) a .mod hasn't got were left out`);
+	for (const d of datas) w.bytes(floatsToS8(d.length & 1 ? d.slice(0, d.length - 1) : d));
+	return {
+		bytes: w.done(),
+		warnings
+	};
+}
+function writeMed(song) {
+	const warnings = [];
+	const w = new Writer();
+	const T = song.tracks;
+	const insts = song.instruments.slice(0, 63);
+	if (song.instruments.length > 63) warnings.push("more than 63 instruments: the rest are left out");
+	if (song.instruments.some((i) => i.kind === "synth" || i.kind === "hybrid")) warnings.push("synth instruments are written as their first waveform");
+	const seq = song.sequence.slice(0, 256);
+	if (song.sequence.length > 256) warnings.push("an MMD1 sequence holds 256 positions: the rest is cut");
+	w.text("MMD1", 4).u32(0).u32(52).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).u32(0).zeros(11).u8(0);
+	for (let i = 0; i < 63; i++) {
+		const ins = insts[i];
+		const loop = ins && ins.loopLength > 2;
+		w.u16(loop ? ins.loopStart >> 1 : 0).u16(loop ? ins.loopLength >> 1 : 0).u8(0).u8(0).u8(Math.min(64, ins?.volume ?? 0)).u8((ins?.transpose ?? 0) & 255);
+	}
+	let tempo = song.tempo, lpb = song.lpb, mode = song.tempoMode;
+	if (mode === "pt") mode = "bpm", lpb = 4, tempo = Math.round(ptBpmOf("pt", song.tempo, 4));
+	w.u16(song.blocks.length).u16(seq.length);
+	for (let i = 0; i < 256; i++) w.u8(seq[i] ?? 0);
+	const flags = 16 | (song.flags.ptSlides ? 32 : 0) | (song.flags.eightChannel ? 64 : 0) | (song.flags.filter ? 1 : 0);
+	const flags2 = (mode === "bpm" ? 32 | Math.max(1, lpb) - 1 & 31 : 0) | (song.flags.hardwareMix ? 0 : 128);
+	w.u16(Math.max(1, Math.min(65535, tempo))).u8(song.transpose & 255).u8(flags).u8(flags2).u8(Math.max(1, Math.min(32, song.speed)));
+	for (let t = 0; t < 16; t++) w.u8(Math.min(64, song.trackVolume[t] ?? 64));
+	w.u8(Math.min(64, song.masterVolume)).u8(insts.length);
+	const blockArr = w.pos;
+	w.zeros(4 * song.blocks.length);
+	song.blocks.forEach((b, n) => {
+		w.align();
+		const at = w.pos;
+		w.patch32(blockArr + 4 * n, at);
+		w.u16(T).u16(b.lines - 1);
+		const infoPtr = w.pos;
+		w.u32(0);
+		const note = (x) => x === 128 ? 128 : x ? Math.max(1, Math.min(127, x + song.noteShift)) : 0;
+		const val = (cmd, v) => cmd === 12 ? volumeOf(song, v) : v;
+		for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
+			const c = b.cells[l][t];
+			w.u8(note(c.note)).u8(c.inst & 63).u8(c.cmd[0] ?? 0).u8(val(c.cmd[0] ?? 0, c.val[0] ?? 0));
+		}
+		if (b.pages > 1 || b.name) {
+			w.align();
+			const pages = [];
+			for (let p = 1; p < b.pages; p++) {
+				pages.push(w.pos);
+				for (let l = 0; l < b.lines; l++) for (let t = 0; t < T; t++) {
+					const c = b.cells[l][t];
+					w.u8(c.cmd[p] ?? 0).u8(val(c.cmd[p] ?? 0, c.val[p] ?? 0));
+				}
+			}
+			w.align();
+			let nameAt = 0;
+			if (b.name) nameAt = w.pos, w.text(b.name, b.name.length + 1);
+			w.align();
+			let tableAt = 0;
+			if (pages.length) {
+				tableAt = w.pos;
+				w.u16(pages.length).u16(0);
+				for (const p of pages) w.u32(p);
+			}
+			w.align();
+			const info = w.pos;
+			w.u32(0).u32(nameAt).u32(b.name ? b.name.length + 1 : 0).u32(tableAt).u32(0).zeros(16);
+			w.patch32(infoPtr, info);
+		}
+	});
+	w.align();
+	const sampleArr = w.pos;
+	w.zeros(4 * insts.length);
+	insts.forEach((ins, i) => {
+		if (ins.kind === "empty" || !ins.data.length) return;
+		w.align();
+		w.patch32(sampleArr + 4 * i, w.pos);
+		const bytes = ins.bits16 ? floatsToS16be(ins.data) : floatsToS8(ins.data);
+		w.u32(bytes.length).u16(ins.bits16 ? 16 : 0).bytes(bytes);
+	});
+	w.align();
+	const extAt = w.pos;
+	for (const ins of insts) {
+		const loop = ins.loopLength > 2;
+		w.u8(ins.hold & 255).u8(ins.decay & 255).u8(0).u8(ins.finetune & 255).u8(0).u8((loop ? 1 : 0) | (ins.pingPong ? 8 : 0)).u16(0).u8(0).u8(0);
+		w.u32(loop ? ins.loopStart : 0).u32(loop ? ins.loopLength : 0).u8(Math.max(0, Math.min(127, Math.round(ins.gain * 128) - 1))).u8(0).u8(0).u8(0);
+	}
+	const infoAt = w.pos;
+	for (const ins of insts) w.text(ins.name, 40);
+	let nameAt = 0;
+	if (song.title) nameAt = w.pos, w.text(song.title, song.title.length + 1);
+	w.align();
+	const exp = w.pos;
+	w.u32(0).u32(extAt).u16(insts.length).u16(22).u32(0).u32(0).u32(infoAt).u16(insts.length).u16(40).u32(0).u32(0).zeros(4).u32(0).u32(nameAt).u32(song.title ? song.title.length + 1 : 0).zeros(28);
+	w.patch32(4, w.pos);
+	w.patch32(16, blockArr);
+	w.patch32(24, sampleArr);
+	w.patch32(32, exp);
+	return {
+		bytes: w.done(),
+		warnings
+	};
+}
 // src/commands.ts
 var EFFECTS = [
 	["00xy", "arpeggio: the note, +x, +y semitones"],
@@ -3157,6 +3725,7 @@ function registerCommands(ib, engine, st) {
 			"med demo                   a little song of ours, to try it right away",
 			"med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
+			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
 			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
 			"med play [song|block] [position] [line]",
 			"med stop",
@@ -3174,7 +3743,8 @@ function registerCommands(ib, engine, st) {
 			"med info                   the song's settings"
 		].join("\n"),
 		examples: [
-			["med open songs/axel.mod", "load a song"],
+			["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"],
+			["med export songs/x.flac --rate 44100", "FLAC, CD quality"],
 			["med play", "play from the cursor"],
 			["med play block", "play this block again and again"],
 			"med mute 2",
@@ -3186,6 +3756,13 @@ function registerCommands(ib, engine, st) {
 			"demo",
 			"new",
 			"save",
+			"export",
+			"--rate",
+			"--bits",
+			"--stems",
+			"--only-stems",
+			"--tracks",
+			"--normalize",
 			"track",
 			"name",
 			"vol",
@@ -3221,7 +3798,12 @@ function registerCommands(ib, engine, st) {
 			"off"
 		],
 		async run(ctx) {
-			const { rest: positional } = parseFlags(ctx.args);
+			const { rest: positional, flags } = parseFlags(ctx.args, [
+				"rate",
+				"bits",
+				"tracks",
+				"tail"
+			]);
 			const [sub = "", ...rest] = positional;
 			try {
 				switch (sub) {
@@ -3247,6 +3829,62 @@ function registerCommands(ib, engine, st) {
 						}
 						await open(ctx, ctx.resolve(path));
 						ib.apps.open("breakermed");
+						return 0;
+					}
+					case "export": {
+						const s = need();
+						const target = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath().replace(/\.bmed$/i, ".wav");
+						const ext = (/\.(wav|aiff?|flac)$/i.exec(target)?.[1] ?? "wav").toLowerCase();
+						const format = ext.startsWith("aif") ? "aiff" : ext;
+						const rate = flags.rate ? parseInt(String(flags.rate), 10) : 48e3;
+						const bits = flags.bits ? parseInt(String(flags.bits), 10) : format === "flac" ? 16 : 24;
+						if (![
+							16,
+							24,
+							32
+						].includes(bits)) return ctx.err("med export: --bits 16, 24 or 32\n"), 1;
+						const why = checkFormat(format, bits, rate);
+						if (why) return ctx.err(`med export: ${why}\n`), 1;
+						const base = /\.(wav|aiff?|flac)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
+						const dir = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "";
+						const opts = {
+							rate,
+							bits,
+							paula: engine.paula,
+							muted: engine.muted,
+							normalize: !!flags.normalize,
+							tail: flags.tail ? Math.max(0, Math.min(10, parseFloat(String(flags.tail)) || 0)) : 1.5
+						};
+						const jobs = [];
+						if (!flags["only-stems"]) jobs.push({
+							path: `${base}.${format === "aiff" ? "aif" : format}`,
+							label: "master"
+						});
+						if (flags.stems || flags["only-stems"] || flags.tracks) {
+							const wanted = flags.tracks ? String(flags.tracks).split(",").map((x) => parseInt(x, 10) - 1).filter((t) => t >= 0 && t < s.tracks) : [...Array(s.tracks).keys()].filter((t) => trackUsed(s, t));
+							for (const t of wanted) {
+								const name = trackName(s, t).replace(/[\\/:*?"<>|]/g, "-");
+								jobs.push({
+									path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${format === "aiff" ? "aif" : format}`,
+									solo: [t],
+									label: name
+								});
+							}
+						}
+						if (dir) await ib.vault.mkdir(dir).catch(() => {});
+						if (jobs.some((j) => j.solo)) await ib.vault.mkdir(`${base} stems`).catch(() => {});
+						for (const job of jobs) {
+							let shown = 0;
+							const bytes = encode(await renderSong(s, {
+								...opts,
+								solo: job.solo
+							}, (p) => {
+								if (p - shown >= .25 && p < 1) shown = p, ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
+							}), format, bits);
+							await ib.vault.writeBytes(job.path, bytes);
+							ctx.out(`${fmt.green("✓")} ${job.path} ${fmt.dim(`(${(bytes.length / 1048576).toFixed(1)} MB)`)}\n`);
+						}
+						ctx.out(fmt.dim(`  ${format.toUpperCase()} · ${bits === 32 ? "32-bit float" : `${bits} bits`} · ${rate} Hz${opts.normalize ? " · normalized" : ""}\n`));
 						return 0;
 					}
 					case "save": {
@@ -3455,221 +4093,6 @@ function registerCommands(ib, engine, st) {
 		}
 	});
 }
-// src/dsp/voice.ts
-/**
-* A sample: read at `rate` frames a second, looped (ping-pong too), stepped
-* like the Amiga's Paula (nearest frame, its grit) or smooth (linear).
-*/
-var SampleVoice = class {
-	constructor(outRate) {
-		_defineProperty(this, "outRate", void 0);
-		_defineProperty(this, "on", false);
-		_defineProperty(this, "paula", true);
-		_defineProperty(this, "data", /* @__PURE__ */ new Float32Array(0));
-		_defineProperty(this, "loopStart", 0);
-		_defineProperty(this, "loopEnd", 0);
-		_defineProperty(this, "pingPong", false);
-		_defineProperty(this, "pos", 0);
-		_defineProperty(this, "dir", 1);
-		_defineProperty(this, "step", 1);
-		_defineProperty(this, "gl", 0);
-		_defineProperty(this, "gr", 0);
-		this.outRate = outRate;
-	}
-	start(n) {
-		const i = n.instrument;
-		this.data = i.data;
-		this.loopStart = i.loopLength > 2 ? i.loopStart : 0;
-		this.loopEnd = i.loopLength > 2 ? Math.min(i.data.length, i.loopStart + i.loopLength) : 0;
-		this.pingPong = i.pingPong && this.loopEnd > 0;
-		this.pos = Math.max(0, n.offset);
-		this.dir = 1;
-		this.step = Math.max(0, n.rate) / this.outRate;
-		this.on = this.pos < this.data.length;
-	}
-	set(rate, volume, pan) {
-		this.step = Math.max(0, rate) / this.outRate;
-		const v = Math.max(0, Math.min(1, volume));
-		this.gl = v * Math.min(1, 1 - pan);
-		this.gr = v * Math.min(1, 1 + pan);
-	}
-	stop() {
-		this.on = false;
-	}
-	render(left, right, from, to) {
-		if (!this.on) return;
-		const d = this.data;
-		const loops = this.loopEnd > this.loopStart;
-		const end = loops ? this.loopEnd : d.length;
-		const loopLen = this.loopEnd - this.loopStart;
-		let pos = this.pos;
-		for (let i = from; i < to; i++) {
-			if (this.dir > 0 && pos >= end) {
-				if (!loops) return void (this.on = false);
-				if (this.pingPong) this.dir = -1, pos = end - 1 - (pos - end);
-				else pos = this.loopStart + (pos - this.loopStart) % loopLen;
-			} else if (this.dir < 0 && pos < this.loopStart) this.dir = 1, pos = this.loopStart + (this.loopStart - pos);
-			const k = pos | 0;
-			let x = d[k] ?? 0;
-			if (!this.paula) {
-				const k1 = k + this.dir;
-				const y = k1 >= end ? loops ? d[this.loopStart] : x : k1 < 0 ? x : d[k1];
-				x += ((y ?? x) - x) * Math.abs(pos - k);
-			}
-			left[i] += x * this.gl;
-			right[i] += x * this.gr;
-			pos += this.step * this.dir;
-		}
-		this.pos = pos;
-	}
-};
-/** The voice an instrument plays with. Synths and drums come with their own (steps 6–8). */
-function voiceFor(_instrument, outRate, paula) {
-	const v = new SampleVoice(outRate);
-	v.paula = paula;
-	return v;
-}
-// src/render.ts
-/**
-* breakerMED — the renderer: the song turned into sound, frame by frame, here
-* in the module (the deck only plays what we hand it: ib.audio.stream). The
-* replayer says what each track does on each tick; the renderer starts and
-* changes the voices exactly on the tick's first frame and mixes them.
-*
-* The same code plays the song, previews the keys (a few voices past the
-* tracks) and, later, writes the exports (a rate of our choosing, as fast as
-* the computer goes, one track alone for a stem).
-*/
-/** keys played on the piano: a few voices of their own, in turn */
-var PREVIEWS = 4;
-var Renderer = class {
-	constructor(song, rate, paula = true) {
-		_defineProperty(this, "song", void 0);
-		_defineProperty(this, "rate", void 0);
-		_defineProperty(this, "paula", void 0);
-		_defineProperty(
-			this,
-			/** frames written so far */
-			"frame",
-			0
-		);
-		_defineProperty(
-			this,
-			/** where each line began (the page follows the one being heard) */
-			"marks",
-			[]
-		);
-		_defineProperty(this, "ended", false);
-		_defineProperty(this, "player", null);
-		_defineProperty(this, "voices", []);
-		_defineProperty(this, "previews", []);
-		_defineProperty(this, "nextPreview", 0);
-		_defineProperty(
-			this,
-			/** frames left in the current tick (and the fraction carried, so ticks don't drift) */
-			"tickLeft",
-			0
-		);
-		_defineProperty(this, "carry", 0);
-		this.song = song;
-		this.rate = rate;
-		this.paula = paula;
-	}
-	/** Play from a position (the song, or one block again and again). */
-	play(seq, line, opts = {}) {
-		this.player = new Player(this.song, opts);
-		this.player.jump(seq, line);
-		this.tickLeft = 0;
-		this.carry = 0;
-		this.ended = false;
-		for (const v of this.voices) v?.stop();
-	}
-	stop() {
-		this.player = null;
-		for (const v of this.voices) v?.stop();
-	}
-	get playing() {
-		return !!this.player && !this.ended;
-	}
-	/** something to hear: the song, or a key still ringing */
-	get busy() {
-		return this.playing || this.previews.some((p) => p.voice.on && p.until > this.frame) || this.voices.some((v) => v?.on);
-	}
-	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
-	preview(inst, rate, seconds = .6) {
-		const instrument = this.song.instruments[inst];
-		if (!instrument || instrument.kind === "empty") return;
-		const slot = this.nextPreview++ % PREVIEWS;
-		const voice = voiceFor(instrument, this.rate, this.paula);
-		voice.start({
-			instrument,
-			rate,
-			offset: 0
-		});
-		voice.set(rate, .45 * instrument.gain * (instrument.volume / 64), 0);
-		this.previews[slot] = {
-			voice,
-			until: this.frame + Math.round(seconds * this.rate)
-		};
-	}
-	/** The next `n` frames, added into left / right (they start at zero). */
-	render(left, right, n = left.length) {
-		let at = 0;
-		while (at < n) {
-			if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
-			const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
-			for (const v of this.voices) v?.render(left, right, at, at + span);
-			for (const p of this.previews) {
-				if (!p) continue;
-				if (p.until <= this.frame + at) p.voice.stop();
-				else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
-			}
-			at += span;
-			this.tickLeft -= span;
-		}
-		this.frame += n;
-	}
-	tick(at) {
-		const t = this.player.step();
-		if (t.line) this.marks.push({
-			frame: this.frame + at,
-			...t.line
-		});
-		for (const e of t.events) this.apply(e);
-		if (t.ended) {
-			this.ended = true;
-			return;
-		}
-		const exact = t.seconds * this.rate + this.carry;
-		this.tickLeft = Math.max(1, Math.floor(exact));
-		this.carry = exact - this.tickLeft;
-		if (this.marks.length > 512) this.marks.splice(0, this.marks.length - 256);
-	}
-	apply(e) {
-		if (e.stop) {
-			this.voices[e.voice]?.stop();
-			return;
-		}
-		if (e.play !== void 0) {
-			const instrument = this.song.instruments[e.play];
-			if (!instrument) return;
-			const v = voiceFor(instrument, this.rate, this.paula);
-			v.start({
-				instrument,
-				rate: e.rate ?? 8363,
-				offset: e.offset ?? 0
-			});
-			this.voices[e.voice] = v;
-		}
-		const v = this.voices[e.voice];
-		if (!v) return;
-		const s = v;
-		s.lastRate = e.rate ?? s.lastRate ?? 8363;
-		s.lastVol = e.volume ?? s.lastVol ?? 0;
-		s.lastPan = e.pan ?? s.lastPan ?? 0;
-		v.set(s.lastRate, s.lastVol, s.lastPan);
-	}
-};
 // src/engine.ts
 /**
 * breakerMED — the engine: it computes the sound here, in the module (the
@@ -3906,6 +4329,7 @@ var FR = {
 	solo: "solo",
 	"TRACK NAME": "NOM DE LA PISTE",
 	save: "enregistrer",
+	"export (WAV + tracks)": "exporter (WAV + pistes)",
 	"a new song": "un nouveau morceau"
 };
 export { activate, deactivate };

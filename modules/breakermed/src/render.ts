@@ -58,6 +58,11 @@ export class Renderer {
     for (const v of this.voices) v?.stop();
   }
 
+  /** The song ends here, but what's ringing keeps ringing (an export's tail). */
+  finish(): void {
+    this.player = null;
+  }
+
   get playing(): boolean {
     return !!this.player && !this.ended;
   }
