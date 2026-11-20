@@ -1,0 +1,9 @@
+{
+  "id": "reminders",
+  "name": "REMINDERS",
+  "version": "0.1.0",
+  "description": "Local reminders: a notification 15 minutes before and on time, on every system. No account, nothing online.",
+  "author": "icebreaker",
+  "icon": "◷",
+  "permissions": []
+}

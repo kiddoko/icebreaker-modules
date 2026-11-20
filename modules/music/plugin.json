@@ -1,0 +1,8 @@
+{
+  "id": "music",
+  "name": "MUSIC",
+  "version": "0.1.0",
+  "description": "What's playing on this computer (Spotify, Music, any player on Linux) with play / pause / skip / volume: a HOME widget and the `music` command",
+  "author": "icebreaker",
+  "permissions": ["media"]
+}

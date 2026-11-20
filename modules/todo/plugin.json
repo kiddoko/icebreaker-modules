@@ -1,0 +1,8 @@
+{
+  "id": "todo",
+  "name": "TODO",
+  "version": "0.1.0",
+  "description": "A to-do list with priorities and due dates: an app, a HOME widget and the `todo` command",
+  "author": "icebreaker",
+  "permissions": []
+}

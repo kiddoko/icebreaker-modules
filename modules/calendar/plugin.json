@@ -1,0 +1,8 @@
+{
+  "id": "calendar",
+  "name": "CALENDAR",
+  "version": "0.1.0",
+  "description": "Your agenda: a calendar in your vault (plain Markdown, offline) and, if you want, your Google calendars, the `cal` command, the CALENDAR app and an \"upcoming\" HOME widget",
+  "author": "icebreaker",
+  "permissions": ["vault:read", "vault:write", "google-calendar"]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "habits",
+  "name": "HABITS",
+  "version": "0.1.0",
+  "description": "Daily habits: boxes that reset every day, streaks, a 2-week strip, and the numbers in STATS. Water ×8, read, stretch on mon wed fri…",
+  "author": "icebreaker",
+  "icon": "◉",
+  "permissions": []
+}

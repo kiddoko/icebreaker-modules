@@ -6,5 +6,222 @@
     "description": "The example module: a `hello` command, an app and a widget. Copy it to start yours",
     "author": "icebreaker",
     "repo": "kiddoko/icebreaker-modules/tree/main/modules/hello"
+  },
+  {
+    "id": "calendar",
+    "kind": "plugin",
+    "name": "CALENDAR",
+    "description": "Your agenda: a calendar in your vault (plain Markdown, offline) and, if you want, your Google calendars, the `cal` command, the CALENDAR app and an \"upcoming\" HOME widget",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/calendar",
+    "version": "0.1.0",
+    "permissions": [
+      "vault:read",
+      "vault:write",
+      "google-calendar"
+    ],
+    "builtin": true
+  },
+  {
+    "id": "habits",
+    "kind": "plugin",
+    "name": "HABITS",
+    "description": "Daily habits: boxes that reset every day, streaks, a 2-week strip, and the numbers in STATS. Water ×8, read, stretch on mon wed fri…",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/habits",
+    "version": "0.1.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "music",
+    "kind": "plugin",
+    "name": "MUSIC",
+    "description": "What's playing on this computer (Spotify, Music, any player on Linux) with play / pause / skip / volume: a HOME widget and the `music` command",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/music",
+    "version": "0.1.0",
+    "permissions": [
+      "media"
+    ],
+    "builtin": true
+  },
+  {
+    "id": "reminders",
+    "kind": "plugin",
+    "name": "REMINDERS",
+    "description": "Local reminders: a notification 15 minutes before and on time, on every system. No account, nothing online.",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/reminders",
+    "version": "0.1.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "stats",
+    "kind": "plugin",
+    "name": "STATS",
+    "description": "Numbers over time: what your modules record (budget left, commands run, notes…) and your own (weight, pages read). Graphs, a widget, and ib.stats for module makers.",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/stats",
+    "version": "0.1.0",
+    "permissions": [
+      "stats:read"
+    ],
+    "builtin": true
+  },
+  {
+    "id": "todo",
+    "kind": "plugin",
+    "name": "TODO",
+    "description": "A to-do list with priorities and due dates: an app, a HOME widget and the `todo` command",
+    "author": "icebreaker",
+    "repo": "kiddoko/icebreaker-modules/tree/main/modules/todo",
+    "version": "0.1.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "nexus",
+    "kind": "plugin",
+    "name": "NEXUS",
+    "description": "the vault as a place: a pseudo-3D carousel to fly through folders, search, rename, sort",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "uplink",
+    "kind": "plugin",
+    "name": "UPLINK",
+    "description": "your AI: LINK chat, ask and chat in the shell, the uplink widget",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "journal",
+    "kind": "plugin",
+    "name": "JOURNAL",
+    "description": "one page a day, the daily check-in, streaks and the journal calendar",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "sysmon",
+    "kind": "plugin",
+    "name": "SYSMON",
+    "description": "the machine's vitals: cpu, memory, processes",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "studio",
+    "kind": "plugin",
+    "name": "THEME STUDIO",
+    "description": "every knob of the current theme, with a live preview",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "voice",
+    "kind": "plugin",
+    "name": "VOICE",
+    "description": "the deck's voice: local text-to-speech through a robot filter",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "news",
+    "kind": "plugin",
+    "name": "NEWS",
+    "description": "headlines for your area or a topic, with summaries",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "weather",
+    "kind": "plugin",
+    "name": "WEATHER",
+    "description": "now, the next 24 h and the week (open-meteo.com)",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "clocks",
+    "kind": "plugin",
+    "name": "CLOCKS",
+    "description": "the clock, world clocks, a timer and a stopwatch",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "focus",
+    "kind": "plugin",
+    "name": "FOCUS",
+    "description": "a pomodoro timer",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "moon",
+    "kind": "plugin",
+    "name": "MOON",
+    "description": "tonight's moon and the next phases",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "matrix",
+    "kind": "plugin",
+    "name": "MATRIX",
+    "description": "digital rain on HOME: does nothing, looks great",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
+  },
+  {
+    "id": "quotes",
+    "kind": "plugin",
+    "name": "QUOTES",
+    "description": "a line to think about, every hour",
+    "author": "icebreaker",
+    "repo": "kiddoko/ICEBREAKER/tree/master/src/plugins/core-packages.ts",
+    "version": "0.4.0",
+    "permissions": [],
+    "builtin": true
   }
 ]

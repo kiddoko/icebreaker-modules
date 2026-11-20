@@ -26,6 +26,17 @@ The full API is documented in ICEBREAKER's
 and `src/plugins/api.ts`. [`modules/hello`](modules/hello) is a complete,
 commented example: copy it to start.
 
+## The modules that ship with the deck
+
+Every module ICEBREAKER ships with is listed here too, marked `"builtin": true`:
+TODO, CALENDAR, HABITS, MUSIC, REMINDERS, STATS, and the deck's own packages
+(NEXUS, UPLINK, JOURNAL, WEATHER, CLOCKS, TERMINAL…). Remove one in MODULES,
+put it back from the STORE: the deck's own copy comes back, **nothing is
+downloaded**. The bundled ones have their source in [`modules/`](modules) — to
+read, and to learn from (`main.ts`, the same `ib` API as yours). The entries are
+written by `node scripts/pack-store.mjs <this checkout>` in the ICEBREAKER
+repository; don't edit them by hand.
+
 ## Publishing yours
 
 1. Build it in your vault: `plugin new my-thing`, edit, `plugin reload`.

@@ -1,0 +1,9 @@
+{
+  "id": "stats",
+  "name": "STATS",
+  "version": "0.1.0",
+  "description": "Numbers over time: what your modules record (budget left, commands run, notes…) and your own (weight, pages read). Graphs, a widget, and ib.stats for module makers.",
+  "author": "icebreaker",
+  "icon": "▁▃▇",
+  "permissions": ["stats:read"]
+}
