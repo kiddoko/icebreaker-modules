@@ -37,6 +37,17 @@ read, and to learn from (`main.ts`, the same `ib` API as yours). The entries are
 written by `node scripts/pack-store.mjs <this checkout>` in the ICEBREAKER
 repository; don't edit them by hand.
 
+## Verified, and how to get there
+
+**Only maintainers can change this repository**: every change is a pull request, reviewed
+and approved before it's merged. A module whose code lives here (`modules/<id>/`) shows as
+**✓ verified** in ICEBREAKER's STORE — what was reviewed is exactly what people download.
+Entries pointing to another repository, and other indexes, show as **⚠ not verified**, and
+ICEBREAKER warns before installing them. Rules and steps: [docs/COMMUNITY.md](https://github.com/kiddoko/ICEBREAKER/blob/master/docs/COMMUNITY.md).
+
+> ICEBREAKER is a hobby project — even a verified module comes with **no warranty**
+> ([DISCLAIMER](https://github.com/kiddoko/ICEBREAKER/blob/master/DISCLAIMER.md)).
+
 ## Publishing yours
 
 1. Build it in your vault: `plugin new my-thing`, edit, `plugin reload`.
