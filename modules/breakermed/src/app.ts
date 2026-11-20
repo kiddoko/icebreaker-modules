@@ -148,8 +148,15 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const transpose = (semis: number) => ed()?.transpose(target(), semis);
   const say = (label: string | null, what: string) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
 
-  /** the right-click menu on a cell */
-  const cellMenu = (line: number, track: number): MenuEntry[] => [
+  /** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
+  const cellMenu = (line: number, track: number): MenuEntry[] => {
+    const inSel = !!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1;
+    if (!inSel) unselect();
+    st.line = line;
+    st.track = track;
+    return menuEntries(line, track);
+  };
+  const menuEntries = (line: number, track: number): MenuEntry[] => [
     { label: t("play from here"), run: () => run(`med play song ${hex(st.seq)} ${hex(line)}`) },
     "-",
     { label: t("copy"), hint: "alt C", run: copy },
@@ -188,7 +195,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     dirty: () => !!st.editor?.dirty,
     status: () =>
       st.song
-        ? `${st.edit ? t("EDIT") + " · " : ""}${t("enter play")} · ${t("space")} ${st.edit || engine.playing ? t("stop") : t("edit")} · alt ↑↓ ${t("octave")} ${st.octave + 1} · alt ←→ ${t("instrument")} ${hex(st.inst + 1)} · alt 0–9 ${t("step")} ${st.step} · esc ${t("leave")}`
+        ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} · ⏎ ${t("play")} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
         : t("med open <file.med|.mod> — or med demo"),
 
     render(ui: UI, r: Rect, focused: boolean) {
@@ -376,7 +383,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const d = /^Digit(\d)$/.exec(k.code)?.[1] ?? (k.key.length === 1 && HEX.includes(k.key.toLowerCase()) ? k.key.toLowerCase() : null);
         if (d !== null) {
           e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
-          advance();
+          // a two-digit field: the first digit moves right, the second goes back to the first and down
+          const k = colKind(st.col);
+          if (k.kind !== "note" && k.digit === 0) st.col++;
+          else (st.col--, advance());
           return true;
         }
       }

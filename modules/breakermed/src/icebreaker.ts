@@ -159,6 +159,8 @@ export interface IcebreakerAPI {
     drop(id?: string): Promise<void>;
     schedule(events: object[]): Promise<void>;
     stop(): Promise<void>;
+    /** the user silenced the module (`audio stop`, the ♪ in the status bar) */
+    onStop(fn: () => void): () => void;
     decode(bytes: Uint8Array | ArrayBuffer): Promise<{ rate: number; channels: Float32Array[] }>;
   };
   lib: {

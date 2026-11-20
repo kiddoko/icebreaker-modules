@@ -28,6 +28,8 @@ export function activate(ib: IcebreakerAPI): void {
   engine = new Engine(ib.audio);
   const st: State = newState();
   engine.onChange = () => ib.ui.redraw();
+  // you silence it from the deck (`audio stop`, the ♪ in the status bar): the song stops, not only its notes
+  ib.audio.onStop?.(() => engine?.stop());
   void ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
 
   registerCommands(ib, engine, st);
@@ -89,6 +91,8 @@ const FR: Record<string, string> = {
   edit: "éditer",
   step: "pas",
   leave: "sortir",
+  ins: "ins",
+  play: "jouer",
   oct: "oct",
   "nothing to undo": "rien à annuler",
   undone: "annulé",

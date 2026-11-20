@@ -654,8 +654,14 @@ function makeApp(ib, engine, st) {
 	};
 	const transpose = (semis) => ed()?.transpose(target(), semis);
 	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
-	/** the right-click menu on a cell */
-	const cellMenu = (line, track) => [
+	/** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
+	const cellMenu = (line, track) => {
+		if (!(!!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1)) unselect();
+		st.line = line;
+		st.track = track;
+		return menuEntries(line, track);
+	};
+	const menuEntries = (line, track) => [
 		{
 			label: t("play from here"),
 			run: () => run(`med play song ${hex(st.seq)} ${hex(line)}`)
@@ -741,7 +747,7 @@ function makeApp(ib, engine, st) {
 		rawKeys: true,
 		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "breakerMED",
 		dirty: () => !!st.editor?.dirty,
-		status: () => st.song ? `${st.edit ? t("EDIT") + " · " : ""}${t("enter play")} · ${t("space")} ${st.edit || engine.playing ? t("stop") : t("edit")} · alt ↑↓ ${t("octave")} ${st.octave + 1} · alt ←→ ${t("instrument")} ${hex(st.inst + 1)} · alt 0–9 ${t("step")} ${st.step} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
+		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} · ⏎ ${t("play")} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
 		render(ui, r, focused) {
 			const c = ui.c;
 			const s = st.song;
@@ -1017,7 +1023,9 @@ function makeApp(ib, engine, st) {
 				const d = /^Digit(\d)$/.exec(k.code)?.[1] ?? (k.key.length === 1 && HEX.includes(k.key.toLowerCase()) ? k.key.toLowerCase() : null);
 				if (d !== null) {
 					e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
-					advance();
+					const k = colKind(st.col);
+					if (k.kind !== "note" && k.digit === 0) st.col++;
+					else st.col--, advance();
 					return true;
 				}
 			}
@@ -2940,6 +2948,7 @@ function activate(ib) {
 	engine = new Engine(ib.audio);
 	const st = newState();
 	engine.onChange = () => ib.ui.redraw();
+	ib.audio.onStop?.(() => engine?.stop());
 	ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
 	registerCommands(ib, engine, st);
 	ib.apps.register({
@@ -3005,6 +3014,8 @@ var FR = {
 	edit: "éditer",
 	step: "pas",
 	leave: "sortir",
+	ins: "ins",
+	play: "jouer",
 	oct: "oct",
 	"nothing to undo": "rien à annuler",
 	undone: "annulé",
