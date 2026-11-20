@@ -9,3 +9,20 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/check-index.mjs
+
+  # breakerMED: its sources are TypeScript (modules/breakermed/src), main.js is built from them —
+  # the types and tests must pass, and main.js must be exactly what the sources build
+  breakermed:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules/breakermed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: git diff --exit-code main.js
