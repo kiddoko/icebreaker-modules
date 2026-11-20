@@ -5,7 +5,8 @@
  * on its own, in this repository.
  *
  * breakerMED needs an ICEBREAKER with `ib.audio` (the modules' sampler) and
- * pages that play the keyboard (`rawKeys`): the release after 0.5.0.
+ * pages that play the keyboard (`rawKeys`): not released yet (ICEBREAKER's
+ * branch `claude/breakermed-core`).
  */
 
 export interface Rect {

@@ -13,7 +13,8 @@ keyboard, the mouse and a gamepad.
 
 - **`audio`**: it plays its sound through the deck's sampler (`ib.audio`).
 - **`vault:read`**: it reads your songs from the vault (`.med`, `.mod`, `mod.xxx`).
-- Nothing online, no account, no AI. An ICEBREAKER with `ib.audio` (the release after 0.5.0): on an older one it says so and stays off.
+- Nothing online, no account, no AI. An ICEBREAKER with `ib.audio` and pages that play the keyboard: not
+  released yet (ICEBREAKER's branch `claude/breakermed-core`); on an older deck it says so and stays off.
 
 ## The page
 
