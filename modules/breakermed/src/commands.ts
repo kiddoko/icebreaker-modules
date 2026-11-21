@@ -27,7 +27,8 @@ import { SCREENS, type Screen } from "./screens";
 export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): void {
   const { fmt, parseFlags } = ib.lib;
 
-  const find = async (dir = "", depth = 0, out: string[] = []): Promise<string[]> => {
+  // the module sees only songs/ (its permissions: vault:read:songs/, vault:write:songs/)
+  const find = async (dir = "songs", depth = 0, out: string[] = []): Promise<string[]> => {
     if (depth > 5 || out.length > 500) return out;
     for (const e of await ib.vault.list(dir).catch(() => [])) {
       if (e.isDir) {
@@ -95,15 +96,18 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
   };
   /** where a song is saved when you don't say: next to where it came from, as .bmed */
   const defaultPath = () => {
-    if (/\.bmed$/i.test(st.path)) return st.path;
+    // always in songs/: the only folder the module may write (a new song, the demo: songs/<name>.bmed)
+    const inSongs = st.path.startsWith("songs/");
+    if (inSongs && /\.bmed$/i.test(st.path)) return st.path;
     const base = (st.path.split("/").pop() || "untitled").replace(/\.(med|mod|mmd\d|bmed)$/i, "").replace(/^(mod|med)\./i, "") || "untitled";
-    const dir = st.path.includes("/") ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs";
+    const dir = inSongs ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs";
     return `${dir}/${base}.bmed`;
   };
 
   /** this song is the one on the page now */
   const adopt = async (ctx: ShellContext, song: Song, path: string) => {
     st.song = song;
+    st.home = false;
     st.editor = new Editor(song);
     // each step of the history: the page again, and a copy soon (the autosave)
     st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
@@ -145,11 +149,13 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     summary: "breakerMED: a tracker for .med (OctaMED) and .mod (ProTracker) songs",
     usage: [
       "med                        what's loaded, where it is",
-      "med open [file]            a .med / .mod of the vault (no file: choose one)",
+      "med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
       "med ls                     the songs in the vault",
       "med demo                   a little song of ours, to try it right away",
       "med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
       "med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
+      "med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
+      "med continue               back to the song in memory (after the page was closed)",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
       "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
       "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
@@ -216,14 +222,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           }
           case "ls": {
             const songs = await find();
-            ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no .med / .mod in the vault (drop one in it)\n"));
+            ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no .med / .mod in songs/ (drop one in it)\n"));
             return 0;
           }
           case "open": {
             let path = rest.join(" ");
             if (!path) {
               const songs = await find();
-              if (!songs.length) return ctx.err("no song in the vault (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
+              if (!songs.length) return ctx.err("no song in songs/ (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
               const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
               if (i === null) return 1;
               path = songs[i];
@@ -285,6 +291,22 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             need();
             const path = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath();
             await save(ctx, path);
+            return 0;
+          }
+          case "saveas": {
+            // save as…: a name asked in a window (in songs/: the module's folder)
+            need();
+            const name = await ib.ui.prompt("SAVE AS", { initial: defaultPath(), placeholder: "songs/my song.bmed (or .mod, .med)" });
+            if (name === null || !name.trim()) return 1;
+            const p = name.trim();
+            await save(ctx, p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`);
+            return 0;
+          }
+          case "continue": {
+            // back to the song in memory (the page shows START after it was closed)
+            need();
+            st.home = false;
+            void ib.apps.open("breakermed");
             return 0;
           }
           case "new": {
@@ -467,6 +489,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!SCREENS.some((x) => x.id === id)) return ctx.err(`med screen ${SCREENS.map((x) => x.id).join("|")}\n`), 1;
             if (id === "guide" && st.screen !== "guide") st.back = st.screen;
             st.screen = id;
+            if (st.song) st.home = false;
             void ib.apps.open("breakermed");
             return 0;
           }

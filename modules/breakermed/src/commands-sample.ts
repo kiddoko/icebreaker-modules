@@ -12,7 +12,7 @@ import { chop, crush, fade, HQ_RATE, normalize, onsets, pitch, reverse, sliceAt,
 import { emptyInstrument, hex, trackName, type Instrument } from "./song";
 
 export const SAMPLE_USAGE = [
-  "med sample <n|.> load [file] [--amiga]   a sound file of the vault (wav, aif, iff/8svx, mp3, m4a, ogg…)",
+  "med sample <n|.> load [file] [--amiga]   a sound file in songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…)",
   "med sample <n|.> chop <slices> | chop onsets    slices become new instruments",
   "med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)",
   "med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse",
@@ -62,7 +62,7 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
             } else if (SAMPLE_EXTS.some((ext) => x.name.toLowerCase().endsWith(ext))) found.push(x.path);
           }
         };
-        await walk("", 0);
+        await walk("songs", 0); // the module sees only songs/
         if (!found.length) return ctx.err("no sound file in the vault (drop a .wav, .aif, .mp3… in it)\n"), 1;
         const i = await ib.ui.choose("LOAD A SOUND", found.map((p) => ({ label: p })));
         if (i === null) return 1;

@@ -91,8 +91,8 @@ us what it is.
 ## Where to put them
 
 - **To try them yourself**: in your ICEBREAKER vault, in
-  `sounds/breakermed-pack/`, keeping the folders: for example
-  `sounds/breakermed-pack/keys/piano-c3.wav`.
+  `songs/sound-pack/` (BreakerMED may only read `songs/`), keeping the folders: for
+  example `songs/sound-pack/keys/piano-c3.wav`.
 - **To give them to everyone**: send the files to the project (kiddoko on
   GitHub). They go in `modules/breakermed/sounds/` in this repository, and from
   there into the pack people install.

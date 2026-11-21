@@ -100,6 +100,16 @@ med effects                 every command, one line each
 med info                    the song's settings and instruments
 ```
 
+## Saving
+
+**save** and **save as…** at the end of the tabs row (also in the right-click menu and on START
+after the page was closed), `med save`, `med saveas`. On the page ⌘S saves and ⌘⇧S saves as, once
+the deck hands those keys to modules (ICEBREAKER 0.6.0 keeps ⌘/Ctrl keys but ⌘Z for itself).
+Songs go in `songs/`: the module may only read and write that folder (`vault:read:songs/`,
+`vault:write:songs/`).
+
+Closing the page stops the song; opening it again shows START, with **L continue “…”**.
+
 ## Autosave
 
 A copy of the song **1.5 s after each change** (a run of keys makes one copy; at most every 30 s

@@ -5,8 +5,8 @@
  * make them; `med pack` shows which are in the vault, `med pack load <name>` loads one.
  */
 
-/** where the pack lives in the vault */
-export const PACK_DIR = "sounds/breakermed-pack";
+/** where the pack lives in the vault (in songs/: the only folder the module may read) */
+export const PACK_DIR = "songs/sound-pack";
 
 export interface PackSound {
   /** the file, under PACK_DIR */

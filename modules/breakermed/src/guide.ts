@@ -44,7 +44,7 @@ export const GUIDE: GuidePart[] = [
     rows: [
       ["med new", "a new song: 8 tracks, drums and synths, a beat ready to play"],
       ["med new --chip", "a chiptune song: 2 pulses, a triangle, a noise (NES-style)"],
-      ["med open", "open a .med, .mod or .bmed of the vault"],
+      ["med open", "open a .med, .mod or .bmed in songs/"],
       ["med demo", "the demo song"],
       ["med save", "save (a new song becomes a .bmed in songs/)"],
       ["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
@@ -80,9 +80,9 @@ export const GUIDE: GuidePart[] = [
   {
     title: "THE SAMPLER (your own sounds)",
     rows: [
-      ["med sampler", "load a sound into a free instrument (a list of the vault's sounds)"],
+      ["med sampler", "load a sound into a free instrument (a list of the sounds in songs/)"],
       ["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
-      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n"],
+      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n"],
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
       ["med pack", "the starter sounds, recorded by people: which are there (med pack load <name>)"],
