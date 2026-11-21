@@ -470,10 +470,24 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (s) {
         const f = s.flags;
         const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-        const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}${s.echo ? `  ${t("ECHO")} ${s.echo.ms}` : ""}`;
-        const rx = ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted });
         // the state: playing, stopped, or stopped in edit mode (red: typing writes in the block)
         const state = engine.playing ? (engine.mode === "block" ? "▶ BLOCK" : "▶ SONG") : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
+        // the song's settings, the least useful left out first when the line is short
+        const parts: [number, string][] = [
+          [0, `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})`],
+          [3, `${t("speed")} ${hex(s.speed)}`],
+          [2, `${t("oct")} ${st.octave + 1}`],
+          [4, `${t("step")} ${st.step}`],
+          [6, s.format],
+          [5, engine.paula ? "PAULA" : "SMOOTH"],
+          ...(s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`] as [number, string]] : []),
+        ];
+        const space = r.w - 2 - (x - r.x) - state.length - 6;
+        let shown = parts;
+        const width = (list: [number, string][]) => list.reduce((n, [, p]) => n + p.length + 2, 0);
+        for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter(([k]) => k < drop);
+        const rest = shown.length ? `  ${shown.map(([, p]) => p).join("  ")}` : "";
+        const rx = rest ? ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted }) : r.x + r.w - 1;
         const sx = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: engine.playing ? c.success : c.muted });
         // the song's name in what's left between, a space each side
         const room = sx - (x + 2) - 1;
