@@ -82,3 +82,38 @@ describe("BreakerMED beta: chords turned over and strummed", () => {
     expect(stopped && !w.on).toBe(true);
   });
 });
+
+import { exportLine, fixChoices, newExportChoices } from "../src/screens";
+
+describe("BreakerMED beta: the EXPORT screen's command line", () => {
+  const q = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
+  it("writes only what isn't the default", () => {
+    const x = { ...newExportChoices(), path: "songs/my song" };
+    expect(exportLine(x, q)).toBe('med export "songs/my song.wav" --stems');
+    x.what = "master";
+    x.format = "flac";
+    x.bits = 24;
+    x.rate = 44100;
+    expect(exportLine(x, q)).toBe('med export "songs/my song.flac" --rate 44100 --bits 24');
+  });
+  it("keeps the choices possible for each format", () => {
+    const x = { ...newExportChoices(), path: "a", format: "flac" as const, bits: 32 as const, rate: 96000 };
+    fixChoices(x);
+    expect(x.bits).toBe(24);
+    const m = { ...x, format: "mp3" as const };
+    fixChoices(m);
+    expect(m.rate).toBe(48000);
+    expect(m.quality).toBe("v0");
+    const o = { ...newExportChoices(), path: "a", format: "opus" as const, rate: 44100, what: "stems only" as const, normalize: true, tail: 3 };
+    fixChoices(o);
+    expect(exportLine(o, q)).toBe("med export a.opus --only-stems --normalize --tail 3");
+    const g = { ...newExportChoices(), path: "a.wav", format: "ogg" as const, quality: "q8", what: "master" as const };
+    expect(exportLine(g, q)).toBe("med export a.ogg --quality q8");
+  });
+});
+
+describe("BreakerMED beta: an export never goes to a nameless file", () => {
+  it("falls back to songs/untitled", () => {
+    expect(exportLine({ ...newExportChoices(), path: "", what: "master" }, (s) => s)).toBe("med export songs/untitled.wav");
+  });
+});

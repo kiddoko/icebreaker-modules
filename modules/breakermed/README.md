@@ -1,4 +1,4 @@
-# breakerMED
+# BreakerMED (beta)
 
 A tracker for ICEBREAKER that works like **OctaMED** and **ProTracker**: blocks of tracks, one
 line a step, each cell a note, an instrument and hex commands; a play sequence makes the song.
@@ -20,7 +20,22 @@ keyboard, the mouse and a gamepad.
   keyboard; on an older deck it says so and stays off); MP3 / M4A / OGG / Opus exports need 0.5.5 and
   the encoder pack (below).
 
+> **Beta.** Everything below works and was tested on macOS and Windows; it may still have rough
+> edges. Tell us what breaks (the deck's Issues on GitHub).
+
 ## The page
+
+Four screens on the right, by their tabs or **alt B / I / S / E**:
+
+- **BLOCK**: the editor (below).
+- **INSTRUMENT**: the selected instrument: a sample's tools, a synth's settings, a kit's drums, or
+  a free slot's choices.
+- **SONG**: the song's settings (title, tempo, speed, lines a beat, **swing**, tracks, echo, LED
+  filter) and the tracks (name, volume, pan, **chord strum**, mute, solo). ↑↓ a row, ←→ a value
+  (on a track: a column, ⇧←→ its value), ⏎ renames or switches; the mouse: click, wheel, ‹ ›.
+- **EXPORT**: one window for `med export`: the file, the format (WAV, AIFF, FLAC, MP3, M4A, OGG,
+  Opus), the rate, the bits or the quality, the stems, normalize, the tail, and ▶ EXPORT. It runs
+  the same command as the shell (the LOG shows it) and says when it's done.
 
 The page **plays the keyboard**: while it's in front it keeps every key, letters, digits, space and
 every **alt** combination (alt + arrows too, on Mac, Windows and Linux), like an editor keeps the arrows.
@@ -40,7 +55,7 @@ alt enter    insert a line (⇧: in every track)
 ⇧ + arrows   select (a drag with the mouse too) alt C / X / V   copy · cut · paste
 alt Q / A    transpose up / down a semitone (⇧: an octave)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps)
-alt I · alt B   the INSTRUMENT screen · the block again
+alt B I S E  the screens: BLOCK · INSTRUMENT · SONG · EXPORT
 chord column    one digit, 1–F (when the song has chords: see Chords)
 mouse        click a cell, drag to select, the wheel scrolls, right-click: a menu (copy, paste,
              transpose, lines, play from here); a track's name mutes it; a position plays from it
@@ -54,7 +69,7 @@ med                         what's loaded, where it is
 med open [file]             a song of the vault (no file: choose one)
 med ls                      the songs in the vault
 med demo                    a little song of ours, to try it right away
-med new [tracks]            a new song: 8 tracks (up to 16), the demo's instruments to start
+med new [tracks] [--empty]  a new song from the template: 8 named tracks (up to 16), drums, synths, a bar
 med save [file]             my-song.bmed (ours, the default) · song.mod · song.med (for other trackers)
 med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>
 med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]
@@ -109,6 +124,16 @@ ogg `q6` (default) `q4` `q8` · opus `128` (default) `96` `160`. These formats g
 song's title goes in the file (a stem's: "title — track"). It needs ICEBREAKER 0.5.5 or later
 (`ib.audio.encode`); an older deck exports WAV, AIFF and FLAC as before.
 
+## Swing and a new song
+
+`med swing <0–100>` makes every other line longer and the next one shorter (a pair keeps its length,
+so the song's length doesn't change): 0 is straight, 50 a lazy shuffle, 100 a triplet feel. The SONG
+screen sets it too. `.bmed` keeps it.
+
+`med new` starts from a template: 8 named tracks (kick, snare, hats, bass, lead, pad, chords, fx), a
+drum machine, an analog bass, lead and pad, an FM e-piano, and a bar written four times, so ⏎ plays
+something at once. `med new 12` gives 12 tracks; `med new --empty` a blank page with the demo's samples.
+
 ## Chords
 
 A note can play a **chord**: the cell's chord column (one digit, after the instrument) picks one of
@@ -129,7 +154,9 @@ hidden, the cursor steps over it. The status line names the chord under the curs
 med chord <line> <track> <0–F>        the chord a note plays (0: none)
 med chords                            the table · med chords on|off   the column
 med chords set <1–F> <name> <semitones…>   the song's own chord, e.g. med chords set 1 pow 7 12
+med chords invert <1–F> [1|2|3]       that chord turned over (1: the third in the bass, 2: the fifth)
 med chords reset                      the default table back
+med track <n> strum <0–200>           that track's chords strummed: ms between their notes (0: together)
 ```
 
 `.bmed` keeps them (`C-3 01:3 0C20`: chord 3 rides on the instrument). Other trackers play only

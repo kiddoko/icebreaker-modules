@@ -2302,2280 +2302,6 @@ var DrumVoice = class {
 		}
 	}
 };
-// src/app.ts
-/**
-* ⌘Z / ⌘⇧Z (and med undo / redo): if it takes away the instrument the keys
-* play (a load, a chop, a bounce undone), the keys go to the nearest one left.
-*/
-function undoRedo(st, redo) {
-	const s = st.song, e = st.editor;
-	if (!s || !e) return null;
-	const had = s.instruments[st.inst] && s.instruments[st.inst].kind !== "empty";
-	const label = redo ? e.redo() : e.undo();
-	const now = s.instruments[st.inst];
-	if (had && (!now || now.kind === "empty")) {
-		let k = Math.min(st.inst, s.instruments.length - 1);
-		while (k > 0 && s.instruments[k]?.kind === "empty") k--;
-		st.inst = Math.max(0, k);
-	}
-	return label;
-}
-function newState() {
-	return {
-		song: null,
-		editor: null,
-		path: "",
-		seq: 0,
-		line: 0,
-		track: 0,
-		col: 0,
-		inst: 0,
-		octave: 2,
-		edit: false,
-		step: 1,
-		sel: null,
-		clip: null,
-		error: "",
-		screen: "block",
-		synthRow: 0,
-		drumRow: 0,
-		drumCol: 0
-	};
-}
-/** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
-/** a cell's width: "C-3 01 0C20", and " 3" when the chord column shows */
-var cellW = (pages, chords) => 6 + (chords ? 2 : 0) + pages * 5;
-/** where a column sits in its cell */
-var colX = (col, chords) => col === 0 ? 0 : col <= 2 ? 3 + col : col === 3 ? 7 : (chords ? 9 : 7) + Math.floor((col - 4) / 4) * 5 + (col - 4) % 4;
-var colW = (col) => col === 0 ? 3 : 1;
-var LEFT = 22;
-var HEX = "0123456789abcdef";
-function makeApp(ib, engine, st) {
-	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
-	const run = (line) => void ib.shell.run(line);
-	const seqList = new ListView();
-	const instList = new ListView();
-	seqList.cmdOf = (i) => `med pos ${hex(i)}`;
-	seqList.onActivate = (i) => run(`med play song ${hex(i)}`);
-	seqList.menuOf = (i) => [
-		{
-			label: t("play from here"),
-			cmd: `med play song ${hex(i)}`
-		},
-		"-",
-		{
-			label: t("insert a new block here"),
-			cmd: `med seq new ${hex(i)}`
-		},
-		{
-			label: t("insert a copy of this block"),
-			cmd: `med seq copy ${hex(i)}`
-		},
-		{
-			label: t("remove this position"),
-			cmd: `med seq rm ${hex(i)}`,
-			danger: true
-		}
-	];
-	instList.onSelect = (i) => st.inst = i;
-	instList.onActivate = (i) => preview(st.octave * 12, i);
-	/** first track shown (the page scrolls sideways when they don't fit) */
-	let firstTrack = 0;
-	/** where the block was drawn (mouse → cell) */
-	let geo = null;
-	let anchor = null;
-	const song = () => st.song;
-	const blockNo = () => st.song?.sequence[st.seq] ?? 0;
-	const block = () => st.song?.blocks[blockNo()];
-	const ed = () => st.editor;
-	const preview = (semi, inst = st.inst) => {
-		const s = st.song;
-		const ins = s?.instruments[inst];
-		if (!s || !ins || ins.kind === "empty") return;
-		if (ins.kind === "drums") st.drumRow = ((semi + ins.transpose + s.transpose) % 12 + 12) % 12;
-		const rate = PAULA_CLOCK / periodOf(semi + ins.transpose + s.transpose, ins.finetune);
-		engine.preview(inst, rate).catch((e) => ib.ui.notify(String(e?.message ?? e), "error"));
-	};
-	const clampCursor = () => {
-		const s = song(), b = block();
-		if (!s || !b) return;
-		st.line = Math.max(0, Math.min(b.lines - 1, st.line));
-		st.track = Math.max(0, Math.min(s.tracks - 1, st.track));
-		st.col = Math.max(0, Math.min(colsOf(b.pages) - 1, st.col));
-	};
-	const moveLine = (d) => (st.line += d, clampCursor());
-	/** ←→ go column by column, into the next track at a cell's edge */
-	const moveCol = (d) => {
-		const s = song(), b = block();
-		if (!s || !b) return;
-		const n = colsOf(b.pages);
-		let c = st.col + d, tr = st.track;
-		if (c === 3 && !s.chordColumn) c += d;
-		if (c < 0) tr = (tr - 1 + s.tracks) % s.tracks, c = n - 1;
-		else if (c >= n) tr = (tr + 1) % s.tracks, c = 0;
-		st.col = c;
-		st.track = tr;
-	};
-	/** ⇧ + arrows: the selection grows from where it started */
-	const extend = (dl, dt) => {
-		anchor ??= {
-			line: st.line,
-			track: st.track
-		};
-		st.line += dl;
-		st.track += dt;
-		clampCursor();
-		st.sel = {
-			block: blockNo(),
-			line0: Math.min(anchor.line, st.line),
-			line1: Math.max(anchor.line, st.line),
-			track0: Math.min(anchor.track, st.track),
-			track1: Math.max(anchor.track, st.track)
-		};
-	};
-	const unselect = () => (st.sel = null, anchor = null);
-	/** what an operation works on: the selection, or the cell under the cursor */
-	const target = () => st.sel && st.sel.block === blockNo() ? st.sel : {
-		block: blockNo(),
-		line0: st.line,
-		line1: st.line,
-		track0: st.track,
-		track1: st.track
-	};
-	const advance = () => moveLine(st.step);
-	const typeNote = (note) => {
-		const e = ed();
-		if (!e) return;
-		e.writeNote(blockNo(), st.line, st.track, note, note === 128 ? 0 : st.inst + 1);
-		advance();
-	};
-	const copy = () => {
-		const e = ed();
-		if (e) st.clip = e.copy(target()), ib.ui.notify(t("copied"));
-	};
-	const cut = () => {
-		const e = ed();
-		if (e) st.clip = e.cut(target()), unselect();
-	};
-	const paste = () => {
-		const e = ed();
-		if (e && st.clip) e.paste(blockNo(), st.line, st.track, st.clip);
-	};
-	/** the chord under the cursor, named (the column shows only its digit) */
-	const chordHere = () => {
-		const s = st.song, cell = block()?.cells[st.line]?.[st.track];
-		if (!s?.chordColumn || !cell) return "";
-		const n = cell.chord ?? 0;
-		return n ? ` · ${t("chord")} ${n.toString(16).toUpperCase()} ${chordsOf(s)[n - 1]?.name ?? ""}` : st.col === 3 ? ` · ${t("chord")}: 1–F (med chords)` : "";
-	};
-	const transpose = (semis) => ed()?.transpose(target(), semis);
-	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
-	/** The INSTRUMENT screen: the sound drawn in braille dots (the loop lit), what it is, a button a tool. */
-	const drawInstrument = (ui, r, focused) => {
-		const c = ui.c;
-		const s = st.song;
-		const ins = s.instruments[st.inst];
-		const n = hex(st.inst + 1);
-		const inner = ui.box(r, {
-			title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`,
-			focused
-		});
-		const sk = synthOf(ins);
-		if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
-		if (ins?.kind === "drums" && ins.drums) return drawDrums(ui, inner, focused);
-		if (!ins || ins.kind === "empty" || !ins.data.length) {
-			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
-			const choices = [
-				[
-					"load…",
-					`med sample ${n} load`,
-					"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault"
-				],
-				[
-					"analog synth",
-					`med synth ${n} new`,
-					"two oscillators, a filter, two envelopes, an LFO"
-				],
-				[
-					"FM synth",
-					`med fm ${n} new`,
-					"two sine waves, one bending the other: pianos, bells, basses"
-				],
-				[
-					"drum machine",
-					`med drums ${n} new`,
-					"twelve drums, one a note: C kick, D snare, E hat…"
-				]
-			];
-			let x = inner.x + 1, y = inner.y + 3;
-			for (const [label, cmd, tip] of choices) {
-				if (x + t(label).length + 2 > inner.x + inner.w - 1) x = inner.x + 1, y += 2;
-				x += ui.button(x, y, t(label), () => {}, {
-					cmd,
-					tip: t(tip)
-				}) + 1;
-			}
-			return;
-		}
-		const waveH = Math.max(3, Math.min(10, inner.h - 9));
-		const W = inner.w - 2;
-		const d = ins.data;
-		const cols = W * 2, rows = waveH * 4;
-		const loopA = ins.loopLength ? ins.loopStart : -1, loopB = ins.loopLength ? ins.loopStart + ins.loopLength : -1;
-		for (let cx = 0; cx < W; cx++) {
-			const cells = new Array(waveH).fill(0);
-			let inLoop = false;
-			for (let sub = 0; sub < 2; sub++) {
-				const col = cx * 2 + sub;
-				const a = Math.floor(col / cols * d.length), b = Math.max(a + 1, Math.floor((col + 1) / cols * d.length));
-				let lo = 1, hi = -1;
-				for (let i = a; i < b && i < d.length; i++) lo = Math.min(lo, d[i]), hi = Math.max(hi, d[i]);
-				if (a >= loopA && a < loopB) inLoop = true;
-				const top = Math.max(0, Math.min(rows - 1, Math.floor((1 - hi) / 2 * rows)));
-				const bot = Math.max(0, Math.min(rows - 1, Math.floor((1 - lo) / 2 * rows)));
-				for (let y = top; y <= bot; y++) {
-					const row = y % 4;
-					const bit = row === 3 ? sub ? 7 : 6 : sub ? 3 + row : row;
-					cells[Math.floor(y / 4)] |= 1 << bit;
-				}
-			}
-			cells.forEach((bits, k) => bits && ui.text(inner.x + 1 + cx, inner.y + k, String.fromCharCode(10240 + bits), { fg: inLoop ? c.accentAlt : c.accent }));
-		}
-		let y = inner.y + waveH;
-		const secs = d.length / (16574 * (ins.transpose >= 12 ? 2 : 1));
-		ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
-		y++;
-		const tools = [
-			[
-				"load…",
-				`med sample ${n} load`,
-				"replace this sound with a file of the vault"
-			],
-			[
-				"chop 4",
-				`med sample ${n} chop 4`,
-				"4 equal slices → new instruments"
-			],
-			[
-				"chop 8",
-				`med sample ${n} chop 8`,
-				"8 equal slices → new instruments"
-			],
-			[
-				"chop at attacks",
-				`med sample ${n} chop onsets`,
-				"a slice at each attack"
-			],
-			[
-				"stretch ×2",
-				`med sample ${n} stretch 2`,
-				"twice as long, same pitch (Amiga grains)"
-			],
-			[
-				"stretch ×½",
-				`med sample ${n} stretch 0.5`,
-				"half as long, same pitch"
-			],
-			[
-				"fade in",
-				`med sample ${n} fade in`,
-				""
-			],
-			[
-				"fade out",
-				`med sample ${n} fade out`,
-				""
-			],
-			[
-				"pitch +12",
-				`med sample ${n} pitch 12`,
-				"an octave up (half the frames)"
-			],
-			[
-				"pitch −12",
-				`med sample ${n} pitch -12`,
-				"an octave down"
-			],
-			[
-				"reverse",
-				`med sample ${n} reverse`,
-				""
-			],
-			[
-				"8-bit",
-				`med sample ${n} crush 8`,
-				"destructive 8 bits: the grit"
-			],
-			[
-				"4-bit ×2",
-				`med sample ${n} crush 4 2`,
-				"4 bits, half the rate: more grit"
-			],
-			[
-				"normalize",
-				`med sample ${n} normalize`,
-				""
-			],
-			[
-				"trim",
-				`med sample ${n} trim`,
-				"remove the silence at both ends"
-			],
-			[
-				"loop off",
-				`med sample ${n} loop off`,
-				""
-			],
-			[
-				"ping-pong",
-				`med sample ${n} loop pingpong`,
-				"the loop goes back and forth"
-			],
-			[
-				"bounce block",
-				"med bounce",
-				"this block, rendered into a new instrument"
-			],
-			[
-				s.flags.filter ? "LED filter off" : "LED filter on",
-				`med filter ${s.flags.filter ? "off" : "on"}`,
-				"the A500's low-pass (0FF9 / 0FF8)"
-			]
-		];
-		let x = inner.x + 1;
-		for (const [label, cmd, tip] of tools) {
-			const w = label.length + 2;
-			if (x + w > inner.x + inner.w - 1) x = inner.x + 1, y++;
-			if (y >= inner.y + inner.h) break;
-			x += ui.button(x, y, t(label), () => {}, {
-				cmd,
-				tip: tip ? t(tip) : void 0
-			}) + 1;
-		}
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
-	};
-	/** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
-	const nudge = (row, dir, big = false) => {
-		const sk = synthOf(st.song?.instruments[st.inst]);
-		const def = sk?.params[row];
-		if (sk && def) ed()?.instrument(st.inst, def.label, (i) => {
-			const p = settingsOf(i, sk);
-			if (p) nudgeIn(sk.params, p, def.key, dir, big);
-		});
-	};
-	/** A synth's settings (analog or FM): a row each (‹ value ›), the presets above. */
-	const drawSynth = (ui, inner, focused, sk) => {
-		const c = ui.c;
-		const n = hex(st.inst + 1);
-		const p = settingsOf(st.song.instruments[st.inst], sk);
-		const PARAMS = sk.params;
-		let x = inner.x + 1;
-		ui.text(x, inner.y, t("preset"), { fg: c.muted });
-		x += t("preset").length + 1;
-		for (const name of sk.presets) {
-			if (x + name.length + 2 > inner.x + inner.w - 1) break;
-			x += ui.button(x, inner.y, name, () => {}, {
-				cmd: `med ${sk.cmd} ${n} preset ${name}`,
-				quiet: true
-			}) + 1;
-		}
-		const top = inner.y + 2;
-		const h = Math.max(1, inner.h - 3);
-		const colW = 36;
-		const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
-		const perCol = Math.ceil(PARAMS.length / cols);
-		const scroll = perCol > h ? Math.max(0, Math.min(perCol - h, st.synthRow % perCol - Math.floor(h / 2))) : 0;
-		st.synthRow = Math.max(0, Math.min(PARAMS.length - 1, st.synthRow));
-		PARAMS.forEach((def, i) => {
-			const col = Math.floor(i / perCol), row = i % perCol - scroll;
-			if (row < 0 || row >= h) return;
-			const x0 = inner.x + 1 + col * colW, y = top + row;
-			const on = i === st.synthRow;
-			ui.text(x0, y, t(def.label).padEnd(18).slice(0, 18), { fg: on ? c.fg : c.muted });
-			ui.button(x0 + 19, y, "‹", () => (st.synthRow = i, nudge(i, -1)), { quiet: !on });
-			ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
-			ui.button(x0 + 32, y, "›", () => (st.synthRow = i, nudge(i, 1)), { quiet: !on });
-			ui.hit({
-				x: x0,
-				y,
-				w: 18,
-				h: 1
-			}, {
-				onClick: () => st.synthRow = i,
-				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
-			});
-			ui.hit({
-				x: x0 + 22,
-				y,
-				w: 10,
-				h: 1
-			}, {
-				onClick: () => st.synthRow = i,
-				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
-			});
-			if (on && focused) ui.tint({
-				x: x0,
-				y,
-				w: 18,
-				h: 1
-			}, void 0, c.highlight);
-		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
-	};
-	/** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
-	const nudgeKit = (drum, col, dir, big = false) => {
-		const key = DRUM_SETTINGS[col]?.key;
-		if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big));
-	};
-	const nudgeGrit = (what, dir) => ed()?.instrument(st.inst, "grit", (i) => {
-		if (!i.drums) return;
-		i.drums[what] = Math.max(1, Math.min(16, i.drums[what] + dir));
-	});
-	/** The drum machine: its kits above, then a row a drum (its note, its name, four settings). */
-	const drawDrums = (ui, inner, focused) => {
-		const c = ui.c;
-		const n = hex(st.inst + 1);
-		const kit = st.song.instruments[st.inst].drums;
-		let x = inner.x + 1;
-		ui.text(x, inner.y, t("kit"), { fg: c.muted });
-		x += t("kit").length + 1;
-		for (const name of Object.keys(DRUM_KITS)) x += ui.button(x, inner.y, name, () => {}, {
-			cmd: `med drums ${n} kit ${name}`,
-			quiet: true
-		}) + 1;
-		let gy = inner.y;
-		x += 2;
-		if (x + 30 >= inner.x + inner.w) x = inner.x + 1, gy = inner.y + 1;
-		ui.text(x, gy, t("grit"), { fg: c.muted });
-		x += t("grit").length + 1;
-		x += ui.button(x, gy, "‹", () => nudgeGrit("bits", -1), { quiet: true });
-		x = ui.text(x, gy, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
-		x += ui.button(x, gy, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
-		x += ui.button(x, gy, "‹", () => nudgeGrit("hold", -1), { quiet: true });
-		x = ui.text(x, gy, ` ×${kit.hold} `, { fg: kit.hold > 1 ? c.warning : c.fg });
-		ui.button(x, gy, "›", () => nudgeGrit("hold", 1), { quiet: true });
-		const wide = inner.w >= 66;
-		const cellW = wide ? 12 : 7;
-		const x0 = inner.x + 1, valX = x0 + 16;
-		ui.text(x0, inner.y + 2, "♪", { fg: c.subtle });
-		ui.text(x0 + 4, inner.y + 2, t("drum"), { fg: c.subtle });
-		DRUM_SETTINGS.forEach((s, k) => ui.text(valX + k * cellW + (wide ? 3 : 0), inner.y + 2, t(s.key), { fg: k === st.drumCol ? c.accent : c.subtle }));
-		st.drumRow = Math.max(0, Math.min(11, st.drumRow));
-		st.drumCol = Math.max(0, Math.min(3, st.drumCol));
-		const rows = Math.max(1, inner.h - 4);
-		const scroll = Math.max(0, Math.min(12 - rows, st.drumRow - rows + 1));
-		kit.drums.forEach((d, i) => {
-			const y = inner.y + 3 + i - scroll;
-			if (y < inner.y + 3 || y >= inner.y + inner.h - 1) return;
-			const on = i === st.drumRow;
-			ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
-			ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
-			if (on && focused) ui.tint({
-				x: x0,
-				y,
-				w: 15,
-				h: 1
-			}, void 0, c.highlight);
-			DRUM_SETTINGS.forEach((s, k) => {
-				const v = d[s.key];
-				const text = s.key === "tune" ? `${v > 0 ? "+" : ""}${v}` : s.key === "decay" ? v.toFixed(1) : v.toFixed(2);
-				const cx = valX + k * cellW;
-				const sel = on && k === st.drumCol;
-				if (wide) {
-					ui.button(cx, y, "‹", () => (st.drumRow = i, st.drumCol = k, nudgeKit(i, k, -1)), { quiet: !sel });
-					ui.text(cx + 3, y, text.padStart(5), { fg: sel ? c.accent : c.fg });
-					ui.button(cx + 8, y, "›", () => (st.drumRow = i, st.drumCol = k, nudgeKit(i, k, 1)), { quiet: !sel });
-				} else ui.text(cx, y, text.padStart(5), {
-					fg: sel ? c.accent : c.fg,
-					bg: sel ? c.highlight : void 0
-				});
-				ui.hit({
-					x: cx + (wide ? 3 : 0),
-					y,
-					w: 5,
-					h: 1
-				}, {
-					onClick: () => (st.drumRow = i, st.drumCol = k),
-					onWheel: (dl) => nudgeKit(i, k, dl < 0 ? 1 : -1)
-				});
-			});
-			ui.hit({
-				x: x0,
-				y,
-				w: 15,
-				h: 1
-			}, { onClick: () => st.drumRow = i });
-		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it"), { fg: c.subtle }, inner.w - 2);
-	};
-	/** a track's new name, asked in a window (the command does it) */
-	const rename = async (tr) => {
-		const s = song();
-		if (!s) return;
-		const name = await ib.ui.prompt(t("TRACK NAME"), {
-			initial: s.trackNames[tr] ?? "",
-			placeholder: `${t("track")} ${tr + 1}`
-		});
-		if (name !== null) run(`med track ${tr + 1} name ${q(name.trim())}`);
-	};
-	/** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
-	const cellMenu = (line, track) => {
-		if (!(!!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1)) unselect();
-		st.line = line;
-		st.track = track;
-		return menuEntries(line, track);
-	};
-	const menuEntries = (line, track) => [
-		{
-			label: t("play from here"),
-			run: () => run(`med play song ${hex(st.seq)} ${hex(line)}`)
-		},
-		"-",
-		{
-			label: t("copy"),
-			hint: "alt C",
-			run: copy
-		},
-		{
-			label: t("cut"),
-			hint: "alt X",
-			run: cut
-		},
-		{
-			label: t("paste"),
-			hint: "alt V",
-			run: () => (st.line = line, st.track = track, paste()),
-			disabled: !st.clip
-		},
-		{
-			label: t("clear"),
-			hint: "del",
-			run: () => ed()?.clearSelection(target())
-		},
-		"-",
-		{
-			label: t("transpose up"),
-			hint: "alt Q",
-			run: () => transpose(1)
-		},
-		{
-			label: t("transpose down"),
-			hint: "alt A",
-			run: () => transpose(-1)
-		},
-		{
-			label: t("an octave up"),
-			hint: "⇧ alt Q",
-			run: () => transpose(12)
-		},
-		{
-			label: t("an octave down"),
-			hint: "⇧ alt A",
-			run: () => transpose(-12)
-		},
-		"-",
-		{
-			label: t("insert a line"),
-			hint: "alt ⏎",
-			run: () => ed()?.insertLine(blockNo(), line, [track])
-		},
-		{
-			label: t("delete the line"),
-			hint: "⌫",
-			run: () => ed()?.deleteLine(blockNo(), line, [track])
-		},
-		{
-			label: t("mute / unmute this track"),
-			cmd: `med mute ${track + 1}`
-		},
-		"-",
-		{
-			label: t("save"),
-			hint: "med save",
-			cmd: "med save"
-		},
-		{
-			label: t("export (WAV + tracks)"),
-			hint: "med export",
-			cmd: "med export --stems"
-		}
-	];
-	/** the cell (and column) under the mouse, from where the block was drawn */
-	const cellAt = (mx, my) => {
-		const g = geo, b = block();
-		if (!g || !b) return null;
-		const k = Math.floor((mx - g.x - g.numW) / g.cw);
-		const line = g.top + (my - g.y);
-		if (k < 0 || k >= g.fits || line < 0 || line >= b.lines) return null;
-		const inCell = mx - g.x - g.numW - k * g.cw;
-		let col = 0;
-		const chords = !!st.song?.chordColumn;
-		for (let c = 0; c < colsOf(b.pages); c++) if ((c !== 3 || chords) && inCell >= colX(c, chords)) col = c;
-		return {
-			line,
-			track: firstTrack + k,
-			col
-		};
-	};
-	return {
-		kind: "breakermed",
-		key: "breakermed",
-		rawKeys: true,
-		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "breakerMED",
-		dirty: () => !!st.editor?.dirty,
-		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
-		render(ui, r, focused) {
-			const c = ui.c;
-			const s = st.song;
-			const now = engine.current();
-			if (engine.playing) ui.animate(16);
-			if (now) {
-				st.seq = now.seq;
-				st.line = now.line;
-			}
-			const name = s ? s.title || st.path.split("/").pop() || "" : "";
-			let x = ui.text(r.x + 1, r.y, "breakerMED", {
-				fg: c.accent,
-				attrs: BOLD
-			});
-			if (s) {
-				const f = s.flags;
-				const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-				const state = engine.playing ? engine.mode === "block" ? "▶ BLOCK" : "▶ SONG" : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
-				const parts = [
-					[0, `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})`],
-					[3, `${t("speed")} ${hex(s.speed)}`],
-					[2, `${t("oct")} ${st.octave + 1}`],
-					[4, `${t("step")} ${st.step}`],
-					[6, s.format],
-					[5, engine.paula ? "PAULA" : "SMOOTH"],
-					...s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`]] : []
-				];
-				const space = r.w - 2 - (x - r.x) - state.length - 6;
-				let shown = parts;
-				const width = (list) => list.reduce((n, [, p]) => n + p.length + 2, 0);
-				for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter(([k]) => k < drop);
-				const rest = shown.length ? `  ${shown.map(([, p]) => p).join("  ")}` : "";
-				const rx = rest ? ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted }) : r.x + r.w - 1;
-				const room = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
-					fg: c.bg,
-					bg: c.error,
-					attrs: BOLD
-				} : { fg: engine.playing ? c.success : c.muted }) - (x + 2) - 1;
-				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
-			}
-			if (!s) {
-				ui.textCenter(r, r.y + Math.floor(r.h / 2) - 1, t("no song loaded"), { fg: c.muted });
-				ui.textCenter(r, r.y + Math.floor(r.h / 2) + 1, st.error || "med open <file.med | file.mod> · med demo", { fg: st.error ? c.error : c.subtle });
-				return;
-			}
-			clampCursor();
-			const body = {
-				x: r.x,
-				y: r.y + 1,
-				w: r.w,
-				h: r.h - 1
-			};
-			const leftW = Math.min(LEFT, Math.floor(body.w / 3));
-			const seqH = Math.max(5, Math.floor(body.h * .45));
-			const seqBox = ui.box({
-				x: body.x,
-				y: body.y,
-				w: leftW,
-				h: seqH
-			}, {
-				title: t("SEQUENCE"),
-				focused: false
-			});
-			seqList.items = s.sequence.map((_, i) => i);
-			if (seqList.selected !== st.seq) seqList.select(st.seq);
-			seqList.render(ui, seqBox, false, (i, row, sel) => {
-				const b = s.blocks[s.sequence[i]];
-				ui.text(row.x, row.y, `${hex(i)} ${hex(s.sequence[i], 3)} ${b?.name ?? ""}`, {
-					fg: sel ? c.accent : c.muted,
-					attrs: sel ? BOLD : 0
-				}, row.w);
-			});
-			const instBox = ui.box({
-				x: body.x,
-				y: body.y + seqH,
-				w: leftW,
-				h: body.h - seqH
-			}, {
-				title: t("INSTRUMENTS"),
-				focused: false
-			});
-			instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
-			if (instList.selected !== st.inst) instList.select(st.inst);
-			instList.render(ui, instBox, false, (i, row, sel) => {
-				const ins = s.instruments[i] ?? {
-					kind: "empty",
-					name: ""
-				};
-				const empty = ins.kind === "empty";
-				const tag = ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
-					fg: sel ? c.accent : empty ? c.faint : c.fg,
-					attrs: sel ? BOLD : 0
-				}, row.w);
-			});
-			if (st.screen === "instrument") return drawInstrument(ui, {
-				x: body.x + leftW,
-				y: body.y,
-				w: body.w - leftW,
-				h: body.h
-			}, focused);
-			const bn = blockNo();
-			const b = s.blocks[bn];
-			const px = body.x + leftW;
-			const inner = ui.box({
-				x: px,
-				y: body.y,
-				w: body.w - leftW,
-				h: body.h
-			}, {
-				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`,
-				focused
-			});
-			if (!b) return;
-			const chords = !!s.chordColumn;
-			if (!chords && st.col === 3) st.col = 4;
-			const cw = cellW(b.pages, chords) + 1;
-			const numW = 4;
-			const fits = Math.max(1, Math.floor((inner.w - numW) / cw));
-			if (st.track < firstTrack) firstTrack = st.track;
-			if (st.track >= firstTrack + fits) firstTrack = st.track - fits + 1;
-			firstTrack = Math.max(0, Math.min(firstTrack, Math.max(0, s.tracks - fits)));
-			ui.hit(inner, { onWheel: (d) => moveLine(Math.sign(d) * 2) });
-			for (let k = 0; k < fits && firstTrack + k < s.tracks; k++) {
-				const tr = firstTrack + k;
-				const muted = engine.muted.has(tr);
-				const hx = inner.x + numW + k * cw;
-				const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
-				ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, {
-					fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle,
-					attrs: tr === st.track ? BOLD : 0
-				}, cw - 1);
-				ui.hit({
-					x: hx,
-					y: inner.y,
-					w: cw - 1,
-					h: 1
-				}, {
-					onClick: () => st.track = tr,
-					onDouble: () => void rename(tr),
-					tip: t("double-click: rename · right-click: mute, solo"),
-					menu: () => [
-						{
-							label: t("rename…"),
-							run: () => void rename(tr)
-						},
-						{
-							label: muted ? t("unmute") : t("mute"),
-							cmd: `med mute ${tr + 1}`
-						},
-						{
-							label: t("solo"),
-							cmd: `med solo ${tr + 1}`
-						}
-					]
-				});
-			}
-			const rows = inner.h - 1;
-			const mid = Math.floor(rows / 2);
-			geo = {
-				x: inner.x,
-				y: inner.y + 1,
-				w: inner.w,
-				h: rows,
-				numW,
-				cw,
-				top: st.line - mid,
-				fits
-			};
-			const sel = st.sel && st.sel.block === bn ? st.sel : null;
-			for (let k = 0; k < rows; k++) {
-				const line = st.line - mid + k;
-				const y = inner.y + 1 + k;
-				if (line < 0 || line >= b.lines) continue;
-				const here = line === st.line;
-				const beat = line % Math.max(1, s.lpb) === 0;
-				const bg = here ? engine.playing ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : beat ? c.panelAlt : void 0;
-				if (bg !== void 0) ui.fill({
-					x: inner.x,
-					y,
-					w: inner.w,
-					h: 1
-				}, { bg });
-				ui.text(inner.x, y, hex(line, 3), {
-					fg: here ? c.accent : beat ? c.muted : c.faint,
-					bg
-				});
-				for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
-					const tr = firstTrack + j;
-					const cell = b.cells[line][tr];
-					const cx = inner.x + numW + j * cw;
-					const dim = engine.muted.has(tr);
-					const inSel = !!sel && line >= sel.line0 && line <= sel.line1 && tr >= sel.track0 && tr <= sel.track1;
-					const cbg = inSel ? mix(c.panel, c.accentAlt, .35) : bg;
-					if (inSel) ui.fill({
-						x: cx,
-						y,
-						w: cw - 1,
-						h: 1
-					}, { bg: cbg });
-					let xx = ui.text(cx, y, noteName(cell.note), {
-						fg: dim ? c.faint : cell.note === 128 ? c.warning : cell.note ? c.fg : c.faint,
-						bg: cbg,
-						attrs: cell.note ? BOLD : 0
-					});
-					xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", {
-						fg: dim ? c.faint : cell.inst ? c.accent : c.faint,
-						bg: cbg
-					});
-					if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", {
-						fg: dim ? c.faint : cell.chord ? c.warning : c.faint,
-						bg: cbg
-					});
-					for (let p = 0; p < b.pages; p++) {
-						const has = cell.cmd[p] || cell.val[p];
-						xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", {
-							fg: dim ? c.faint : has ? c.accentAlt : c.faint,
-							bg: cbg
-						});
-					}
-					if (here && tr === st.track && focused) ui.tint({
-						x: cx + colX(st.col, chords),
-						y,
-						w: colW(st.col),
-						h: 1
-					}, c.bg, st.edit ? c.error : c.accent);
-					ui.hit({
-						x: cx,
-						y,
-						w: cw - 1,
-						h: 1
-					}, {
-						onClick: (m) => {
-							const at = cellAt(m.x, m.y);
-							unselect();
-							st.line = line;
-							st.track = tr;
-							if (at) st.col = at.col;
-							anchor = {
-								line,
-								track: tr
-							};
-						},
-						onDrag: (m) => {
-							const at = cellAt(m.x, m.y);
-							if (!at || !anchor) return;
-							st.line = at.line;
-							st.track = at.track;
-							st.sel = {
-								block: bn,
-								line0: Math.min(anchor.line, at.line),
-								line1: Math.max(anchor.line, at.line),
-								track0: Math.min(anchor.track, at.track),
-								track1: Math.max(anchor.track, at.track)
-							};
-						},
-						onWheel: (d) => moveLine(Math.sign(d) * 2),
-						menu: () => cellMenu(line, tr)
-					});
-				}
-			}
-		},
-		onKey(k) {
-			const s = st.song;
-			const e = ed();
-			if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
-			if (k.key === "space") {
-				if (engine.playing) run("med stop");
-				else run(`med edit ${st.edit ? "off" : "on"}`);
-				return true;
-			}
-			if (!s || !e) return false;
-			if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
-			if (k.alt) {
-				const digit = /^Digit(\d)$/.exec(k.code);
-				if (digit) return st.step = +digit[1], true;
-				switch (k.code) {
-					case "KeyI": return st.screen = "instrument", true;
-					case "KeyB": return st.screen = "block", true;
-					case "ArrowUp": return st.octave = Math.min(7, st.octave + 1), true;
-					case "ArrowDown": return st.octave = Math.max(0, st.octave - 1), true;
-					case "ArrowLeft": return st.inst = Math.max(0, st.inst - 1), true;
-					case "ArrowRight": return st.inst = Math.min(62, s.instruments.length, st.inst + 1), true;
-					case "KeyC": return copy(), true;
-					case "KeyX": return cut(), true;
-					case "KeyV": return paste(), true;
-					case "KeyQ": return transpose(k.shift ? 12 : 1), true;
-					case "KeyA": return transpose(k.shift ? -12 : -1), true;
-					case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
-				}
-				return false;
-			}
-			if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "drums" && !k.ctrl && !k.meta) switch (k.key) {
-				case "up": return st.drumRow = Math.max(0, st.drumRow - 1), true;
-				case "down": return st.drumRow = Math.min(11, st.drumRow + 1), true;
-				case "left": return k.shift ? nudgeKit(st.drumRow, st.drumCol, -1) : st.drumCol = Math.max(0, st.drumCol - 1), true;
-				case "right": return k.shift ? nudgeKit(st.drumRow, st.drumCol, 1) : st.drumCol = Math.min(3, st.drumCol + 1), true;
-			}
-			const sk = st.screen === "instrument" ? synthOf(s.instruments[st.inst]) : void 0;
-			if (sk && !k.ctrl && !k.meta) switch (k.key) {
-				case "up": return st.synthRow = Math.max(0, st.synthRow - 1), true;
-				case "down": return st.synthRow = Math.min(sk.params.length - 1, st.synthRow + 1), true;
-				case "left": return nudge(st.synthRow, -1, k.shift), true;
-				case "right": return nudge(st.synthRow, 1, k.shift), true;
-			}
-			if (k.shift) switch (k.key) {
-				case "up": return extend(-1, 0), true;
-				case "down": return extend(1, 0), true;
-				case "left": return extend(0, -1), true;
-				case "right": return extend(0, 1), true;
-			}
-			switch (k.key) {
-				case "up": return unselect(), moveLine(-1), true;
-				case "down": return unselect(), moveLine(1), true;
-				case "pageup": return moveLine(-16), true;
-				case "pagedown": return moveLine(16), true;
-				case "home": return st.line = 0, true;
-				case "end": return moveLine(9999), true;
-				case "left": return unselect(), moveCol(-1), true;
-				case "right": return unselect(), moveCol(1), true;
-				case "delete":
-					if (st.sel) e.clearSelection(st.sel), unselect();
-					else e.clear(blockNo(), st.line, st.track, st.col), st.edit && advance();
-					return true;
-				case "backspace":
-					e.deleteLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
-					return true;
-			}
-			if (k.ctrl || k.meta) return false;
-			const kind = colKind(st.col).kind;
-			if (st.edit && kind !== "note") {
-				const d = /^Digit(\d)$/.exec(k.code)?.[1] ?? (k.key.length === 1 && HEX.includes(k.key.toLowerCase()) ? k.key.toLowerCase() : null);
-				if (d !== null) {
-					e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
-					const k = colKind(st.col);
-					if (k.kind === "chord") {
-						if (HEX.indexOf(d)) s.chordColumn = true;
-						advance();
-					} else if (k.kind === "inst") {
-						if (k.digit === 0) st.col++;
-						else st.col--, advance();
-					} else if (k.kind === "cmd" || k.kind === "val" && k.digit === 0) st.col++;
-					else st.col -= 3, advance();
-					return true;
-				}
-			}
-			if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash")) return typeNote(128), true;
-			const semi = pianoKey(k.code);
-			if (semi !== null) {
-				if (k.repeat) return true;
-				preview(st.octave * 12 + semi);
-				if (st.edit && kind === "note") typeNote(st.octave * 12 + semi + 1);
-				return true;
-			}
-			return false;
-		},
-		onAction(a) {
-			switch (a) {
-				case "up": return moveLine(-1), true;
-				case "down": return moveLine(1), true;
-				case "left": return moveCol(-1), true;
-				case "right": return moveCol(1), true;
-				case "page-up": return moveLine(-16), true;
-				case "page-down": return moveLine(16), true;
-				case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
-			}
-			return false;
-		},
-		menu: () => st.song ? cellMenu(st.line, st.track) : [
-			{
-				label: t("open a song…"),
-				cmd: "med open"
-			},
-			{
-				label: t("a new song"),
-				cmd: "med new"
-			},
-			{
-				label: t("the demo song"),
-				cmd: "med demo"
-			}
-		]
-	};
-}
-// src/format/bytes.ts
-/**
-* Reading and writing big-endian files (the Amiga's order), bounds-checked:
-* a broken or hostile file throws a clear error, never reads past its end.
-*/
-var Reader = class {
-	constructor(b) {
-		_defineProperty(this, "b", void 0);
-		_defineProperty(this, "pos", 0);
-		this.b = b;
-	}
-	get length() {
-		return this.b.length;
-	}
-	can(n, at = this.pos) {
-		return at >= 0 && n >= 0 && at + n <= this.b.length;
-	}
-	need(n, at = this.pos, what = "data") {
-		if (!this.can(n, at)) throw new Error(`the file ends too early (${what} at ${at})`);
-	}
-	seek(at) {
-		if (at < 0 || at > this.b.length) throw new Error(`a pointer leads out of the file (${at})`);
-		this.pos = at;
-		return this;
-	}
-	u8() {
-		this.need(1);
-		return this.b[this.pos++];
-	}
-	s8() {
-		const v = this.u8();
-		return v > 127 ? v - 256 : v;
-	}
-	u16() {
-		this.need(2);
-		const v = this.b[this.pos] << 8 | this.b[this.pos + 1];
-		this.pos += 2;
-		return v;
-	}
-	s16() {
-		const v = this.u16();
-		return v > 32767 ? v - 65536 : v;
-	}
-	u32() {
-		this.need(4);
-		const v = (this.b[this.pos] << 24 >>> 0) + (this.b[this.pos + 1] << 16) + (this.b[this.pos + 2] << 8) + this.b[this.pos + 3];
-		this.pos += 4;
-		return v;
-	}
-	bytes(n) {
-		this.need(n);
-		const out = this.b.subarray(this.pos, this.pos + n);
-		this.pos += n;
-		return out;
-	}
-	/** a fixed-size text field (stops at the first 0), Latin-1 like the Amiga's */
-	text(n) {
-		const raw = this.bytes(n);
-		let s = "";
-		for (const c of raw) {
-			if (!c) break;
-			s += c < 32 ? " " : String.fromCharCode(c);
-		}
-		return s.trimEnd();
-	}
-};
-/** Signed 8-bit sample bytes → floats. */
-function s8ToFloats(raw) {
-	const out = new Float32Array(raw.length);
-	for (let i = 0; i < raw.length; i++) out[i] = (raw[i] > 127 ? raw[i] - 256 : raw[i]) / 128;
-	return out;
-}
-/** Signed 16-bit big-endian sample bytes → floats. */
-function s16beToFloats(raw) {
-	const out = new Float32Array(raw.length >> 1);
-	for (let i = 0; i < out.length; i++) {
-		const v = raw[2 * i] << 8 | raw[2 * i + 1];
-		out[i] = (v > 32767 ? v - 65536 : v) / 32768;
-	}
-	return out;
-}
-/** OctaMED's "delta" samples: each byte is the difference from the previous one. */
-function undelta8(raw) {
-	const out = new Uint8Array(raw.length);
-	let acc = 0;
-	for (let i = 0; i < raw.length; i++) out[i] = acc = acc + raw[i] & 255;
-	return out;
-}
-var Writer = class {
-	constructor() {
-		_defineProperty(this, "buf", /* @__PURE__ */ new Uint8Array(1024));
-		_defineProperty(this, "pos", 0);
-	}
-	room(n) {
-		if (this.pos + n <= this.buf.length) return;
-		let size = this.buf.length * 2;
-		while (size < this.pos + n) size *= 2;
-		const next = new Uint8Array(size);
-		next.set(this.buf.subarray(0, this.pos));
-		this.buf = next;
-	}
-	u8(v) {
-		this.room(1);
-		this.buf[this.pos++] = v & 255;
-		return this;
-	}
-	u16(v) {
-		return this.u8(v >> 8).u8(v);
-	}
-	u32(v) {
-		return this.u16(v >>> 16 & 65535).u16(v & 65535);
-	}
-	bytes(b) {
-		this.room(b.length);
-		this.buf.set(b, this.pos);
-		this.pos += b.length;
-		return this;
-	}
-	/** a fixed-size text field, padded with zeros */
-	text(s, n) {
-		for (let i = 0; i < n; i++) this.u8(i < s.length ? Math.min(255, s.charCodeAt(i)) : 0);
-		return this;
-	}
-	zeros(n) {
-		this.room(n);
-		this.buf.fill(0, this.pos, this.pos + n);
-		this.pos += n;
-		return this;
-	}
-	/** go back and write a 32-bit value (a pointer known later) */
-	patch32(at, v) {
-		const here = this.pos;
-		this.pos = at;
-		this.u32(v);
-		this.pos = here;
-	}
-	align(n = 2) {
-		while (this.pos % n) this.u8(0);
-		return this;
-	}
-	done() {
-		return this.buf.slice(0, this.pos);
-	}
-};
-/** Floats → signed 8-bit bytes (rounded, clipped). */
-function floatsToS8(f) {
-	const out = new Uint8Array(f.length);
-	for (let i = 0; i < f.length; i++) out[i] = Math.max(-128, Math.min(127, Math.round(f[i] * 128))) & 255;
-	return out;
-}
-/** Floats → signed 16-bit big-endian bytes. */
-function floatsToS16be(f) {
-	const out = new Uint8Array(f.length * 2);
-	for (let i = 0; i < f.length; i++) {
-		const v = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32768))) & 65535;
-		out[2 * i] = v >> 8;
-		out[2 * i + 1] = v & 255;
-	}
-	return out;
-}
-// src/format/med.ts
-/**
-* OctaMED .med files (MMD0, MMD1, MMD2, MMD3): reading. Writing comes with
-* step 3.
-*
-* The layout is public: Teijo Kinnunen's MED-FORM.TXT describes MMD0 / MMD1,
-* and the rest (MMD2's sections and play sequences, MMD3, the command pages,
-* the tempo modes, the octave folding of the Amiga's four voices) was checked
-* against libopenmpt's reader (Load_med.cpp, BSD-3-Clause, docs/CREDITS.md).
-* This is our own code: one structure after the other, every pointer
-* checked against the file's length.
-*
-* Not read yet: packed (ADPCM) samples, MIDI, several songs in one file (the
-* first is read), MMD2's play-sequence commands (stop / jump).
-*/
-function isMed(b) {
-	return b.length >= 52 && b[0] === 77 && b[1] === 77 && b[2] === 68 && b[3] >= 48 && b[3] <= 51;
-}
-function readMed(bytes) {
-	if (!isMed(bytes)) throw new Error("not an OctaMED file (no MMD0–MMD3 header)");
-	const r = new Reader(bytes);
-	r.seek(3);
-	const h = {
-		version: r.u8() - 48,
-		songOffset: 0,
-		blockArr: 0,
-		sampleArr: 0,
-		expData: 0
-	};
-	r.u32();
-	h.songOffset = r.u32();
-	r.u32();
-	h.blockArr = r.u32();
-	r.u32();
-	h.sampleArr = r.u32();
-	r.u32();
-	h.expData = r.u32();
-	r.seek(h.songOffset);
-	const sampleHeads = Array.from({ length: 63 }, () => ({
-		loopStart: r.u16() * 2,
-		loopLength: r.u16() * 2,
-		midiChannel: r.u8(),
-		midiPreset: r.u8(),
-		volume: r.u8(),
-		transpose: r.s8()
-	}));
-	const numBlocks = r.u16();
-	const songLength = r.u16();
-	const songArea = r.pos;
-	r.seek(songArea + 256);
-	const defaultTempo = r.u16();
-	const playTranspose = r.s8();
-	const flags = r.u8();
-	const flags2 = r.u8();
-	const tempo2 = r.u8();
-	const trackVol16 = Array.from(r.bytes(16));
-	const masterVol = r.u8();
-	const numSamples = r.u8();
-	if (numSamples > 63 || numBlocks > 32767) throw new Error("not a valid OctaMED song (too many instruments or blocks)");
-	const hardwareMix = h.version < 2 || !(flags2 & 128);
-	const bpmMode = !!(flags2 & 32);
-	const tempoMode = bpmMode ? "bpm" : "spd";
-	let sequence = [];
-	let tracks = 4;
-	let trackVolume = [];
-	let trackPan = null;
-	let echo;
-	if (h.version < 2) {
-		r.seek(songArea);
-		sequence = Array.from(r.bytes(256)).slice(0, Math.min(256, songLength));
-		trackVolume = trackVol16;
-	} else {
-		r.seek(songArea);
-		const playSeqTable = r.u32();
-		const sectionTable = r.u32();
-		const trackVols = r.u32();
-		const numTracks = r.u16();
-		const numPlaySeqs = r.u16();
-		const trackPanOffset = r.u32();
-		const flags3 = r.u32();
-		r.u16();
-		r.u16();
-		const echoType = r.u8(), echoDepth = r.u8(), echoLen = r.u16();
-		if (!hardwareMix && (echoType === 1 || echoType === 2)) echo = cleanEcho({
-			type: echoType === 2 ? "cross" : "normal",
-			ms: echoLen || 250,
-			depth: echoDepth || 2
-		});
-		if (numTracks < 1 || numTracks > 64) throw new Error(`not a valid OctaMED song (${numTracks} tracks)`);
-		tracks = numTracks;
-		if (trackVols && r.can(numTracks, trackVols)) trackVolume = Array.from(r.seek(trackVols).bytes(numTracks));
-		if ((!hardwareMix && !!(flags3 & 2) || h.version > 2) && trackPanOffset && r.can(numTracks, trackPanOffset)) {
-			r.seek(trackPanOffset);
-			trackPan = Array.from({ length: numTracks }, () => Math.max(-16, Math.min(16, r.s8())) / 16);
-		}
-		if (sectionTable && r.can(songLength * 2, sectionTable)) {
-			r.seek(sectionTable);
-			const sections = Array.from({ length: songLength }, () => r.u16());
-			for (const sec of sections) {
-				if (sec >= numPlaySeqs || !r.can(4, playSeqTable + sec * 4)) continue;
-				const at = r.seek(playSeqTable + sec * 4).u32();
-				if (!r.can(42, at)) continue;
-				r.seek(at + 40);
-				const length = r.u16();
-				for (let i = 0; i < length && r.can(2); i++) {
-					const b = r.u16();
-					if (b < 32768) sequence.push(b);
-				}
-			}
-		}
-	}
-	const blocks = [];
-	for (let n = 0; n < numBlocks; n++) {
-		if (!r.can(4, h.blockArr + n * 4)) break;
-		const at = r.seek(h.blockArr + n * 4).u32();
-		if (!at || !r.can(2, at)) {
-			blocks.push(newBlock(tracks, 64));
-			continue;
-		}
-		r.seek(at);
-		if (h.version < 1) {
-			const t = r.u8();
-			const lines = r.u8() + 1;
-			tracks = Math.max(tracks, t);
-			const block = newBlock(t, lines, 1);
-			for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
-				if (!r.can(3)) break;
-				const b0 = r.u8(), b1 = r.u8(), b2 = r.u8();
-				const c = block.cells[l][k];
-				c.note = b0 & 63;
-				c.inst = b1 >> 4 | (b0 & 128) >> 3 | (b0 & 64) >> 1;
-				c.cmd[0] = b1 & 15;
-				c.val[0] = b2;
-			}
-			blocks.push(block);
-			continue;
-		}
-		const t = r.u16();
-		const lines = r.u16() + 1;
-		const info = r.u32();
-		const cellsAt = r.pos;
-		if (t < 1 || t > 64 || lines > 3200) throw new Error(`block ${n}: ${t} tracks × ${lines} lines`);
-		tracks = Math.max(tracks, t);
-		let name = "";
-		let pages = [];
-		if (info && r.can(20, info)) {
-			r.seek(info);
-			r.u32();
-			const nameOffset = r.u32();
-			const nameLength = r.u32();
-			const pageTable = r.u32();
-			if (nameOffset && nameLength && r.can(Math.min(nameLength, 255), nameOffset)) name = r.seek(nameOffset).text(Math.min(nameLength, 255));
-			if (pageTable && r.can(4, pageTable)) {
-				r.seek(pageTable);
-				const count = r.u16();
-				r.u16();
-				for (let i = 0; i < count && r.can(4); i++) pages.push(r.u32());
-			}
-		}
-		pages = pages.slice(0, 15);
-		const block = newBlock(t, lines, 1 + pages.length, name);
-		r.seek(cellsAt);
-		for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
-			if (!r.can(4)) break;
-			const b0 = r.u8(), b1 = r.u8(), b2 = r.u8(), b3 = r.u8();
-			const c = block.cells[l][k];
-			c.note = b0 === 128 ? 128 : b0 & 127;
-			c.inst = b1 & 63;
-			c.cmd[0] = b2;
-			c.val[0] = b3;
-		}
-		pages.forEach((p, i) => {
-			if (!p || !r.can(t * lines * 2, p)) return;
-			r.seek(p);
-			for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
-				const c = block.cells[l][k];
-				c.cmd[i + 1] = r.u8();
-				c.val[i + 1] = r.u8();
-			}
-		});
-		blocks.push(block);
-	}
-	for (const b of blocks) for (const row of b.cells) while (row.length < tracks) row.push({
-		note: 0,
-		inst: 0,
-		cmd: new Array(b.pages).fill(0),
-		val: new Array(b.pages).fill(0)
-	});
-	const exp = readExp(r, h.expData);
-	const instruments = [];
-	for (let i = 0; i < numSamples; i++) {
-		const head = sampleHeads[i];
-		const inst = emptyInstrument();
-		inst.volume = Math.min(64, head.volume);
-		inst.transpose = head.transpose;
-		inst.loopStart = head.loopStart;
-		inst.loopLength = head.loopLength > 2 ? head.loopLength : 0;
-		const ext = exp.instrExt(i);
-		if (ext) {
-			inst.hold = ext.hold;
-			inst.decay = ext.decay;
-			inst.finetune = Math.max(-8, Math.min(7, ext.finetune));
-			if (ext.volume !== void 0) inst.gain = (ext.volume + 1) / 128;
-		}
-		inst.name = exp.instrName(i);
-		const at = h.sampleArr && r.can(4, h.sampleArr + i * 4) ? r.seek(h.sampleArr + i * 4).u32() : 0;
-		if (at && r.can(6, at)) readInstrumentData(r, at, inst, h.version);
-		if (ext && inst.kind === "sample") {
-			if (ext.loopLength !== void 0) {
-				inst.loopStart = ext.loopStart ?? 0;
-				inst.loopLength = ext.loopLength;
-			}
-			if (ext.flags !== void 0) {
-				if (!(ext.flags & 1)) inst.loopLength = 0;
-				inst.pingPong = !!(ext.flags & 8);
-				if (ext.flags & 4) inst.gain = 0;
-			}
-		}
-		if (inst.loopStart + inst.loopLength > inst.data.length) inst.loopLength = Math.max(0, inst.data.length - inst.loopStart);
-		if (inst.loopLength <= 2) inst.loopStart = 0, inst.loopLength = 0;
-		instruments.push(inst);
-	}
-	const song = {
-		title: exp.songName,
-		format: `MMD${h.version}`,
-		tracks,
-		blocks,
-		sequence: sequence.filter((b) => b < blocks.length),
-		restart: 0,
-		instruments,
-		tempoMode,
-		tempo: defaultTempo,
-		speed: Math.max(1, Math.min(32, tempo2 || 6)),
-		lpb: bpmMode ? 1 + (flags2 & 31) : 4,
-		transpose: playTranspose,
-		noteShift: h.version > 2 ? -24 : 0,
-		masterVolume: masterVol ? Math.min(64, masterVol) : 64,
-		trackVolume: Array.from({ length: tracks }, (_, i) => Math.max(0, Math.min(64, trackVolume[i] ?? 64))),
-		trackPan: trackPan && trackPan.length === tracks ? trackPan : amigaPan(tracks),
-		trackNames: new Array(tracks).fill(""),
-		flags: {
-			volHex: !!(flags & 16),
-			vol7bit: h.version > 2,
-			ptSlides: !!(flags & 32),
-			eightChannel: !!(flags & 64),
-			hardwareMix,
-			filter: !!(flags & 1)
-		}
-	};
-	if (!song.sequence.length) song.sequence = [0];
-	if (!song.blocks.length) song.blocks.push(newBlock(tracks));
-	if (echo) song.echo = echo;
-	return song;
-}
-/** The expansion data: instrument names and extras, the song's name. */
-function readExp(r, at) {
-	const out = {
-		songName: "",
-		instrExt: (_i) => null,
-		instrName: (_i) => ""
-	};
-	if (!at || !r.can(52, at)) return out;
-	r.seek(at + 4);
-	const extAt = r.u32();
-	const extEntries = r.u16();
-	const extSize = r.u16();
-	r.u32();
-	r.u32();
-	const infoAt = r.u32();
-	const infoEntries = r.u16();
-	const infoSize = r.u16();
-	r.seek(at + 44);
-	const nameAt = r.u32();
-	const nameLength = r.u32();
-	if (nameAt && nameLength && r.can(Math.min(nameLength, 255), nameAt)) out.songName = r.seek(nameAt).text(Math.min(nameLength, 255));
-	out.instrExt = (i) => {
-		if (!extAt || i >= extEntries || extSize < 4 || !r.can(extSize, extAt + i * extSize)) return null;
-		r.seek(extAt + i * extSize);
-		const e = {
-			hold: r.u8(),
-			decay: r.u8(),
-			finetune: (r.u8(), r.s8())
-		};
-		if (extSize > 5) {
-			r.u8();
-			e.flags = r.u8();
-		}
-		if (extSize >= 18) {
-			r.seek(extAt + i * extSize + 10);
-			e.loopStart = r.u32();
-			e.loopLength = r.u32();
-		}
-		if (extSize >= 19) e.volume = r.u8();
-		return e;
-	};
-	out.instrName = (i) => infoAt && i < infoEntries && infoSize > 0 && r.can(Math.min(40, infoSize), infoAt + i * infoSize) ? r.seek(infoAt + i * infoSize).text(Math.min(40, infoSize)) : "";
-	return out;
-}
-/** An instrument's sound: a sample (8 / 16 bits, mono / stereo, delta, several octaves), a synth or a hybrid. */
-function readInstrumentData(r, at, inst, version) {
-	r.seek(at);
-	const length = r.u32();
-	const type = r.s16();
-	if (type === -1 || type === -2) {
-		if (!r.can(272)) return;
-		r.u32();
-		const loopStart = r.u16() * 2;
-		const loopLength = r.u16() * 2;
-		const volLen = Math.min(128, r.u16());
-		const waveLen = Math.min(128, r.u16());
-		inst.volSpeed = r.u8();
-		inst.waveSpeed = r.u8();
-		const numWaves = r.u16();
-		const volTable = Array.from(r.bytes(128));
-		const waveTable = Array.from(r.bytes(128));
-		inst.volTable = volTable.slice(0, volLen);
-		inst.waveTable = waveTable.slice(0, waveLen);
-		if (numWaves > 64) return;
-		const offsets = Array.from({ length: numWaves }, () => r.can(4) ? r.u32() : 0);
-		inst.waves = [];
-		offsets.forEach((o, i) => {
-			if (o <= 278 || !r.can(2, at + o)) return void inst.waves.push(/* @__PURE__ */ new Float32Array(0));
-			r.seek(at + o);
-			if (type === -2 && i === 0) {
-				const len = r.u32();
-				r.s16();
-				inst.waves.push(r.can(len) ? s8ToFloats(r.bytes(len)) : /* @__PURE__ */ new Float32Array(0));
-			} else {
-				const len = r.u16() * 2;
-				inst.waves.push(r.can(len) ? s8ToFloats(r.bytes(len)) : /* @__PURE__ */ new Float32Array(0));
-			}
-		});
-		inst.kind = type === -1 ? "synth" : "hybrid";
-		const first = inst.waves[0] ?? /* @__PURE__ */ new Float32Array(0);
-		inst.data = first;
-		if (type === -1) {
-			inst.loopStart = 0;
-			inst.loopLength = first.length;
-			if (version <= 2) inst.transpose -= 24;
-		} else if (loopLength > 2) {
-			inst.loopStart = loopStart;
-			inst.loopLength = loopLength;
-		}
-		return;
-	}
-	if (type < 0 || type & 128) return;
-	const octaves = [
-		1,
-		5,
-		3,
-		2,
-		4,
-		6,
-		7,
-		1
-	][type & 15] ?? 1;
-	const bits16 = !!(type & 16);
-	const stereo = !!(type & 32);
-	const delta = !!(type & 64);
-	const total = stereo ? length * 2 : length;
-	if (!r.can(total)) return;
-	let raw = r.bytes(total);
-	if (delta && !bits16) raw = undelta8(raw);
-	const decode = (b) => bits16 ? s16beToFloats(b) : s8ToFloats(b);
-	let left = decode(stereo ? raw.subarray(0, length) : raw);
-	inst.right = stereo ? decode(raw.subarray(length)) : void 0;
-	if (octaves > 1) {
-		const first = Math.floor(left.length / ((1 << octaves) - 1));
-		const start = first * ((1 << octaves - 1) - 1);
-		left = left.slice(start, start + first * (1 << octaves - 1));
-		inst.loopStart *= 1 << octaves - 1;
-		inst.loopLength *= 1 << octaves - 1;
-		if (octaves >= 5) inst.transpose += 12;
-	}
-	inst.data = left;
-	inst.bits16 = bits16;
-	inst.kind = left.length ? "sample" : "empty";
-}
-// src/format/mod.ts
-/**
-* ProTracker .mod files: reading (writing comes with step 3). The format is the
-* well-known public one: a title, 31 instruments, the order list, a tag
-* ("M.K.", "6CHN", "8CHN"…), patterns of 64 lines × 4 bytes a cell, the samples.
-* A file without a tag is read as an old 15-instrument SoundTracker module.
-*
-* Effects are translated into OctaMED's numbering (song.ts), the way OctaMED
-* itself reads a .mod: 4 → 14 (ProTracker's vibrato depth), D → 1D (the line in
-* hex), Ex → 11/12/15/16/18/1A/1B/1E/1F, F → 09 (speed) or 0F (BPM).
-*/
-var TAGS4 = /* @__PURE__ */ new Set([
-	"M.K.",
-	"M!K!",
-	"M&K!",
-	"FLT4",
-	"4CHN",
-	"N.T."
-]);
-/** The tracks a tag means (0: not a tag we know). */
-function tracksOfTag(tag) {
-	if (TAGS4.has(tag)) return 4;
-	if (tag === "FLT8" || tag === "OCTA" || tag === "CD81") return 8;
-	let m = /^(\d)CHN$/.exec(tag);
-	if (m) return +m[1];
-	m = /^(\d\d)C[HN]$/.exec(tag);
-	if (m) return +m[1];
-	return 0;
-}
-/** Does it look like a .mod (31 instruments and a tag)? */
-function isMod(b) {
-	if (b.length < 1084) return false;
-	return tracksOfTag(String.fromCharCode(b[1080], b[1081], b[1082], b[1083])) > 0;
-}
-function readMod(bytes) {
-	const r = new Reader(bytes);
-	if (bytes.length < 600) throw new Error("too short for a .mod");
-	const tag = bytes.length >= 1084 ? String.fromCharCode(bytes[1080], bytes[1081], bytes[1082], bytes[1083]) : "";
-	let tracks = tracksOfTag(tag);
-	const old = tracks === 0;
-	if (old) tracks = 4;
-	const numInst = old ? 15 : 31;
-	const title = r.text(20);
-	const heads = [];
-	for (let i = 0; i < numInst; i++) {
-		const inst = emptyInstrument();
-		inst.name = r.text(22);
-		const len = r.u16() * 2;
-		const ft = r.u8() & 15;
-		inst.finetune = ft > 7 ? ft - 16 : ft;
-		inst.volume = Math.min(64, r.u8());
-		let ls = r.u16() * 2;
-		const ll = r.u16() * 2;
-		if (old) ls >>= 1;
-		if (ll > 2) {
-			inst.loopStart = ls;
-			inst.loopLength = ll;
-		}
-		heads.push({
-			inst,
-			bytes: len
-		});
-	}
-	const songLength = Math.max(1, Math.min(128, r.u8()));
-	let restart = r.u8();
-	const orders = Array.from(r.bytes(128));
-	if (!old) r.u32();
-	const used = orders.slice(0, songLength);
-	const numPat = Math.max(...orders.filter((o) => o < 128)) + 1;
-	if (restart >= songLength || restart === 127) restart = 0;
-	const song = {
-		title,
-		format: old ? "MOD 15" : `MOD ${tag}`,
-		tracks,
-		blocks: [],
-		sequence: used,
-		restart,
-		instruments: [],
-		tempoMode: "pt",
-		tempo: 125,
-		speed: 6,
-		lpb: 4,
-		transpose: 0,
-		noteShift: 0,
-		masterVolume: 64,
-		trackVolume: new Array(tracks).fill(64),
-		trackPan: amigaPan(tracks),
-		trackNames: new Array(tracks).fill(""),
-		flags: {
-			volHex: true,
-			vol7bit: false,
-			ptSlides: true,
-			eightChannel: false,
-			hardwareMix: true,
-			filter: false
-		}
-	};
-	for (let p = 0; p < numPat; p++) {
-		const block = newBlock(tracks, 64, 1);
-		for (let line = 0; line < 64; line++) for (let t = 0; t < tracks; t++) {
-			if (!r.can(4)) break;
-			const a = r.u8(), b = r.u8(), c = r.u8(), d = r.u8();
-			const period = (a & 15) << 8 | b;
-			const cell = block.cells[line][t];
-			cell.inst = a & 240 | c >> 4;
-			if (cell.inst > 63) cell.inst = 0;
-			if (period) cell.note = Math.max(1, semiOfPeriod(period) + 1);
-			const [cmd, val] = modToMed(c & 15, d);
-			cell.cmd[0] = cmd;
-			cell.val[0] = val;
-		}
-		song.blocks.push(block);
-	}
-	for (const h of heads) {
-		const n = Math.min(h.bytes, Math.max(0, bytes.length - r.pos));
-		if (n > 0) {
-			h.inst.data = s8ToFloats(r.bytes(n));
-			h.inst.kind = "sample";
-		}
-		if (h.inst.loopStart + h.inst.loopLength > h.inst.data.length) {
-			h.inst.loopLength = Math.max(0, h.inst.data.length - h.inst.loopStart);
-			if (h.inst.loopLength <= 2) h.inst.loopStart = 0, h.inst.loopLength = 0;
-		}
-		song.instruments.push(h.inst);
-	}
-	while (song.instruments.length && song.instruments[song.instruments.length - 1].kind === "empty") song.instruments.pop();
-	return song;
-}
-/** A ProTracker effect as an OctaMED command. Returns [0, 0] for what has none. */
-function modToMed(e, p) {
-	switch (e) {
-		case 0: return p ? [0, p] : [0, 0];
-		case 4: return [20, p];
-		case 8: return [0, 0];
-		case 9: return [25, p];
-		case 13: return [29, Math.min(63, (p >> 4) * 10 + (p & 15))];
-		case 14: {
-			const x = p >> 4, y = p & 15;
-			switch (x) {
-				case 0: return [15, y ? 248 : 249];
-				case 1: return [17, y];
-				case 2: return [18, y];
-				case 5: return [21, y];
-				case 6: return [22, y];
-				case 9: return [31, y];
-				case 10: return [26, y];
-				case 11: return [27, y];
-				case 12: return [24, y];
-				case 13: return [31, y << 4];
-				case 14: return [30, y];
-				default: return [0, 0];
-			}
-		}
-		case 15:
-			if (p === 0) return [15, 254];
-			return p < 32 ? [9, p] : [15, p];
-		default: return [e, p];
-	}
-}
-// src/format/index.ts
-/** the names songs have: "x.med", "x.mod", and the Amiga's way: "mod.x", "med.x" */
-var SONG_EXTS = [
-	".med",
-	".mod",
-	".mmd0",
-	".mmd1",
-	".mmd2",
-	".mmd3"
-];
-function readSong(bytes, name = "") {
-	if (isMed(bytes)) return readMed(bytes);
-	if (isMod(bytes) || /\.mod$|(^|\/)mod\./i.test(name)) return readMod(bytes);
-	throw new Error("not a .med (MMD0–MMD3) or .mod file");
-}
-// src/demo.ts
-/**
-* breakerMED — a little song of our own (our samples, our notes: free to use),
-* made as a .mod file in memory so `med demo` plays something right away and
-* goes through the same reader as a real file.
-*/
-var PERIODS = [
-	856,
-	808,
-	762,
-	720,
-	678,
-	640,
-	604,
-	570,
-	538,
-	508,
-	480,
-	453,
-	428,
-	404,
-	381,
-	360,
-	339,
-	320,
-	302,
-	285,
-	269,
-	254,
-	240,
-	226,
-	214,
-	202,
-	190,
-	180,
-	170,
-	160,
-	151,
-	143,
-	135,
-	127,
-	120,
-	113
-];
-function demoMod() {
-	const sq = Array.from({ length: 64 }, (_, i) => i < 32 ? 90 : -90);
-	const saw = Array.from({ length: 64 }, (_, i) => Math.round(i * 3.5 - 112));
-	const kick = Array.from({ length: 3e3 }, (_, i) => Math.round(120 * Math.exp(-i / 700) * Math.sin(2 * Math.PI * i * (60 + 200 * Math.exp(-i / 150)) / 8287)));
-	let seed = 1;
-	const rnd = () => (seed = seed * 1103515245 + 12345 & 2147483647) / 2147483647 * 2 - 1;
-	const hat = Array.from({ length: 900 }, (_, i) => Math.round(90 * Math.exp(-i / 120) * rnd()));
-	const samples = [
-		[
-			"square",
-			sq,
-			true,
-			40
-		],
-		[
-			"saw bass",
-			saw,
-			true,
-			52
-		],
-		[
-			"kick",
-			kick,
-			false,
-			64
-		],
-		[
-			"hat",
-			hat,
-			false,
-			34
-		]
-	];
-	const w = new Writer();
-	w.text("breakerMED demo", 20);
-	for (let i = 0; i < 31; i++) {
-		const s = samples[i];
-		w.text(s ? s[0] : "", 22);
-		if (!s) w.u16(0).u8(0).u8(0).u16(0).u16(1);
-		else w.u16(s[1].length / 2).u8(0).u8(s[3]).u16(0).u16(s[2] ? s[1].length / 2 : 1);
-	}
-	const order = [
-		0,
-		1,
-		0,
-		2
-	];
-	w.u8(order.length).u8(127);
-	for (let i = 0; i < 128; i++) w.u8(order[i] ?? 0);
-	w.text("M.K.", 4);
-	const melody = [
-		24,
-		27,
-		31,
-		34,
-		31,
-		27,
-		24,
-		22,
-		24,
-		27,
-		31,
-		29,
-		27,
-		26,
-		24,
-		19
-	];
-	const bass = [
-		12,
-		12,
-		15,
-		15,
-		17,
-		17,
-		10,
-		10
-	];
-	for (const variant of [
-		0,
-		1,
-		2
-	]) for (let line = 0; line < 64; line++) for (let t = 0; t < 4; t++) {
-		let note = -1, inst = 0, e = 0, p = 0;
-		if (t === 0 && line % 4 === 0) note = melody[(line / 4 + variant * 3) % 16] - (variant === 2 ? 12 : 0), inst = 1, e = 10, p = 1;
-		if (t === 0 && line % 4 === 2 && variant === 1) note = melody[(line / 4 + 5) % 16], inst = 1, e = 4, p = 70;
-		if (t === 1 && line % 8 === 0) note = bass[line / 8 % 8], inst = 2;
-		if (t === 2 && line % 8 === 0) note = 12, inst = 3;
-		if (t === 2 && line % 16 === 12 && variant) note = 12, inst = 3, e = 12, p = 40;
-		if (t === 3 && line % 2 === 1) note = 24, inst = 4, e = 12, p = line % 4 === 3 ? 48 : 24;
-		if (t === 3 && line === 0 && variant === 0) e = 15, p = 5;
-		const per = note >= 0 ? PERIODS[Math.max(0, Math.min(35, note))] : 0;
-		w.u8(inst & 240 | per >> 8).u8(per & 255).u8((inst & 15) << 4 | e).u8(p);
-	}
-	for (const s of samples) for (const v of s[1]) w.u8(v);
-	return w.done();
-}
-// src/format/wav.ts
-/** A WAV file: 16 or 24-bit integers, or 32-bit floats. */
-function writeWav(pcm, bits = 16) {
-	const ch = Math.max(1, pcm.channels.length);
-	const frames = pcm.channels[0]?.length ?? 0;
-	const bytes = bits / 8;
-	const float = bits === 32;
-	const dataLen = frames * ch * bytes;
-	const out = new Uint8Array(44 + dataLen);
-	const v = new DataView(out.buffer);
-	const tag = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
-	tag(0, "RIFF");
-	v.setUint32(4, 36 + dataLen, true);
-	tag(8, "WAVE");
-	tag(12, "fmt ");
-	v.setUint32(16, 16, true);
-	v.setUint16(20, float ? 3 : 1, true);
-	v.setUint16(22, ch, true);
-	v.setUint32(24, Math.round(pcm.rate), true);
-	v.setUint32(28, Math.round(pcm.rate) * ch * bytes, true);
-	v.setUint16(32, ch * bytes, true);
-	v.setUint16(34, bits, true);
-	tag(36, "data");
-	v.setUint32(40, dataLen, true);
-	let o = 44;
-	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
-		const x = pcm.channels[c]?.[i] ?? 0;
-		const s = x > 1 ? 1 : x < -1 ? -1 : x === x ? x : 0;
-		if (float) v.setFloat32(o, s, true);
-		else if (bits === 16) v.setInt16(o, Math.round(s * 32767), true);
-		else {
-			const n = Math.round(s * 8388607);
-			v.setUint8(o, n & 255);
-			v.setUint8(o + 1, n >> 8 & 255);
-			v.setUint8(o + 2, n >> 16 & 255);
-		}
-		o += bytes;
-	}
-	return out;
-}
-/** Read a WAV file (null when it isn't one we can read). */
-function readWav(b) {
-	if (b.length < 12) return null;
-	const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
-	const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
-	if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
-	let fmt = 0, ch = 0, rate = 0, bits = 0, data = -1, dataLen = 0;
-	for (let o = 12; o + 8 <= b.length;) {
-		const id = tag(o);
-		const len = v.getUint32(o + 4, true);
-		if (id === "fmt " && o + 24 <= b.length) {
-			fmt = v.getUint16(o + 8, true);
-			ch = v.getUint16(o + 10, true);
-			rate = v.getUint32(o + 12, true);
-			bits = v.getUint16(o + 22, true);
-			if (fmt === 65534 && len >= 40 && o + 34 <= b.length) fmt = v.getUint16(o + 32, true);
-		} else if (id === "data") {
-			data = o + 8;
-			dataLen = Math.min(len, b.length - data);
-			break;
-		}
-		o += 8 + len + (len & 1);
-	}
-	if (data < 0 || !ch || !rate || !(fmt === 1 || fmt === 3)) return null;
-	const bytes = bits / 8;
-	if (![
-		1,
-		2,
-		3,
-		4,
-		8
-	].includes(bytes) || fmt === 3 && bytes < 4) return null;
-	const frames = Math.floor(dataLen / (bytes * ch));
-	const channels = Array.from({ length: ch }, () => new Float32Array(frames));
-	let o = data;
-	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
-		let x;
-		if (fmt === 3) x = bytes === 8 ? v.getFloat64(o, true) : v.getFloat32(o, true);
-		else if (bytes === 1) x = (b[o] - 128) / 128;
-		else if (bytes === 2) x = v.getInt16(o, true) / 32768;
-		else if (bytes === 3) x = ((b[o + 2] << 24 | b[o + 1] << 16 | b[o] << 8) >> 8) / 8388608;
-		else x = v.getInt32(o, true) / 2147483648;
-		channels[c][i] = x === x ? x : 0;
-		o += bytes;
-	}
-	return {
-		rate,
-		channels
-	};
-}
-/** a note as text: "C-3", "^^^" (off), "---" (none); past octave 9, "N7F" (hex) */
-function noteText(n) {
-	if (!n) return "---";
-	if (n === 128) return "^^^";
-	const oct = Math.floor((n - 1) / 12) + 1;
-	return oct <= 9 ? `${NOTE_NAMES[(n - 1) % 12]}${oct}` : `N${hex(n)}`;
-}
-function parseNoteText(s) {
-	if (s === "---") return 0;
-	if (s === "^^^") return 128;
-	if (/^N[0-9A-F]{2}$/i.test(s)) return parseInt(s.slice(1), 16);
-	const m = /^([A-G])([#-])(\d)$/.exec(s.toUpperCase());
-	if (!m) throw new Error(`song.json: "${s}" isn't a note`);
-	const base = {
-		C: 0,
-		D: 2,
-		E: 4,
-		F: 5,
-		G: 7,
-		A: 9,
-		B: 11
-	}[m[1]];
-	return (+m[3] - 1) * 12 + base + (m[2] === "#" ? 1 : 0) + 1;
-}
-/** The files of a song saved as .bmed (paths relative to its folder). */
-function writeBmed(song) {
-	const files = [];
-	const sampleRate = 8363;
-	const wav = (path, data) => {
-		files.push({
-			path,
-			data: writeWav({
-				rate: sampleRate,
-				channels: [data]
-			}, 16)
-		});
-		return path;
-	};
-	const instruments = song.instruments.map((ins, i) => {
-		const n = String(i + 1).padStart(2, "0");
-		const j = {
-			name: ins.name,
-			kind: ins.kind,
-			loopStart: ins.loopStart,
-			loopLength: ins.loopLength,
-			volume: ins.volume
-		};
-		if (ins.kind !== "empty" && ins.data.length) j.file = wav(`samples/${n}.wav`, ins.data);
-		if (ins.right?.length) j.right = wav(`samples/${n}-right.wav`, ins.right);
-		if (ins.waves?.length) j.waves = ins.waves.map((w, k) => wav(`samples/${n}-wave${k}.wav`, w));
-		if (ins.pingPong) j.pingPong = true;
-		if (ins.gain !== 1) j.gain = ins.gain;
-		if (ins.finetune) j.finetune = ins.finetune;
-		if (ins.transpose) j.transpose = ins.transpose;
-		if (ins.hold) j.hold = ins.hold;
-		if (ins.decay) j.decay = ins.decay;
-		if (ins.bits16) j.bits16 = true;
-		if (ins.kind === "analog") j.synth = ins.synth;
-		if (ins.kind === "drums") j.drums = ins.drums;
-		if (ins.kind === "fm") j.fm = ins.fm;
-		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
-		return j;
-	});
-	const blocks = song.blocks.map((b) => ({
-		name: b.name,
-		lines: b.lines,
-		pages: b.pages,
-		rows: b.cells.map((row) => row.map((c) => {
-			let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}${c.chord ? `:${c.chord.toString(16).toUpperCase()}` : ""}`;
-			for (let p = 0; p < b.pages; p++) s += c.cmd[p] || c.val[p] ? ` ${hex(c.cmd[p])}${hex(c.val[p])}` : " ....";
-			return s;
-		}).join(" | "))
-	}));
-	const json = {
-		breakermed: 1,
-		title: song.title,
-		from: song.format,
-		tempo: {
-			mode: song.tempoMode,
-			tempo: song.tempo,
-			speed: song.speed,
-			lpb: song.lpb
-		},
-		transpose: song.transpose,
-		noteShift: song.noteShift,
-		masterVolume: song.masterVolume,
-		restart: song.restart,
-		flags: song.flags,
-		tracks: Array.from({ length: song.tracks }, (_, t) => ({
-			name: song.trackNames[t] ?? "",
-			volume: song.trackVolume[t] ?? 64,
-			pan: song.trackPan[t] ?? 0,
-			...song.trackStrum?.[t] ? { strum: song.trackStrum[t] } : {}
-		})),
-		sequence: song.sequence,
-		...song.chords ? { chords: song.chords } : {},
-		...song.chordColumn ? { chordColumn: true } : {},
-		...song.echo ? { echo: song.echo } : {},
-		...song.swing ? { swing: song.swing } : {},
-		instruments,
-		blocks
-	};
-	files.unshift({
-		path: "song.json",
-		data: JSON.stringify(json, null, 1)
-	});
-	return files;
-}
-/** Read a .bmed song: its song.json, and a way to read the files next to it. */
-async function readBmed(jsonText, readFile) {
-	let j;
-	try {
-		j = JSON.parse(jsonText);
-	} catch {
-		throw new Error("song.json isn't valid JSON");
-	}
-	if (typeof j.breakermed !== "number") throw new Error("song.json isn't a breakerMED song");
-	if (j.breakermed > 1) throw new Error("this song was saved by a newer breakerMED: update the module");
-	const tracks = Math.max(1, Math.min(64, (j.tracks ?? []).length || 4));
-	const num = (v, d, lo = -Infinity, hi = Infinity) => typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d;
-	const sample = async (path) => {
-		if (!path || typeof path !== "string" || path.includes("..")) return /* @__PURE__ */ new Float32Array(0);
-		return readWav(await readFile(path))?.channels[0] ?? /* @__PURE__ */ new Float32Array(0);
-	};
-	const instruments = [];
-	for (const ij of (j.instruments ?? []).slice(0, 63)) {
-		const ins = emptyInstrument();
-		ins.name = String(ij.name ?? "").slice(0, 40);
-		ins.kind = [
-			"sample",
-			"synth",
-			"hybrid",
-			"analog",
-			"fm",
-			"drums",
-			"empty"
-		].includes(ij.kind) ? ij.kind : "empty";
-		ins.data = await sample(ij.file);
-		if (ij.right) ins.right = await sample(ij.right);
-		if (Array.isArray(ij.waves)) ins.waves = await Promise.all(ij.waves.slice(0, 64).map((w) => sample(w)));
-		ins.loopStart = num(ij.loopStart, 0, 0);
-		ins.loopLength = num(ij.loopLength, 0, 0);
-		ins.pingPong = !!ij.pingPong;
-		ins.volume = num(ij.volume, 64, 0, 64);
-		ins.gain = num(ij.gain, 1, 0, 1);
-		ins.finetune = num(ij.finetune, 0, -8, 7);
-		ins.transpose = num(ij.transpose, 0, -48, 48);
-		ins.hold = num(ij.hold, 0, 0, 255);
-		ins.decay = num(ij.decay, 0, 0, 255);
-		ins.bits16 = !!ij.bits16;
-		if (Array.isArray(ij.volTable)) ins.volTable = ij.volTable, ins.waveTable = ij.waveTable ?? [], ins.volSpeed = ij.volSpeed, ins.waveSpeed = ij.waveSpeed;
-		if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
-		else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
-		else if (ins.kind === "fm") ins.fm = sanitizeFm(ij.fm);
-		else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
-		instruments.push(ins);
-	}
-	const blocks = (j.blocks ?? []).map((bj, n) => {
-		const lines = num(bj.lines, 64, 1, 3200);
-		const pages = num(bj.pages, 1, 1, 16);
-		const b = newBlock(tracks, lines, pages, String(bj.name ?? ""));
-		(bj.rows ?? []).slice(0, lines).forEach((row, l) => {
-			String(row).split("|").slice(0, tracks).forEach((cellText, t) => {
-				const parts = cellText.trim().split(/\s+/);
-				const c = emptyCell(pages);
-				c.note = parseNoteText(parts[0] ?? "---");
-				const [instText, chordText] = (parts[1] ?? "..").split(":");
-				c.inst = instText && instText !== ".." ? Math.min(63, parseInt(instText, 16) || 0) : 0;
-				const chord = chordText ? parseInt(chordText, 16) : 0;
-				if (chord >= 1 && chord <= 15) c.chord = chord;
-				for (let p = 0; p < pages; p++) {
-					const x = parts[2 + p];
-					if (x && x !== "....") {
-						if (!/^[0-9a-f]{4}$/i.test(x)) throw new Error(`song.json: block ${n}, line ${l}: "${x}" isn't a command`);
-						c.cmd[p] = parseInt(x.slice(0, 2), 16);
-						c.val[p] = parseInt(x.slice(2), 16);
-					}
-				}
-				b.cells[l][t] = c;
-			});
-		});
-		return b;
-	});
-	const song = {
-		title: String(j.title ?? ""),
-		format: typeof j.from === "string" && /^(MMD[0-3]|MOD .{1,6}|BMED)$/.test(j.from) ? j.from : "BMED",
-		tracks,
-		blocks: blocks.length ? blocks : [newBlock(tracks)],
-		sequence: (Array.isArray(j.sequence) ? j.sequence : [0]).map((x) => num(x, 0, 0)).filter((x) => x < Math.max(1, blocks.length)),
-		restart: num(j.restart, 0, 0),
-		instruments,
-		tempoMode: [
-			"pt",
-			"spd",
-			"bpm"
-		].includes(j.tempo?.mode) ? j.tempo.mode : "bpm",
-		tempo: num(j.tempo?.tempo, 125, 1, 999),
-		speed: num(j.tempo?.speed, 6, 1, 32),
-		lpb: num(j.tempo?.lpb, 4, 1, 32),
-		transpose: num(j.transpose, 0, -48, 48),
-		noteShift: num(j.noteShift, 0, -48, 48),
-		masterVolume: num(j.masterVolume, 64, 0, 64),
-		trackVolume: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.volume, 64, 0, 64)),
-		trackPan: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.pan, amigaPan(tracks)[t], -1, 1)),
-		trackNames: Array.from({ length: tracks }, (_, t) => String(j.tracks?.[t]?.name ?? "").slice(0, 24)),
-		flags: Object.fromEntries(Object.entries({
-			volHex: true,
-			vol7bit: false,
-			ptSlides: false,
-			eightChannel: false,
-			hardwareMix: true,
-			filter: false
-		}).map(([k, d]) => [k, typeof j.flags?.[k] === "boolean" ? j.flags[k] : d]))
-	};
-	if (!song.sequence.length) song.sequence = [0];
-	if (j.chordColumn === true) song.chordColumn = true;
-	const echo = cleanEcho(j.echo);
-	if (echo) song.echo = echo;
-	const swing = num(j.swing, 0, 0, 100);
-	if (swing) song.swing = swing;
-	const strum = Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.strum, 0, 0, 200));
-	if (strum.some((x) => x)) song.trackStrum = strum;
-	if (Array.isArray(j.chords)) song.chords = DEFAULT_CHORDS.map((d, i) => {
-		const x = j.chords[i];
-		const notes = Array.isArray(x?.notes) ? x.notes.filter((n) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, 5) : [];
-		return notes.length ? {
-			name: String(x.name ?? "").slice(0, 8),
-			notes
-		} : {
-			name: d.name,
-			notes: [...d.notes]
-		};
-	});
-	return song;
-}
-// src/template.ts
-/**
-* breakerMED — the "new song" template: 8 named tracks, a drum machine, an analog
-* bass, a lead, a pad and an FM e-piano for the chords, and a first bar written so
-* that ▶ plays something at once. Everything is computed (no sample to load).
-*/
-/** the template's tracks, in order (a 9th track and more stay unnamed) */
-var TEMPLATE_TRACKS = [
-	"kick",
-	"snare",
-	"hats",
-	"bass",
-	"lead",
-	"pad",
-	"chords",
-	"fx"
-];
-/** C-1 = 1: a note's number from its name in octave n ("C", 3) */
-var note = (name, octave) => 1 + (octave - 1) * 12 + [
-	"C",
-	"C#",
-	"D",
-	"D#",
-	"E",
-	"F",
-	"F#",
-	"G",
-	"G#",
-	"A",
-	"A#",
-	"B"
-].indexOf(name);
-function synth(kind, preset) {
-	const sk = SYNTHS.find((s) => s.kind === kind);
-	const i = {
-		...emptyInstrument(),
-		kind,
-		name: `${sk.cmd} ${preset}`
-	};
-	i[sk.field] = sk.preset(preset);
-	return i;
-}
-/** A new song ready to play: `tracks` tracks (8 by default), the template's instruments and a first bar. */
-function templateSong(tracks = TEMPLATE_TRACKS.length) {
-	const n = Math.max(1, Math.min(16, tracks));
-	const s = newSong(n);
-	s.title = "untitled";
-	s.chordColumn = true;
-	s.trackNames = Array.from({ length: n }, (_, t) => TEMPLATE_TRACKS[t] ?? "");
-	s.instruments = [
-		{
-			...emptyInstrument(),
-			kind: "drums",
-			name: "drums classic",
-			drums: drumKit("classic")
-		},
-		synth("analog", "bass"),
-		synth("analog", "lead"),
-		synth("analog", "pad"),
-		synth("fm", "epiano")
-	];
-	const b = s.blocks[0];
-	const put = (line, track, n, inst, chord) => {
-		if (track >= s.tracks) return;
-		for (let at = line; at < b.lines; at += 16) {
-			const c = b.cells[at][track];
-			c.note = n, c.inst = inst;
-			if (chord) c.chord = chord;
-		}
-	};
-	for (const l of [
-		0,
-		6,
-		8
-	]) put(l, 0, note("C", 3), 1);
-	for (const l of [4, 12]) put(l, 1, note("D", 3), 1);
-	for (let l = 0; l < 16; l += 2) put(l, 2, note("E", 3), 1);
-	put(10, 2, note("F#", 3), 1);
-	for (const [l, nm] of [
-		[0, "C"],
-		[3, "C"],
-		[6, "D#"],
-		[8, "F"],
-		[11, "G"],
-		[14, "D#"]
-	]) put(l, 3, note(nm, 2), 2);
-	put(0, 6, note("C", 3), 5, 2);
-	put(8, 6, note("G#", 2), 5, 1);
-	return s;
-}
 // src/format/aiff.ts
 /** an IEEE 754 80-bit extended number (AIFF's sample rate; whole rates below 2³² are exact) */
 function extended(n) {
@@ -4878,6 +2604,96 @@ function writeFlac(pcm, bits = 16) {
 		w.put(crc16(w.slice(frameAt)), 16);
 	}
 	return w.done();
+}
+// src/format/wav.ts
+/** A WAV file: 16 or 24-bit integers, or 32-bit floats. */
+function writeWav(pcm, bits = 16) {
+	const ch = Math.max(1, pcm.channels.length);
+	const frames = pcm.channels[0]?.length ?? 0;
+	const bytes = bits / 8;
+	const float = bits === 32;
+	const dataLen = frames * ch * bytes;
+	const out = new Uint8Array(44 + dataLen);
+	const v = new DataView(out.buffer);
+	const tag = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+	tag(0, "RIFF");
+	v.setUint32(4, 36 + dataLen, true);
+	tag(8, "WAVE");
+	tag(12, "fmt ");
+	v.setUint32(16, 16, true);
+	v.setUint16(20, float ? 3 : 1, true);
+	v.setUint16(22, ch, true);
+	v.setUint32(24, Math.round(pcm.rate), true);
+	v.setUint32(28, Math.round(pcm.rate) * ch * bytes, true);
+	v.setUint16(32, ch * bytes, true);
+	v.setUint16(34, bits, true);
+	tag(36, "data");
+	v.setUint32(40, dataLen, true);
+	let o = 44;
+	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
+		const x = pcm.channels[c]?.[i] ?? 0;
+		const s = x > 1 ? 1 : x < -1 ? -1 : x === x ? x : 0;
+		if (float) v.setFloat32(o, s, true);
+		else if (bits === 16) v.setInt16(o, Math.round(s * 32767), true);
+		else {
+			const n = Math.round(s * 8388607);
+			v.setUint8(o, n & 255);
+			v.setUint8(o + 1, n >> 8 & 255);
+			v.setUint8(o + 2, n >> 16 & 255);
+		}
+		o += bytes;
+	}
+	return out;
+}
+/** Read a WAV file (null when it isn't one we can read). */
+function readWav(b) {
+	if (b.length < 12) return null;
+	const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+	if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+	let fmt = 0, ch = 0, rate = 0, bits = 0, data = -1, dataLen = 0;
+	for (let o = 12; o + 8 <= b.length;) {
+		const id = tag(o);
+		const len = v.getUint32(o + 4, true);
+		if (id === "fmt " && o + 24 <= b.length) {
+			fmt = v.getUint16(o + 8, true);
+			ch = v.getUint16(o + 10, true);
+			rate = v.getUint32(o + 12, true);
+			bits = v.getUint16(o + 22, true);
+			if (fmt === 65534 && len >= 40 && o + 34 <= b.length) fmt = v.getUint16(o + 32, true);
+		} else if (id === "data") {
+			data = o + 8;
+			dataLen = Math.min(len, b.length - data);
+			break;
+		}
+		o += 8 + len + (len & 1);
+	}
+	if (data < 0 || !ch || !rate || !(fmt === 1 || fmt === 3)) return null;
+	const bytes = bits / 8;
+	if (![
+		1,
+		2,
+		3,
+		4,
+		8
+	].includes(bytes) || fmt === 3 && bytes < 4) return null;
+	const frames = Math.floor(dataLen / (bytes * ch));
+	const channels = Array.from({ length: ch }, () => new Float32Array(frames));
+	let o = data;
+	for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) {
+		let x;
+		if (fmt === 3) x = bytes === 8 ? v.getFloat64(o, true) : v.getFloat32(o, true);
+		else if (bytes === 1) x = (b[o] - 128) / 128;
+		else if (bytes === 2) x = v.getInt16(o, true) / 32768;
+		else if (bytes === 3) x = ((b[o + 2] << 24 | b[o + 1] << 16 | b[o] << 8) >> 8) / 8388608;
+		else x = v.getInt32(o, true) / 2147483648;
+		channels[c][i] = x === x ? x : 0;
+		o += bytes;
+	}
+	return {
+		rate,
+		channels
+	};
 }
 // src/replayer.ts
 /**
@@ -6000,6 +3816,2711 @@ function encode(pcm, format, bits, dither = true) {
 function trackUsed(song, t) {
 	const used = new Set(song.sequence);
 	return song.blocks.some((b, n) => used.has(n) && b.cells.some((row) => !!row[t]?.note));
+}
+// src/screens.ts
+var SCREENS = [
+	{
+		id: "block",
+		label: "BLOCK",
+		key: "B"
+	},
+	{
+		id: "instrument",
+		label: "INSTRUMENT",
+		key: "I"
+	},
+	{
+		id: "song",
+		label: "SONG",
+		key: "S"
+	},
+	{
+		id: "export",
+		label: "EXPORT",
+		key: "E"
+	}
+];
+var FORMATS = [
+	"wav",
+	"aiff",
+	"flac",
+	"mp3",
+	"m4a",
+	"ogg",
+	"opus"
+];
+var WHAT = [
+	"master",
+	"master + stems",
+	"stems only"
+];
+var newExportChoices = () => ({
+	path: "",
+	format: "wav",
+	rate: 48e3,
+	bits: 24,
+	quality: "",
+	what: "master + stems",
+	normalize: false,
+	tail: 1.5
+});
+/** the `med export` line the choices make */
+function exportLine(x, q) {
+	const lossy = isLossy(x.format);
+	const parts = ["med export", q(`${(x.path.trim() || "songs/untitled").replace(/\.(wav|aiff?|flac|mp3|m4a|ogg|opus)$/i, "")}.${extOf(x.format)}`)];
+	if (x.format !== "opus" && x.rate !== 48e3) parts.push(`--rate ${x.rate}`);
+	if (lossy) {
+		if (x.quality && x.quality !== QUALITIES[x.format][0]) parts.push(`--quality ${x.quality}`);
+	} else if (x.bits !== (x.format === "flac" ? 16 : 24)) parts.push(`--bits ${x.bits}`);
+	if (x.what === "master + stems") parts.push("--stems");
+	if (x.what === "stems only") parts.push("--only-stems");
+	if (x.normalize) parts.push("--normalize");
+	if (x.tail !== 1.5) parts.push(`--tail ${x.tail}`);
+	return parts.join(" ");
+}
+/** keep the choices possible: FLAC has no 32 bits, lossy formats stop at 48 kHz, Opus is 48 kHz, a quality of the format */
+function fixChoices(x) {
+	if (x.format === "flac" && x.bits === 32) x.bits = 24;
+	if (isLossy(x.format)) {
+		if (x.rate > 48e3) x.rate = 48e3;
+		if (x.format === "opus") x.rate = 48e3;
+		const qs = QUALITIES[x.format];
+		if (!qs.includes(x.quality)) x.quality = qs[0];
+	}
+}
+var cycle = (list, v, d) => list[((list.indexOf(v) + d) % list.length + list.length) % list.length];
+var clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+function makeScreens(ib, engine, st) {
+	const { BOLD, t, q, truncate } = ib.lib;
+	const run = (line) => void ib.shell.run(line);
+	/** is the encoder pack there? asked once in a while (the EXPORT screen says so for MP3…) */
+	let encoders = "unknown";
+	let askedAt = 0;
+	const askEncoders = () => {
+		if (Date.now() - askedAt < 5e3) return;
+		askedAt = Date.now();
+		const a = ib.audio;
+		if (!a.encoders || !a.encode) return void (encoders = "old");
+		a.encoders().then((e) => (encoders = e.installed ? "ready" : e.supported ? "missing" : "none", ib.ui.redraw())).catch(() => encoders = "unknown");
+	};
+	const dirty = () => st.editor && (st.editor.dirty = true);
+	const rename = async (tr) => {
+		const s = st.song;
+		const name = await ib.ui.prompt(t("track name"), {
+			initial: s.trackNames[tr] ?? "",
+			placeholder: `${t("track")} ${tr + 1}`
+		});
+		if (name !== null) run(`med track ${tr + 1} name ${q(name.trim())}`);
+	};
+	const songRows = (s) => {
+		const f = s.flags;
+		const echo = s.echo;
+		return [
+			{
+				label: t("title"),
+				value: () => s.title || "—",
+				activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (s.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60), dirty(), ib.ui.redraw()))
+			},
+			{
+				label: t("tempo"),
+				value: () => `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix).toFixed(0)})`,
+				nudge: (d, big) => (s.tempo = clamp(s.tempo + d * (big ? 10 : 1), 1, 255), dirty())
+			},
+			{
+				label: t("speed"),
+				value: () => `${s.speed} ${t("ticks a line")}`,
+				nudge: (d) => (s.speed = clamp(s.speed + d, 1, 32), dirty())
+			},
+			{
+				label: t("lines a beat"),
+				value: () => String(s.lpb),
+				nudge: (d) => (s.lpb = clamp(s.lpb + d, 1, 32), dirty())
+			},
+			{
+				label: t("swing"),
+				value: () => s.swing ? `${s.swing}` : t("straight"),
+				nudge: (d, big) => {
+					const v = clamp((s.swing ?? 0) + d * (big ? 25 : 5), 0, 100);
+					if (v) s.swing = v;
+					else delete s.swing;
+					dirty();
+				},
+				tip: t("every other line longer: 50 a lazy shuffle, 100 triplets")
+			},
+			{
+				label: t("tracks"),
+				value: () => `${s.tracks}`,
+				nudge: (d) => s.tracks + d >= 1 && s.tracks + d <= 16 && run(`med tracks ${s.tracks + d}`)
+			},
+			{
+				label: t("echo"),
+				value: () => echo ? t(echo.type) : t("off"),
+				nudge: (d) => {
+					const next = cycle([
+						"off",
+						"normal",
+						"cross"
+					], echo?.type ?? "off", d);
+					if (next === "off") delete s.echo;
+					else s.echo = cleanEcho({
+						type: next,
+						ms: echo?.ms ?? 250,
+						depth: echo?.depth ?? 2
+					});
+					dirty();
+				}
+			},
+			...echo ? [{
+				label: `  ${t("delay")}`,
+				value: () => `${echo.ms} ms`,
+				nudge: (d, big) => (echo.ms = clamp(echo.ms + d * (big ? 100 : 10), 1, ECHO_MAX_MS), dirty())
+			}, {
+				label: `  ${t("depth")}`,
+				value: () => `${echo.depth} (${echo.depth <= 2 ? t("long") : echo.depth >= 5 ? t("short") : t("medium")})`,
+				nudge: (d) => (echo.depth = clamp(echo.depth + d, 1, 6), dirty())
+			}] : [],
+			{
+				label: t("LED filter"),
+				value: () => f.filter ? t("on") : t("off"),
+				nudge: () => (f.filter = !f.filter, dirty()),
+				activate: () => (f.filter = !f.filter, dirty())
+			}
+		];
+	};
+	/** the tracks table's columns */
+	const COLS = [
+		"name",
+		"vol",
+		"pan",
+		"strum",
+		"mute",
+		"solo"
+	];
+	const nudgeTrack = (tr, col, d, big) => {
+		const s = st.song, e = st.editor;
+		const key = COLS[col];
+		if (key === "vol") e.setTrack(tr, { volume: (s.trackVolume[tr] ?? 64) + d * (big ? 8 : 1) });
+		else if (key === "pan") e.setTrack(tr, { pan: (s.trackPan[tr] ?? 0) + d * (big ? .25 : .05) });
+		else if (key === "strum") e.setTrack(tr, { strum: (s.trackStrum?.[tr] ?? 0) + d * (big ? 50 : 5) });
+		else if (key === "mute" || key === "solo") run(`med ${key} ${tr + 1}`);
+	};
+	const activateTrack = (tr, col) => {
+		const key = COLS[col];
+		if (key === "name") rename(tr);
+		else if (key === "mute" || key === "solo") run(`med ${key} ${tr + 1}`);
+	};
+	const drawSong = (ui, r, focused) => {
+		const c = ui.c;
+		const s = st.song;
+		const count = (n, one, many) => `${n} ${t(n === 1 ? one : many)}`;
+		const inner = ui.box(r, {
+			title: `${t("SONG")} · ${count(s.sequence.length, "position", "positions")} · ${count(s.blocks.length, "block", "blocks")}`,
+			focused
+		});
+		const rows = songRows(s);
+		const total = rows.length + s.tracks;
+		st.songRow = clamp(st.songRow, 0, total - 1);
+		st.songCol = clamp(st.songCol, 0, COLS.length - 1);
+		const labelW = 14;
+		let y = inner.y;
+		const top = inner.y + inner.h;
+		rows.forEach((row, i) => {
+			if (y >= top) return;
+			const on = i === st.songRow;
+			ui.text(inner.x + 1, y, truncate(row.label, 13), { fg: on ? c.fg : c.muted });
+			let x = inner.x + 1 + labelW;
+			if (row.nudge) x += ui.button(x, y, "‹", () => (st.songRow = i, row.nudge(-1, false)), { quiet: true });
+			x = ui.text(x, y, ` ${row.value()} `, {
+				fg: on ? c.accent : c.fg,
+				attrs: on ? BOLD : 0
+			});
+			if (row.nudge) ui.button(x, y, "›", () => (st.songRow = i, row.nudge(1, false)), { quiet: true });
+			if (on && focused) ui.tint({
+				x: inner.x,
+				y,
+				w: labelW,
+				h: 1
+			}, void 0, c.highlight);
+			ui.hit({
+				x: inner.x,
+				y,
+				w: labelW,
+				h: 1
+			}, {
+				onClick: () => st.songRow = i,
+				onDouble: () => row.activate?.(),
+				onWheel: (d) => row.nudge?.(d > 0 ? -1 : 1, false),
+				tip: row.tip
+			});
+			y++;
+		});
+		y++;
+		if (y >= top) return;
+		const nameW = Math.max(8, Math.min(18, inner.w - 40));
+		const colX = [
+			inner.x + 4,
+			inner.x + 5 + nameW,
+			inner.x + 11 + nameW,
+			inner.x + 18 + nameW,
+			inner.x + 26 + nameW,
+			inner.x + 31 + nameW
+		];
+		COLS.forEach((k, i) => ui.text(colX[i], y, t(k), { fg: st.songRow >= rows.length && st.songCol === i ? c.accent : c.subtle }));
+		y++;
+		const rowsLeft = top - y;
+		const cur = st.songRow - rows.length;
+		const scroll = Math.max(0, Math.min(s.tracks - rowsLeft, cur - rowsLeft + 1));
+		for (let tr = scroll; tr < s.tracks && y < top; tr++, y++) {
+			const here = tr === cur;
+			const muted = engine.muted.has(tr);
+			const solo = engine.muted.size === s.tracks - 1 && !muted;
+			const pan = s.trackPan[tr] ?? 0;
+			const cells = [
+				truncate(trackName(s, tr), nameW),
+				String(s.trackVolume[tr] ?? 64),
+				pan === 0 ? "C" : `${pan < 0 ? "L" : "R"}${Math.round(Math.abs(pan) * 100)}`,
+				s.trackStrum?.[tr] ? `${s.trackStrum[tr]} ms` : "—",
+				muted ? "×" : "·",
+				solo ? "S" : "·"
+			];
+			ui.text(inner.x + 1, y, String(tr + 1).padStart(2), { fg: c.faint });
+			cells.forEach((v, i) => {
+				const on = here && st.songCol === i;
+				const fg = i === 0 ? muted ? c.faint : c.fg : i === 4 && muted ? c.warning : i === 5 && solo ? c.success : c.muted;
+				ui.text(colX[i], y, v, {
+					fg: on ? c.accent : fg,
+					attrs: on ? BOLD : 0
+				}, (colX[i + 1] ?? inner.x + inner.w) - colX[i] - 1);
+				if (on && focused) ui.tint({
+					x: colX[i] - 1,
+					y,
+					w: (colX[i + 1] ?? colX[i] + 6) - colX[i],
+					h: 1
+				}, void 0, c.highlight);
+				ui.hit({
+					x: colX[i] - 1,
+					y,
+					w: (colX[i + 1] ?? colX[i] + 6) - colX[i],
+					h: 1
+				}, {
+					onClick: () => (st.songRow = rows.length + tr, st.songCol = i, i >= 4 && activateTrack(tr, i)),
+					onDouble: () => i === 0 && activateTrack(tr, 0),
+					onWheel: (d) => i >= 1 && i <= 3 && nudgeTrack(tr, i, d > 0 ? -1 : 1, false),
+					tip: i === 0 ? t("double-click: rename") : i <= 3 ? t("wheel or ⇧←→: change") : t("click: switch")
+				});
+			});
+		}
+	};
+	const keySong = (k) => {
+		const s = st.song;
+		const rows = songRows(s);
+		const total = rows.length + s.tracks;
+		const tr = st.songRow - rows.length;
+		switch (k.key) {
+			case "up": return st.songRow = Math.max(0, st.songRow - 1), true;
+			case "down": return st.songRow = Math.min(total - 1, st.songRow + 1), true;
+			case "left":
+			case "right": {
+				const d = k.key === "left" ? -1 : 1;
+				if (tr < 0) return rows[st.songRow].nudge?.(d, k.shift), true;
+				if (k.shift) return nudgeTrack(tr, st.songCol, d, false), true;
+				return st.songCol = clamp(st.songCol + d, 0, COLS.length - 1), true;
+			}
+			case "enter":
+				if (tr < 0) rows[st.songRow].activate?.();
+				else activateTrack(tr, st.songCol);
+				return true;
+		}
+		return false;
+	};
+	/** the file: the song's own name (its folder too) until you choose another */
+	const ensurePath = () => {
+		const x = st.exp;
+		if (!x.path.trim()) x.path = (st.path || "songs/untitled").replace(/\.(bmed|med|mod)$/i, "").replace(/\.[^./]+$/, "") || "songs/untitled";
+	};
+	const expRows = () => {
+		ensurePath();
+		const x = st.exp;
+		const lossy = isLossy(x.format);
+		return [
+			{
+				label: t("file"),
+				value: () => `${x.path.replace(/\.[a-z0-9]+$/i, "")}.${extOf(x.format)}`,
+				activate: () => void ib.ui.prompt(t("export to"), { initial: x.path }).then((v) => v && (x.path = v.trim(), ib.ui.redraw()))
+			},
+			{
+				label: t("format"),
+				value: () => x.format.toUpperCase() + (lossy ? ` (${t("encoder pack")})` : ""),
+				nudge: (d) => (x.format = cycle(FORMATS, x.format, d), fixChoices(x))
+			},
+			{
+				label: t("rate"),
+				value: () => `${x.rate} Hz`,
+				nudge: (d) => {
+					if (x.format === "opus") return;
+					const ok = lossy ? RATES.filter((r) => r <= 48e3) : RATES;
+					x.rate = cycle(ok, ok.includes(x.rate) ? x.rate : 48e3, d);
+				}
+			},
+			lossy ? {
+				label: t("quality"),
+				value: () => describe(x.format, x.bits, x.rate, x.quality).split(" · ")[1],
+				nudge: (d) => x.quality = cycle(QUALITIES[x.format], x.quality, d)
+			} : {
+				label: t("bits"),
+				value: () => x.bits === 32 ? t("32-bit float") : `${x.bits} bits`,
+				nudge: (d) => x.bits = cycle(x.format === "flac" ? [16, 24] : [
+					16,
+					24,
+					32
+				], x.bits, d)
+			},
+			{
+				label: t("tracks"),
+				value: () => t(x.what),
+				nudge: (d) => x.what = cycle(WHAT, x.what, d)
+			},
+			{
+				label: t("normalize"),
+				value: () => x.normalize ? t("on (-0.3 dB)") : t("off"),
+				nudge: () => x.normalize = !x.normalize,
+				activate: () => x.normalize = !x.normalize
+			},
+			{
+				label: t("tail"),
+				value: () => `${x.tail} s`,
+				nudge: (d) => x.tail = clamp(Math.round((x.tail + d * .5) * 2) / 2, 0, 10)
+			}
+		];
+	};
+	/** what the last export did, shown under the button */
+	let last = null;
+	const doExport = () => {
+		const x = st.exp;
+		if (last?.kind === "busy") return;
+		if (isLossy(x.format) && encoders !== "ready") {
+			askedAt = 0;
+			askEncoders();
+		}
+		const line = exportLine(x, q);
+		last = {
+			text: t("exporting… (the LOG shows each file)"),
+			kind: "busy"
+		};
+		ib.shell.run(line).then((code) => last = code === 0 ? {
+			text: `✓ ${t("exported")}: ${line.replace(/^med export /, "")}`,
+			kind: "ok"
+		} : {
+			text: t("✗ the export failed: the LOG says why"),
+			kind: "error"
+		}).catch((e) => last = {
+			text: `✗ ${String(e?.message ?? e)}`,
+			kind: "error"
+		}).finally(() => ib.ui.redraw());
+	};
+	const drawExport = (ui, r, focused) => {
+		const c = ui.c;
+		ensurePath();
+		const x = st.exp;
+		fixChoices(x);
+		if (isLossy(x.format)) askEncoders();
+		const inner = ui.box(r, {
+			title: t("EXPORT"),
+			focused
+		});
+		const rows = expRows();
+		st.expRow = clamp(st.expRow, 0, rows.length);
+		const labelW = 12;
+		let y = inner.y;
+		rows.forEach((row, i) => {
+			const on = i === st.expRow;
+			ui.text(inner.x + 1, y, row.label, { fg: on ? c.fg : c.muted });
+			let xx = inner.x + 1 + labelW;
+			if (row.nudge) xx += ui.button(xx, y, "‹", () => (st.expRow = i, row.nudge(-1, false)), { quiet: true });
+			xx = ui.text(xx, y, ` ${row.value()} `, {
+				fg: on ? c.accent : c.fg,
+				attrs: on ? BOLD : 0
+			}, inner.x + inner.w - xx - 2);
+			if (row.nudge) ui.button(xx, y, "›", () => (st.expRow = i, row.nudge(1, false)), { quiet: true });
+			if (on && focused) ui.tint({
+				x: inner.x,
+				y,
+				w: labelW,
+				h: 1
+			}, void 0, c.highlight);
+			ui.hit({
+				x: inner.x,
+				y,
+				w: labelW,
+				h: 1
+			}, {
+				onClick: () => st.expRow = i,
+				onDouble: () => row.activate?.(),
+				onWheel: (d) => row.nudge?.(d > 0 ? -1 : 1, false)
+			});
+			y++;
+		});
+		y++;
+		ui.text(inner.x + 1, y++, describe(x.format, x.bits, x.rate, x.quality) + (x.normalize ? ` · ${t("normalized")}` : ""), { fg: c.subtle });
+		if (isLossy(x.format) && encoders !== "ready" && encoders !== "unknown") {
+			const why = encoders === "missing" ? t("needs the encoder pack: run `encoders install` in the shell (once, ~3 MB)") : encoders === "old" ? t("needs a newer ICEBREAKER (0.5.5+): WAV, AIFF and FLAC work here") : t("no encoder pack for this computer yet");
+			ui.text(inner.x + 1, y++, truncate(why, inner.w - 2), { fg: c.warning });
+		}
+		y++;
+		const bx = inner.x + 1;
+		const on = st.expRow === rows.length;
+		ui.button(bx, y, ` ▶ ${t("EXPORT")} `, doExport, {
+			cmd: exportLine(x, q),
+			selected: on && focused,
+			tip: exportLine(x, q)
+		});
+		y += 2;
+		if (last && y < inner.y + inner.h) ui.text(inner.x + 1, y++, truncate(last.text, inner.w - 2), { fg: last.kind === "ok" ? c.success : last.kind === "error" ? c.error : c.accent });
+		if (y < inner.y + inner.h) ui.text(inner.x + 1, y, truncate(exportLine(x, q), inner.w - 2), { fg: c.faint });
+	};
+	const keyExport = (k) => {
+		const rows = expRows();
+		switch (k.key) {
+			case "up": return st.expRow = Math.max(0, st.expRow - 1), true;
+			case "down": return st.expRow = Math.min(rows.length, st.expRow + 1), true;
+			case "left":
+			case "right":
+				if (st.expRow < rows.length) rows[st.expRow].nudge?.(k.key === "left" ? -1 : 1, k.shift), fixChoices(st.exp);
+				return true;
+			case "enter":
+				if (st.expRow === rows.length) doExport();
+				else rows[st.expRow].activate?.();
+				return true;
+		}
+		return false;
+	};
+	/** the tabs over the right side: one line */
+	const drawTabs = (ui, x, y, w) => {
+		const c = ui.c;
+		let xx = x;
+		for (const s of SCREENS) {
+			const label = ` ${t(s.label)} `;
+			if (xx + label.length > x + w) break;
+			xx += ui.button(xx, y, label, () => st.screen = s.id, {
+				selected: st.screen === s.id,
+				quiet: st.screen !== s.id,
+				tip: `alt ${s.key}`
+			});
+		}
+		if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E", { fg: c.faint });
+	};
+	return {
+		drawSong,
+		keySong,
+		drawExport,
+		keyExport,
+		drawTabs
+	};
+}
+// src/app.ts
+/**
+* ⌘Z / ⌘⇧Z (and med undo / redo): if it takes away the instrument the keys
+* play (a load, a chop, a bounce undone), the keys go to the nearest one left.
+*/
+function undoRedo(st, redo) {
+	const s = st.song, e = st.editor;
+	if (!s || !e) return null;
+	const had = s.instruments[st.inst] && s.instruments[st.inst].kind !== "empty";
+	const label = redo ? e.redo() : e.undo();
+	const now = s.instruments[st.inst];
+	if (had && (!now || now.kind === "empty")) {
+		let k = Math.min(st.inst, s.instruments.length - 1);
+		while (k > 0 && s.instruments[k]?.kind === "empty") k--;
+		st.inst = Math.max(0, k);
+	}
+	return label;
+}
+function newState() {
+	return {
+		song: null,
+		editor: null,
+		path: "",
+		seq: 0,
+		line: 0,
+		track: 0,
+		col: 0,
+		inst: 0,
+		octave: 2,
+		edit: false,
+		step: 1,
+		sel: null,
+		clip: null,
+		error: "",
+		screen: "block",
+		songRow: 0,
+		songCol: 0,
+		exp: newExportChoices(),
+		expRow: 0,
+		synthRow: 0,
+		drumRow: 0,
+		drumCol: 0
+	};
+}
+/** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
+/** a cell's width: "C-3 01 0C20", and " 3" when the chord column shows */
+var cellW = (pages, chords) => 6 + (chords ? 2 : 0) + pages * 5;
+/** where a column sits in its cell */
+var colX = (col, chords) => col === 0 ? 0 : col <= 2 ? 3 + col : col === 3 ? 7 : (chords ? 9 : 7) + Math.floor((col - 4) / 4) * 5 + (col - 4) % 4;
+var colW = (col) => col === 0 ? 3 : 1;
+var LEFT = 22;
+var HEX = "0123456789abcdef";
+function makeApp(ib, engine, st) {
+	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
+	const run = (line) => void ib.shell.run(line);
+	const seqList = new ListView();
+	const instList = new ListView();
+	seqList.cmdOf = (i) => `med pos ${hex(i)}`;
+	seqList.onActivate = (i) => run(`med play song ${hex(i)}`);
+	seqList.menuOf = (i) => [
+		{
+			label: t("play from here"),
+			cmd: `med play song ${hex(i)}`
+		},
+		"-",
+		{
+			label: t("insert a new block here"),
+			cmd: `med seq new ${hex(i)}`
+		},
+		{
+			label: t("insert a copy of this block"),
+			cmd: `med seq copy ${hex(i)}`
+		},
+		{
+			label: t("remove this position"),
+			cmd: `med seq rm ${hex(i)}`,
+			danger: true
+		}
+	];
+	const screens = makeScreens(ib, engine, st);
+	instList.onSelect = (i) => st.inst = i;
+	instList.onActivate = (i) => preview(st.octave * 12, i);
+	/** first track shown (the page scrolls sideways when they don't fit) */
+	let firstTrack = 0;
+	/** where the block was drawn (mouse → cell) */
+	let geo = null;
+	let anchor = null;
+	const song = () => st.song;
+	const blockNo = () => st.song?.sequence[st.seq] ?? 0;
+	const block = () => st.song?.blocks[blockNo()];
+	const ed = () => st.editor;
+	const preview = (semi, inst = st.inst) => {
+		const s = st.song;
+		const ins = s?.instruments[inst];
+		if (!s || !ins || ins.kind === "empty") return;
+		if (ins.kind === "drums") st.drumRow = ((semi + ins.transpose + s.transpose) % 12 + 12) % 12;
+		const rate = PAULA_CLOCK / periodOf(semi + ins.transpose + s.transpose, ins.finetune);
+		engine.preview(inst, rate).catch((e) => ib.ui.notify(String(e?.message ?? e), "error"));
+	};
+	const clampCursor = () => {
+		const s = song(), b = block();
+		if (!s || !b) return;
+		st.line = Math.max(0, Math.min(b.lines - 1, st.line));
+		st.track = Math.max(0, Math.min(s.tracks - 1, st.track));
+		st.col = Math.max(0, Math.min(colsOf(b.pages) - 1, st.col));
+	};
+	const moveLine = (d) => (st.line += d, clampCursor());
+	/** ←→ go column by column, into the next track at a cell's edge */
+	const moveCol = (d) => {
+		const s = song(), b = block();
+		if (!s || !b) return;
+		const n = colsOf(b.pages);
+		let c = st.col + d, tr = st.track;
+		if (c === 3 && !s.chordColumn) c += d;
+		if (c < 0) tr = (tr - 1 + s.tracks) % s.tracks, c = n - 1;
+		else if (c >= n) tr = (tr + 1) % s.tracks, c = 0;
+		st.col = c;
+		st.track = tr;
+	};
+	/** ⇧ + arrows: the selection grows from where it started */
+	const extend = (dl, dt) => {
+		anchor ??= {
+			line: st.line,
+			track: st.track
+		};
+		st.line += dl;
+		st.track += dt;
+		clampCursor();
+		st.sel = {
+			block: blockNo(),
+			line0: Math.min(anchor.line, st.line),
+			line1: Math.max(anchor.line, st.line),
+			track0: Math.min(anchor.track, st.track),
+			track1: Math.max(anchor.track, st.track)
+		};
+	};
+	const unselect = () => (st.sel = null, anchor = null);
+	/** what an operation works on: the selection, or the cell under the cursor */
+	const target = () => st.sel && st.sel.block === blockNo() ? st.sel : {
+		block: blockNo(),
+		line0: st.line,
+		line1: st.line,
+		track0: st.track,
+		track1: st.track
+	};
+	const advance = () => moveLine(st.step);
+	const typeNote = (note) => {
+		const e = ed();
+		if (!e) return;
+		e.writeNote(blockNo(), st.line, st.track, note, note === 128 ? 0 : st.inst + 1);
+		advance();
+	};
+	const copy = () => {
+		const e = ed();
+		if (e) st.clip = e.copy(target()), ib.ui.notify(t("copied"));
+	};
+	const cut = () => {
+		const e = ed();
+		if (e) st.clip = e.cut(target()), unselect();
+	};
+	const paste = () => {
+		const e = ed();
+		if (e && st.clip) e.paste(blockNo(), st.line, st.track, st.clip);
+	};
+	/** the chord under the cursor, named (the column shows only its digit) */
+	const chordHere = () => {
+		const s = st.song, cell = block()?.cells[st.line]?.[st.track];
+		if (!s?.chordColumn || !cell) return "";
+		const n = cell.chord ?? 0;
+		return n ? ` · ${t("chord")} ${n.toString(16).toUpperCase()} ${chordsOf(s)[n - 1]?.name ?? ""}` : st.col === 3 ? ` · ${t("chord")}: 1–F (med chords)` : "";
+	};
+	const transpose = (semis) => ed()?.transpose(target(), semis);
+	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
+	/** The INSTRUMENT screen: the sound drawn in braille dots (the loop lit), what it is, a button a tool. */
+	const drawInstrument = (ui, r, focused) => {
+		const c = ui.c;
+		const s = st.song;
+		const ins = s.instruments[st.inst];
+		const n = hex(st.inst + 1);
+		const inner = ui.box(r, {
+			title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`,
+			focused
+		});
+		const sk = synthOf(ins);
+		if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
+		if (ins?.kind === "drums" && ins.drums) return drawDrums(ui, inner, focused);
+		if (!ins || ins.kind === "empty" || !ins.data.length) {
+			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
+			const choices = [
+				[
+					"load…",
+					`med sample ${n} load`,
+					"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault"
+				],
+				[
+					"analog synth",
+					`med synth ${n} new`,
+					"two oscillators, a filter, two envelopes, an LFO"
+				],
+				[
+					"FM synth",
+					`med fm ${n} new`,
+					"two sine waves, one bending the other: pianos, bells, basses"
+				],
+				[
+					"drum machine",
+					`med drums ${n} new`,
+					"twelve drums, one a note: C kick, D snare, E hat…"
+				]
+			];
+			let x = inner.x + 1, y = inner.y + 3;
+			for (const [label, cmd, tip] of choices) {
+				if (x + t(label).length + 2 > inner.x + inner.w - 1) x = inner.x + 1, y += 2;
+				x += ui.button(x, y, t(label), () => {}, {
+					cmd,
+					tip: t(tip)
+				}) + 1;
+			}
+			return;
+		}
+		const waveH = Math.max(3, Math.min(10, inner.h - 9));
+		const W = inner.w - 2;
+		const d = ins.data;
+		const cols = W * 2, rows = waveH * 4;
+		const loopA = ins.loopLength ? ins.loopStart : -1, loopB = ins.loopLength ? ins.loopStart + ins.loopLength : -1;
+		for (let cx = 0; cx < W; cx++) {
+			const cells = new Array(waveH).fill(0);
+			let inLoop = false;
+			for (let sub = 0; sub < 2; sub++) {
+				const col = cx * 2 + sub;
+				const a = Math.floor(col / cols * d.length), b = Math.max(a + 1, Math.floor((col + 1) / cols * d.length));
+				let lo = 1, hi = -1;
+				for (let i = a; i < b && i < d.length; i++) lo = Math.min(lo, d[i]), hi = Math.max(hi, d[i]);
+				if (a >= loopA && a < loopB) inLoop = true;
+				const top = Math.max(0, Math.min(rows - 1, Math.floor((1 - hi) / 2 * rows)));
+				const bot = Math.max(0, Math.min(rows - 1, Math.floor((1 - lo) / 2 * rows)));
+				for (let y = top; y <= bot; y++) {
+					const row = y % 4;
+					const bit = row === 3 ? sub ? 7 : 6 : sub ? 3 + row : row;
+					cells[Math.floor(y / 4)] |= 1 << bit;
+				}
+			}
+			cells.forEach((bits, k) => bits && ui.text(inner.x + 1 + cx, inner.y + k, String.fromCharCode(10240 + bits), { fg: inLoop ? c.accentAlt : c.accent }));
+		}
+		let y = inner.y + waveH;
+		const secs = d.length / (16574 * (ins.transpose >= 12 ? 2 : 1));
+		ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
+		y++;
+		const tools = [
+			[
+				"load…",
+				`med sample ${n} load`,
+				"replace this sound with a file of the vault"
+			],
+			[
+				"chop 4",
+				`med sample ${n} chop 4`,
+				"4 equal slices → new instruments"
+			],
+			[
+				"chop 8",
+				`med sample ${n} chop 8`,
+				"8 equal slices → new instruments"
+			],
+			[
+				"chop at attacks",
+				`med sample ${n} chop onsets`,
+				"a slice at each attack"
+			],
+			[
+				"stretch ×2",
+				`med sample ${n} stretch 2`,
+				"twice as long, same pitch (Amiga grains)"
+			],
+			[
+				"stretch ×½",
+				`med sample ${n} stretch 0.5`,
+				"half as long, same pitch"
+			],
+			[
+				"fade in",
+				`med sample ${n} fade in`,
+				""
+			],
+			[
+				"fade out",
+				`med sample ${n} fade out`,
+				""
+			],
+			[
+				"pitch +12",
+				`med sample ${n} pitch 12`,
+				"an octave up (half the frames)"
+			],
+			[
+				"pitch −12",
+				`med sample ${n} pitch -12`,
+				"an octave down"
+			],
+			[
+				"reverse",
+				`med sample ${n} reverse`,
+				""
+			],
+			[
+				"8-bit",
+				`med sample ${n} crush 8`,
+				"destructive 8 bits: the grit"
+			],
+			[
+				"4-bit ×2",
+				`med sample ${n} crush 4 2`,
+				"4 bits, half the rate: more grit"
+			],
+			[
+				"normalize",
+				`med sample ${n} normalize`,
+				""
+			],
+			[
+				"trim",
+				`med sample ${n} trim`,
+				"remove the silence at both ends"
+			],
+			[
+				"loop off",
+				`med sample ${n} loop off`,
+				""
+			],
+			[
+				"ping-pong",
+				`med sample ${n} loop pingpong`,
+				"the loop goes back and forth"
+			],
+			[
+				"bounce block",
+				"med bounce",
+				"this block, rendered into a new instrument"
+			],
+			[
+				s.flags.filter ? "LED filter off" : "LED filter on",
+				`med filter ${s.flags.filter ? "off" : "on"}`,
+				"the A500's low-pass (0FF9 / 0FF8)"
+			]
+		];
+		let x = inner.x + 1;
+		for (const [label, cmd, tip] of tools) {
+			const w = label.length + 2;
+			if (x + w > inner.x + inner.w - 1) x = inner.x + 1, y++;
+			if (y >= inner.y + inner.h) break;
+			x += ui.button(x, y, t(label), () => {}, {
+				cmd,
+				tip: tip ? t(tip) : void 0
+			}) + 1;
+		}
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
+	};
+	/** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
+	const nudge = (row, dir, big = false) => {
+		const sk = synthOf(st.song?.instruments[st.inst]);
+		const def = sk?.params[row];
+		if (sk && def) ed()?.instrument(st.inst, def.label, (i) => {
+			const p = settingsOf(i, sk);
+			if (p) nudgeIn(sk.params, p, def.key, dir, big);
+		});
+	};
+	/** A synth's settings (analog or FM): a row each (‹ value ›), the presets above. */
+	const drawSynth = (ui, inner, focused, sk) => {
+		const c = ui.c;
+		const n = hex(st.inst + 1);
+		const p = settingsOf(st.song.instruments[st.inst], sk);
+		const PARAMS = sk.params;
+		let x = inner.x + 1;
+		ui.text(x, inner.y, t("preset"), { fg: c.muted });
+		x += t("preset").length + 1;
+		for (const name of sk.presets) {
+			if (x + name.length + 2 > inner.x + inner.w - 1) break;
+			x += ui.button(x, inner.y, name, () => {}, {
+				cmd: `med ${sk.cmd} ${n} preset ${name}`,
+				quiet: true
+			}) + 1;
+		}
+		const top = inner.y + 2;
+		const h = Math.max(1, inner.h - 3);
+		const colW = 36;
+		const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
+		const perCol = Math.ceil(PARAMS.length / cols);
+		const scroll = perCol > h ? Math.max(0, Math.min(perCol - h, st.synthRow % perCol - Math.floor(h / 2))) : 0;
+		st.synthRow = Math.max(0, Math.min(PARAMS.length - 1, st.synthRow));
+		PARAMS.forEach((def, i) => {
+			const col = Math.floor(i / perCol), row = i % perCol - scroll;
+			if (row < 0 || row >= h) return;
+			const x0 = inner.x + 1 + col * colW, y = top + row;
+			const on = i === st.synthRow;
+			ui.text(x0, y, t(def.label).padEnd(18).slice(0, 18), { fg: on ? c.fg : c.muted });
+			ui.button(x0 + 19, y, "‹", () => (st.synthRow = i, nudge(i, -1)), { quiet: !on });
+			ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
+			ui.button(x0 + 32, y, "›", () => (st.synthRow = i, nudge(i, 1)), { quiet: !on });
+			ui.hit({
+				x: x0,
+				y,
+				w: 18,
+				h: 1
+			}, {
+				onClick: () => st.synthRow = i,
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+			});
+			ui.hit({
+				x: x0 + 22,
+				y,
+				w: 10,
+				h: 1
+			}, {
+				onClick: () => st.synthRow = i,
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+			});
+			if (on && focused) ui.tint({
+				x: x0,
+				y,
+				w: 18,
+				h: 1
+			}, void 0, c.highlight);
+		});
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
+	};
+	/** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
+	const nudgeKit = (drum, col, dir, big = false) => {
+		const key = DRUM_SETTINGS[col]?.key;
+		if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big));
+	};
+	const nudgeGrit = (what, dir) => ed()?.instrument(st.inst, "grit", (i) => {
+		if (!i.drums) return;
+		i.drums[what] = Math.max(1, Math.min(16, i.drums[what] + dir));
+	});
+	/** The drum machine: its kits above, then a row a drum (its note, its name, four settings). */
+	const drawDrums = (ui, inner, focused) => {
+		const c = ui.c;
+		const n = hex(st.inst + 1);
+		const kit = st.song.instruments[st.inst].drums;
+		let x = inner.x + 1;
+		ui.text(x, inner.y, t("kit"), { fg: c.muted });
+		x += t("kit").length + 1;
+		for (const name of Object.keys(DRUM_KITS)) x += ui.button(x, inner.y, name, () => {}, {
+			cmd: `med drums ${n} kit ${name}`,
+			quiet: true
+		}) + 1;
+		let gy = inner.y;
+		x += 2;
+		if (x + 30 >= inner.x + inner.w) x = inner.x + 1, gy = inner.y + 1;
+		ui.text(x, gy, t("grit"), { fg: c.muted });
+		x += t("grit").length + 1;
+		x += ui.button(x, gy, "‹", () => nudgeGrit("bits", -1), { quiet: true });
+		x = ui.text(x, gy, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
+		x += ui.button(x, gy, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
+		x += ui.button(x, gy, "‹", () => nudgeGrit("hold", -1), { quiet: true });
+		x = ui.text(x, gy, ` ×${kit.hold} `, { fg: kit.hold > 1 ? c.warning : c.fg });
+		ui.button(x, gy, "›", () => nudgeGrit("hold", 1), { quiet: true });
+		const wide = inner.w >= 66;
+		const cellW = wide ? 12 : 7;
+		const x0 = inner.x + 1, valX = x0 + 16;
+		ui.text(x0, inner.y + 2, "♪", { fg: c.subtle });
+		ui.text(x0 + 4, inner.y + 2, t("drum"), { fg: c.subtle });
+		DRUM_SETTINGS.forEach((s, k) => ui.text(valX + k * cellW + (wide ? 3 : 0), inner.y + 2, t(s.key), { fg: k === st.drumCol ? c.accent : c.subtle }));
+		st.drumRow = Math.max(0, Math.min(11, st.drumRow));
+		st.drumCol = Math.max(0, Math.min(3, st.drumCol));
+		const rows = Math.max(1, inner.h - 4);
+		const scroll = Math.max(0, Math.min(12 - rows, st.drumRow - rows + 1));
+		kit.drums.forEach((d, i) => {
+			const y = inner.y + 3 + i - scroll;
+			if (y < inner.y + 3 || y >= inner.y + inner.h - 1) return;
+			const on = i === st.drumRow;
+			ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
+			ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
+			if (on && focused) ui.tint({
+				x: x0,
+				y,
+				w: 15,
+				h: 1
+			}, void 0, c.highlight);
+			DRUM_SETTINGS.forEach((s, k) => {
+				const v = d[s.key];
+				const text = s.key === "tune" ? `${v > 0 ? "+" : ""}${v}` : s.key === "decay" ? v.toFixed(1) : v.toFixed(2);
+				const cx = valX + k * cellW;
+				const sel = on && k === st.drumCol;
+				if (wide) {
+					ui.button(cx, y, "‹", () => (st.drumRow = i, st.drumCol = k, nudgeKit(i, k, -1)), { quiet: !sel });
+					ui.text(cx + 3, y, text.padStart(5), { fg: sel ? c.accent : c.fg });
+					ui.button(cx + 8, y, "›", () => (st.drumRow = i, st.drumCol = k, nudgeKit(i, k, 1)), { quiet: !sel });
+				} else ui.text(cx, y, text.padStart(5), {
+					fg: sel ? c.accent : c.fg,
+					bg: sel ? c.highlight : void 0
+				});
+				ui.hit({
+					x: cx + (wide ? 3 : 0),
+					y,
+					w: 5,
+					h: 1
+				}, {
+					onClick: () => (st.drumRow = i, st.drumCol = k),
+					onWheel: (dl) => nudgeKit(i, k, dl < 0 ? 1 : -1)
+				});
+			});
+			ui.hit({
+				x: x0,
+				y,
+				w: 15,
+				h: 1
+			}, { onClick: () => st.drumRow = i });
+		});
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it"), { fg: c.subtle }, inner.w - 2);
+	};
+	/** a track's new name, asked in a window (the command does it) */
+	const rename = async (tr) => {
+		const s = song();
+		if (!s) return;
+		const name = await ib.ui.prompt(t("TRACK NAME"), {
+			initial: s.trackNames[tr] ?? "",
+			placeholder: `${t("track")} ${tr + 1}`
+		});
+		if (name !== null) run(`med track ${tr + 1} name ${q(name.trim())}`);
+	};
+	/** the right-click menu on a cell: the cursor goes there first (a selection holding it stays) */
+	const cellMenu = (line, track) => {
+		if (!(!!st.sel && st.sel.block === blockNo() && line >= st.sel.line0 && line <= st.sel.line1 && track >= st.sel.track0 && track <= st.sel.track1)) unselect();
+		st.line = line;
+		st.track = track;
+		return menuEntries(line, track);
+	};
+	const menuEntries = (line, track) => [
+		{
+			label: t("play from here"),
+			run: () => run(`med play song ${hex(st.seq)} ${hex(line)}`)
+		},
+		"-",
+		{
+			label: t("copy"),
+			hint: "alt C",
+			run: copy
+		},
+		{
+			label: t("cut"),
+			hint: "alt X",
+			run: cut
+		},
+		{
+			label: t("paste"),
+			hint: "alt V",
+			run: () => (st.line = line, st.track = track, paste()),
+			disabled: !st.clip
+		},
+		{
+			label: t("clear"),
+			hint: "del",
+			run: () => ed()?.clearSelection(target())
+		},
+		"-",
+		{
+			label: t("transpose up"),
+			hint: "alt Q",
+			run: () => transpose(1)
+		},
+		{
+			label: t("transpose down"),
+			hint: "alt A",
+			run: () => transpose(-1)
+		},
+		{
+			label: t("an octave up"),
+			hint: "⇧ alt Q",
+			run: () => transpose(12)
+		},
+		{
+			label: t("an octave down"),
+			hint: "⇧ alt A",
+			run: () => transpose(-12)
+		},
+		"-",
+		{
+			label: t("insert a line"),
+			hint: "alt ⏎",
+			run: () => ed()?.insertLine(blockNo(), line, [track])
+		},
+		{
+			label: t("delete the line"),
+			hint: "⌫",
+			run: () => ed()?.deleteLine(blockNo(), line, [track])
+		},
+		{
+			label: t("mute / unmute this track"),
+			cmd: `med mute ${track + 1}`
+		},
+		"-",
+		{
+			label: t("save"),
+			hint: "med save",
+			cmd: "med save"
+		},
+		{
+			label: t("export (WAV + tracks)"),
+			hint: "med export",
+			cmd: "med export --stems"
+		},
+		{
+			label: t("export…"),
+			hint: "alt E",
+			run: () => st.screen = "export"
+		},
+		{
+			label: t("the song's settings"),
+			hint: "alt S",
+			run: () => st.screen = "song"
+		}
+	];
+	/** the cell (and column) under the mouse, from where the block was drawn */
+	const cellAt = (mx, my) => {
+		const g = geo, b = block();
+		if (!g || !b) return null;
+		const k = Math.floor((mx - g.x - g.numW) / g.cw);
+		const line = g.top + (my - g.y);
+		if (k < 0 || k >= g.fits || line < 0 || line >= b.lines) return null;
+		const inCell = mx - g.x - g.numW - k * g.cw;
+		let col = 0;
+		const chords = !!st.song?.chordColumn;
+		for (let c = 0; c < colsOf(b.pages); c++) if ((c !== 3 || chords) && inCell >= colX(c, chords)) col = c;
+		return {
+			line,
+			track: firstTrack + k,
+			col
+		};
+	};
+	return {
+		kind: "breakermed",
+		key: "breakermed",
+		rawKeys: true,
+		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED",
+		dirty: () => !!st.editor?.dirty,
+		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
+		render(ui, r, focused) {
+			const c = ui.c;
+			const s = st.song;
+			const now = engine.current();
+			if (engine.playing) ui.animate(16);
+			if (now) {
+				st.seq = now.seq;
+				st.line = now.line;
+			}
+			const name = s ? s.title || st.path.split("/").pop() || "" : "";
+			let x = ui.text(r.x + 1, r.y, "BreakerMED", {
+				fg: c.accent,
+				attrs: BOLD
+			});
+			x = ui.text(x + 1, r.y, "β", { fg: c.warning });
+			if (s) {
+				const f = s.flags;
+				const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
+				const state = engine.playing ? engine.mode === "block" ? "▶ BLOCK" : "▶ SONG" : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
+				const parts = [
+					[0, `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})`],
+					[3, `${t("speed")} ${hex(s.speed)}`],
+					[2, `${t("oct")} ${st.octave + 1}`],
+					[4, `${t("step")} ${st.step}`],
+					[6, s.format],
+					[5, engine.paula ? "PAULA" : "SMOOTH"],
+					...s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`]] : []
+				];
+				const space = r.w - 2 - (x - r.x) - state.length - 6;
+				let shown = parts;
+				const width = (list) => list.reduce((n, [, p]) => n + p.length + 2, 0);
+				for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter(([k]) => k < drop);
+				const rest = shown.length ? `  ${shown.map(([, p]) => p).join("  ")}` : "";
+				const rx = rest ? ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted }) : r.x + r.w - 1;
+				const room = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
+					fg: c.bg,
+					bg: c.error,
+					attrs: BOLD
+				} : { fg: engine.playing ? c.success : c.muted }) - (x + 2) - 1;
+				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
+			}
+			if (!s) {
+				ui.textCenter(r, r.y + Math.floor(r.h / 2) - 1, t("no song loaded"), { fg: c.muted });
+				ui.textCenter(r, r.y + Math.floor(r.h / 2) + 1, st.error || "med open <file.med | file.mod> · med demo", { fg: st.error ? c.error : c.subtle });
+				return;
+			}
+			clampCursor();
+			const body = {
+				x: r.x,
+				y: r.y + 1,
+				w: r.w,
+				h: r.h - 1
+			};
+			const leftW = Math.min(LEFT, Math.floor(body.w / 3));
+			const seqH = Math.max(5, Math.floor(body.h * .45));
+			const seqBox = ui.box({
+				x: body.x,
+				y: body.y,
+				w: leftW,
+				h: seqH
+			}, {
+				title: t("SEQUENCE"),
+				focused: false
+			});
+			seqList.items = s.sequence.map((_, i) => i);
+			if (seqList.selected !== st.seq) seqList.select(st.seq);
+			seqList.render(ui, seqBox, false, (i, row, sel) => {
+				const b = s.blocks[s.sequence[i]];
+				ui.text(row.x, row.y, `${hex(i)} ${hex(s.sequence[i], 3)} ${b?.name ?? ""}`, {
+					fg: sel ? c.accent : c.muted,
+					attrs: sel ? BOLD : 0
+				}, row.w);
+			});
+			const instBox = ui.box({
+				x: body.x,
+				y: body.y + seqH,
+				w: leftW,
+				h: body.h - seqH
+			}, {
+				title: t("INSTRUMENTS"),
+				focused: false
+			});
+			instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
+			if (instList.selected !== st.inst) instList.select(st.inst);
+			instList.render(ui, instBox, false, (i, row, sel) => {
+				const ins = s.instruments[i] ?? {
+					kind: "empty",
+					name: ""
+				};
+				const empty = ins.kind === "empty";
+				const tag = ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
+					fg: sel ? c.accent : empty ? c.faint : c.fg,
+					attrs: sel ? BOLD : 0
+				}, row.w);
+			});
+			screens.drawTabs(ui, body.x + leftW, body.y, body.w - leftW);
+			const right = {
+				x: body.x + leftW,
+				y: body.y + 1,
+				w: body.w - leftW,
+				h: body.h - 1
+			};
+			if (st.screen === "instrument") return drawInstrument(ui, right, focused);
+			if (st.screen === "song") return screens.drawSong(ui, right, focused);
+			if (st.screen === "export") return screens.drawExport(ui, right, focused);
+			const bn = blockNo();
+			const b = s.blocks[bn];
+			const inner = ui.box(right, {
+				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`,
+				focused
+			});
+			if (!b) return;
+			const chords = !!s.chordColumn;
+			if (!chords && st.col === 3) st.col = 4;
+			const cw = cellW(b.pages, chords) + 1;
+			const numW = 4;
+			const fits = Math.max(1, Math.floor((inner.w - numW) / cw));
+			if (st.track < firstTrack) firstTrack = st.track;
+			if (st.track >= firstTrack + fits) firstTrack = st.track - fits + 1;
+			firstTrack = Math.max(0, Math.min(firstTrack, Math.max(0, s.tracks - fits)));
+			ui.hit(inner, { onWheel: (d) => moveLine(Math.sign(d) * 2) });
+			for (let k = 0; k < fits && firstTrack + k < s.tracks; k++) {
+				const tr = firstTrack + k;
+				const muted = engine.muted.has(tr);
+				const hx = inner.x + numW + k * cw;
+				const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
+				ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, {
+					fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle,
+					attrs: tr === st.track ? BOLD : 0
+				}, cw - 1);
+				ui.hit({
+					x: hx,
+					y: inner.y,
+					w: cw - 1,
+					h: 1
+				}, {
+					onClick: () => st.track = tr,
+					onDouble: () => void rename(tr),
+					tip: t("double-click: rename · right-click: mute, solo"),
+					menu: () => [
+						{
+							label: t("rename…"),
+							run: () => void rename(tr)
+						},
+						{
+							label: muted ? t("unmute") : t("mute"),
+							cmd: `med mute ${tr + 1}`
+						},
+						{
+							label: t("solo"),
+							cmd: `med solo ${tr + 1}`
+						}
+					]
+				});
+			}
+			const rows = inner.h - 1;
+			const mid = Math.floor(rows / 2);
+			geo = {
+				x: inner.x,
+				y: inner.y + 1,
+				w: inner.w,
+				h: rows,
+				numW,
+				cw,
+				top: st.line - mid,
+				fits
+			};
+			const sel = st.sel && st.sel.block === bn ? st.sel : null;
+			for (let k = 0; k < rows; k++) {
+				const line = st.line - mid + k;
+				const y = inner.y + 1 + k;
+				if (line < 0 || line >= b.lines) continue;
+				const here = line === st.line;
+				const beat = line % Math.max(1, s.lpb) === 0;
+				const bg = here ? engine.playing ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : beat ? c.panelAlt : void 0;
+				if (bg !== void 0) ui.fill({
+					x: inner.x,
+					y,
+					w: inner.w,
+					h: 1
+				}, { bg });
+				ui.text(inner.x, y, hex(line, 3), {
+					fg: here ? c.accent : beat ? c.muted : c.faint,
+					bg
+				});
+				for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
+					const tr = firstTrack + j;
+					const cell = b.cells[line][tr];
+					const cx = inner.x + numW + j * cw;
+					const dim = engine.muted.has(tr);
+					const inSel = !!sel && line >= sel.line0 && line <= sel.line1 && tr >= sel.track0 && tr <= sel.track1;
+					const cbg = inSel ? mix(c.panel, c.accentAlt, .35) : bg;
+					if (inSel) ui.fill({
+						x: cx,
+						y,
+						w: cw - 1,
+						h: 1
+					}, { bg: cbg });
+					let xx = ui.text(cx, y, noteName(cell.note), {
+						fg: dim ? c.faint : cell.note === 128 ? c.warning : cell.note ? c.fg : c.faint,
+						bg: cbg,
+						attrs: cell.note ? BOLD : 0
+					});
+					xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", {
+						fg: dim ? c.faint : cell.inst ? c.accent : c.faint,
+						bg: cbg
+					});
+					if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", {
+						fg: dim ? c.faint : cell.chord ? c.warning : c.faint,
+						bg: cbg
+					});
+					for (let p = 0; p < b.pages; p++) {
+						const has = cell.cmd[p] || cell.val[p];
+						xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", {
+							fg: dim ? c.faint : has ? c.accentAlt : c.faint,
+							bg: cbg
+						});
+					}
+					if (here && tr === st.track && focused) ui.tint({
+						x: cx + colX(st.col, chords),
+						y,
+						w: colW(st.col),
+						h: 1
+					}, c.bg, st.edit ? c.error : c.accent);
+					ui.hit({
+						x: cx,
+						y,
+						w: cw - 1,
+						h: 1
+					}, {
+						onClick: (m) => {
+							const at = cellAt(m.x, m.y);
+							unselect();
+							st.line = line;
+							st.track = tr;
+							if (at) st.col = at.col;
+							anchor = {
+								line,
+								track: tr
+							};
+						},
+						onDrag: (m) => {
+							const at = cellAt(m.x, m.y);
+							if (!at || !anchor) return;
+							st.line = at.line;
+							st.track = at.track;
+							st.sel = {
+								block: bn,
+								line0: Math.min(anchor.line, at.line),
+								line1: Math.max(anchor.line, at.line),
+								track0: Math.min(anchor.track, at.track),
+								track1: Math.max(anchor.track, at.track)
+							};
+						},
+						onWheel: (d) => moveLine(Math.sign(d) * 2),
+						menu: () => cellMenu(line, tr)
+					});
+				}
+			}
+		},
+		onKey(k) {
+			const s = st.song;
+			const e = ed();
+			if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
+				if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
+				const semi = k.key === "space" ? null : pianoKey(k.code);
+				if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
+			}
+			if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+			if (k.key === "space") {
+				if (engine.playing) run("med stop");
+				else run(`med edit ${st.edit ? "off" : "on"}`);
+				return true;
+			}
+			if (!s || !e) return false;
+			if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
+			if (k.alt) {
+				const digit = /^Digit(\d)$/.exec(k.code);
+				if (digit) return st.step = +digit[1], true;
+				switch (k.code) {
+					case "KeyI": return st.screen = "instrument", true;
+					case "KeyB": return st.screen = "block", true;
+					case "KeyS": return st.screen = "song", true;
+					case "KeyE": return st.screen = "export", true;
+					case "ArrowUp": return st.octave = Math.min(7, st.octave + 1), true;
+					case "ArrowDown": return st.octave = Math.max(0, st.octave - 1), true;
+					case "ArrowLeft": return st.inst = Math.max(0, st.inst - 1), true;
+					case "ArrowRight": return st.inst = Math.min(62, s.instruments.length, st.inst + 1), true;
+					case "KeyC": return copy(), true;
+					case "KeyX": return cut(), true;
+					case "KeyV": return paste(), true;
+					case "KeyQ": return transpose(k.shift ? 12 : 1), true;
+					case "KeyA": return transpose(k.shift ? -12 : -1), true;
+					case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
+				}
+				return false;
+			}
+			if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "drums" && !k.ctrl && !k.meta) switch (k.key) {
+				case "up": return st.drumRow = Math.max(0, st.drumRow - 1), true;
+				case "down": return st.drumRow = Math.min(11, st.drumRow + 1), true;
+				case "left": return k.shift ? nudgeKit(st.drumRow, st.drumCol, -1) : st.drumCol = Math.max(0, st.drumCol - 1), true;
+				case "right": return k.shift ? nudgeKit(st.drumRow, st.drumCol, 1) : st.drumCol = Math.min(3, st.drumCol + 1), true;
+			}
+			const sk = st.screen === "instrument" ? synthOf(s.instruments[st.inst]) : void 0;
+			if (sk && !k.ctrl && !k.meta) switch (k.key) {
+				case "up": return st.synthRow = Math.max(0, st.synthRow - 1), true;
+				case "down": return st.synthRow = Math.min(sk.params.length - 1, st.synthRow + 1), true;
+				case "left": return nudge(st.synthRow, -1, k.shift), true;
+				case "right": return nudge(st.synthRow, 1, k.shift), true;
+			}
+			if (k.shift) switch (k.key) {
+				case "up": return extend(-1, 0), true;
+				case "down": return extend(1, 0), true;
+				case "left": return extend(0, -1), true;
+				case "right": return extend(0, 1), true;
+			}
+			switch (k.key) {
+				case "up": return unselect(), moveLine(-1), true;
+				case "down": return unselect(), moveLine(1), true;
+				case "pageup": return moveLine(-16), true;
+				case "pagedown": return moveLine(16), true;
+				case "home": return st.line = 0, true;
+				case "end": return moveLine(9999), true;
+				case "left": return unselect(), moveCol(-1), true;
+				case "right": return unselect(), moveCol(1), true;
+				case "delete":
+					if (st.sel) e.clearSelection(st.sel), unselect();
+					else e.clear(blockNo(), st.line, st.track, st.col), st.edit && advance();
+					return true;
+				case "backspace":
+					e.deleteLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
+					return true;
+			}
+			if (k.ctrl || k.meta) return false;
+			const kind = colKind(st.col).kind;
+			if (st.edit && kind !== "note") {
+				const d = /^Digit(\d)$/.exec(k.code)?.[1] ?? (k.key.length === 1 && HEX.includes(k.key.toLowerCase()) ? k.key.toLowerCase() : null);
+				if (d !== null) {
+					e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
+					const k = colKind(st.col);
+					if (k.kind === "chord") {
+						if (HEX.indexOf(d)) s.chordColumn = true;
+						advance();
+					} else if (k.kind === "inst") {
+						if (k.digit === 0) st.col++;
+						else st.col--, advance();
+					} else if (k.kind === "cmd" || k.kind === "val" && k.digit === 0) st.col++;
+					else st.col -= 3, advance();
+					return true;
+				}
+			}
+			if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash")) return typeNote(128), true;
+			const semi = pianoKey(k.code);
+			if (semi !== null) {
+				if (k.repeat) return true;
+				preview(st.octave * 12 + semi);
+				if (st.edit && kind === "note") typeNote(st.octave * 12 + semi + 1);
+				return true;
+			}
+			return false;
+		},
+		onAction(a) {
+			switch (a) {
+				case "up": return moveLine(-1), true;
+				case "down": return moveLine(1), true;
+				case "left": return moveCol(-1), true;
+				case "right": return moveCol(1), true;
+				case "page-up": return moveLine(-16), true;
+				case "page-down": return moveLine(16), true;
+				case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+			}
+			return false;
+		},
+		menu: () => st.song ? cellMenu(st.line, st.track) : [
+			{
+				label: t("open a song…"),
+				cmd: "med open"
+			},
+			{
+				label: t("a new song"),
+				cmd: "med new"
+			},
+			{
+				label: t("the demo song"),
+				cmd: "med demo"
+			}
+		]
+	};
+}
+// src/format/bytes.ts
+/**
+* Reading and writing big-endian files (the Amiga's order), bounds-checked:
+* a broken or hostile file throws a clear error, never reads past its end.
+*/
+var Reader = class {
+	constructor(b) {
+		_defineProperty(this, "b", void 0);
+		_defineProperty(this, "pos", 0);
+		this.b = b;
+	}
+	get length() {
+		return this.b.length;
+	}
+	can(n, at = this.pos) {
+		return at >= 0 && n >= 0 && at + n <= this.b.length;
+	}
+	need(n, at = this.pos, what = "data") {
+		if (!this.can(n, at)) throw new Error(`the file ends too early (${what} at ${at})`);
+	}
+	seek(at) {
+		if (at < 0 || at > this.b.length) throw new Error(`a pointer leads out of the file (${at})`);
+		this.pos = at;
+		return this;
+	}
+	u8() {
+		this.need(1);
+		return this.b[this.pos++];
+	}
+	s8() {
+		const v = this.u8();
+		return v > 127 ? v - 256 : v;
+	}
+	u16() {
+		this.need(2);
+		const v = this.b[this.pos] << 8 | this.b[this.pos + 1];
+		this.pos += 2;
+		return v;
+	}
+	s16() {
+		const v = this.u16();
+		return v > 32767 ? v - 65536 : v;
+	}
+	u32() {
+		this.need(4);
+		const v = (this.b[this.pos] << 24 >>> 0) + (this.b[this.pos + 1] << 16) + (this.b[this.pos + 2] << 8) + this.b[this.pos + 3];
+		this.pos += 4;
+		return v;
+	}
+	bytes(n) {
+		this.need(n);
+		const out = this.b.subarray(this.pos, this.pos + n);
+		this.pos += n;
+		return out;
+	}
+	/** a fixed-size text field (stops at the first 0), Latin-1 like the Amiga's */
+	text(n) {
+		const raw = this.bytes(n);
+		let s = "";
+		for (const c of raw) {
+			if (!c) break;
+			s += c < 32 ? " " : String.fromCharCode(c);
+		}
+		return s.trimEnd();
+	}
+};
+/** Signed 8-bit sample bytes → floats. */
+function s8ToFloats(raw) {
+	const out = new Float32Array(raw.length);
+	for (let i = 0; i < raw.length; i++) out[i] = (raw[i] > 127 ? raw[i] - 256 : raw[i]) / 128;
+	return out;
+}
+/** Signed 16-bit big-endian sample bytes → floats. */
+function s16beToFloats(raw) {
+	const out = new Float32Array(raw.length >> 1);
+	for (let i = 0; i < out.length; i++) {
+		const v = raw[2 * i] << 8 | raw[2 * i + 1];
+		out[i] = (v > 32767 ? v - 65536 : v) / 32768;
+	}
+	return out;
+}
+/** OctaMED's "delta" samples: each byte is the difference from the previous one. */
+function undelta8(raw) {
+	const out = new Uint8Array(raw.length);
+	let acc = 0;
+	for (let i = 0; i < raw.length; i++) out[i] = acc = acc + raw[i] & 255;
+	return out;
+}
+var Writer = class {
+	constructor() {
+		_defineProperty(this, "buf", /* @__PURE__ */ new Uint8Array(1024));
+		_defineProperty(this, "pos", 0);
+	}
+	room(n) {
+		if (this.pos + n <= this.buf.length) return;
+		let size = this.buf.length * 2;
+		while (size < this.pos + n) size *= 2;
+		const next = new Uint8Array(size);
+		next.set(this.buf.subarray(0, this.pos));
+		this.buf = next;
+	}
+	u8(v) {
+		this.room(1);
+		this.buf[this.pos++] = v & 255;
+		return this;
+	}
+	u16(v) {
+		return this.u8(v >> 8).u8(v);
+	}
+	u32(v) {
+		return this.u16(v >>> 16 & 65535).u16(v & 65535);
+	}
+	bytes(b) {
+		this.room(b.length);
+		this.buf.set(b, this.pos);
+		this.pos += b.length;
+		return this;
+	}
+	/** a fixed-size text field, padded with zeros */
+	text(s, n) {
+		for (let i = 0; i < n; i++) this.u8(i < s.length ? Math.min(255, s.charCodeAt(i)) : 0);
+		return this;
+	}
+	zeros(n) {
+		this.room(n);
+		this.buf.fill(0, this.pos, this.pos + n);
+		this.pos += n;
+		return this;
+	}
+	/** go back and write a 32-bit value (a pointer known later) */
+	patch32(at, v) {
+		const here = this.pos;
+		this.pos = at;
+		this.u32(v);
+		this.pos = here;
+	}
+	align(n = 2) {
+		while (this.pos % n) this.u8(0);
+		return this;
+	}
+	done() {
+		return this.buf.slice(0, this.pos);
+	}
+};
+/** Floats → signed 8-bit bytes (rounded, clipped). */
+function floatsToS8(f) {
+	const out = new Uint8Array(f.length);
+	for (let i = 0; i < f.length; i++) out[i] = Math.max(-128, Math.min(127, Math.round(f[i] * 128))) & 255;
+	return out;
+}
+/** Floats → signed 16-bit big-endian bytes. */
+function floatsToS16be(f) {
+	const out = new Uint8Array(f.length * 2);
+	for (let i = 0; i < f.length; i++) {
+		const v = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32768))) & 65535;
+		out[2 * i] = v >> 8;
+		out[2 * i + 1] = v & 255;
+	}
+	return out;
+}
+// src/format/med.ts
+/**
+* OctaMED .med files (MMD0, MMD1, MMD2, MMD3): reading. Writing comes with
+* step 3.
+*
+* The layout is public: Teijo Kinnunen's MED-FORM.TXT describes MMD0 / MMD1,
+* and the rest (MMD2's sections and play sequences, MMD3, the command pages,
+* the tempo modes, the octave folding of the Amiga's four voices) was checked
+* against libopenmpt's reader (Load_med.cpp, BSD-3-Clause, docs/CREDITS.md).
+* This is our own code: one structure after the other, every pointer
+* checked against the file's length.
+*
+* Not read yet: packed (ADPCM) samples, MIDI, several songs in one file (the
+* first is read), MMD2's play-sequence commands (stop / jump).
+*/
+function isMed(b) {
+	return b.length >= 52 && b[0] === 77 && b[1] === 77 && b[2] === 68 && b[3] >= 48 && b[3] <= 51;
+}
+function readMed(bytes) {
+	if (!isMed(bytes)) throw new Error("not an OctaMED file (no MMD0–MMD3 header)");
+	const r = new Reader(bytes);
+	r.seek(3);
+	const h = {
+		version: r.u8() - 48,
+		songOffset: 0,
+		blockArr: 0,
+		sampleArr: 0,
+		expData: 0
+	};
+	r.u32();
+	h.songOffset = r.u32();
+	r.u32();
+	h.blockArr = r.u32();
+	r.u32();
+	h.sampleArr = r.u32();
+	r.u32();
+	h.expData = r.u32();
+	r.seek(h.songOffset);
+	const sampleHeads = Array.from({ length: 63 }, () => ({
+		loopStart: r.u16() * 2,
+		loopLength: r.u16() * 2,
+		midiChannel: r.u8(),
+		midiPreset: r.u8(),
+		volume: r.u8(),
+		transpose: r.s8()
+	}));
+	const numBlocks = r.u16();
+	const songLength = r.u16();
+	const songArea = r.pos;
+	r.seek(songArea + 256);
+	const defaultTempo = r.u16();
+	const playTranspose = r.s8();
+	const flags = r.u8();
+	const flags2 = r.u8();
+	const tempo2 = r.u8();
+	const trackVol16 = Array.from(r.bytes(16));
+	const masterVol = r.u8();
+	const numSamples = r.u8();
+	if (numSamples > 63 || numBlocks > 32767) throw new Error("not a valid OctaMED song (too many instruments or blocks)");
+	const hardwareMix = h.version < 2 || !(flags2 & 128);
+	const bpmMode = !!(flags2 & 32);
+	const tempoMode = bpmMode ? "bpm" : "spd";
+	let sequence = [];
+	let tracks = 4;
+	let trackVolume = [];
+	let trackPan = null;
+	let echo;
+	if (h.version < 2) {
+		r.seek(songArea);
+		sequence = Array.from(r.bytes(256)).slice(0, Math.min(256, songLength));
+		trackVolume = trackVol16;
+	} else {
+		r.seek(songArea);
+		const playSeqTable = r.u32();
+		const sectionTable = r.u32();
+		const trackVols = r.u32();
+		const numTracks = r.u16();
+		const numPlaySeqs = r.u16();
+		const trackPanOffset = r.u32();
+		const flags3 = r.u32();
+		r.u16();
+		r.u16();
+		const echoType = r.u8(), echoDepth = r.u8(), echoLen = r.u16();
+		if (!hardwareMix && (echoType === 1 || echoType === 2)) echo = cleanEcho({
+			type: echoType === 2 ? "cross" : "normal",
+			ms: echoLen || 250,
+			depth: echoDepth || 2
+		});
+		if (numTracks < 1 || numTracks > 64) throw new Error(`not a valid OctaMED song (${numTracks} tracks)`);
+		tracks = numTracks;
+		if (trackVols && r.can(numTracks, trackVols)) trackVolume = Array.from(r.seek(trackVols).bytes(numTracks));
+		if ((!hardwareMix && !!(flags3 & 2) || h.version > 2) && trackPanOffset && r.can(numTracks, trackPanOffset)) {
+			r.seek(trackPanOffset);
+			trackPan = Array.from({ length: numTracks }, () => Math.max(-16, Math.min(16, r.s8())) / 16);
+		}
+		if (sectionTable && r.can(songLength * 2, sectionTable)) {
+			r.seek(sectionTable);
+			const sections = Array.from({ length: songLength }, () => r.u16());
+			for (const sec of sections) {
+				if (sec >= numPlaySeqs || !r.can(4, playSeqTable + sec * 4)) continue;
+				const at = r.seek(playSeqTable + sec * 4).u32();
+				if (!r.can(42, at)) continue;
+				r.seek(at + 40);
+				const length = r.u16();
+				for (let i = 0; i < length && r.can(2); i++) {
+					const b = r.u16();
+					if (b < 32768) sequence.push(b);
+				}
+			}
+		}
+	}
+	const blocks = [];
+	for (let n = 0; n < numBlocks; n++) {
+		if (!r.can(4, h.blockArr + n * 4)) break;
+		const at = r.seek(h.blockArr + n * 4).u32();
+		if (!at || !r.can(2, at)) {
+			blocks.push(newBlock(tracks, 64));
+			continue;
+		}
+		r.seek(at);
+		if (h.version < 1) {
+			const t = r.u8();
+			const lines = r.u8() + 1;
+			tracks = Math.max(tracks, t);
+			const block = newBlock(t, lines, 1);
+			for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
+				if (!r.can(3)) break;
+				const b0 = r.u8(), b1 = r.u8(), b2 = r.u8();
+				const c = block.cells[l][k];
+				c.note = b0 & 63;
+				c.inst = b1 >> 4 | (b0 & 128) >> 3 | (b0 & 64) >> 1;
+				c.cmd[0] = b1 & 15;
+				c.val[0] = b2;
+			}
+			blocks.push(block);
+			continue;
+		}
+		const t = r.u16();
+		const lines = r.u16() + 1;
+		const info = r.u32();
+		const cellsAt = r.pos;
+		if (t < 1 || t > 64 || lines > 3200) throw new Error(`block ${n}: ${t} tracks × ${lines} lines`);
+		tracks = Math.max(tracks, t);
+		let name = "";
+		let pages = [];
+		if (info && r.can(20, info)) {
+			r.seek(info);
+			r.u32();
+			const nameOffset = r.u32();
+			const nameLength = r.u32();
+			const pageTable = r.u32();
+			if (nameOffset && nameLength && r.can(Math.min(nameLength, 255), nameOffset)) name = r.seek(nameOffset).text(Math.min(nameLength, 255));
+			if (pageTable && r.can(4, pageTable)) {
+				r.seek(pageTable);
+				const count = r.u16();
+				r.u16();
+				for (let i = 0; i < count && r.can(4); i++) pages.push(r.u32());
+			}
+		}
+		pages = pages.slice(0, 15);
+		const block = newBlock(t, lines, 1 + pages.length, name);
+		r.seek(cellsAt);
+		for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
+			if (!r.can(4)) break;
+			const b0 = r.u8(), b1 = r.u8(), b2 = r.u8(), b3 = r.u8();
+			const c = block.cells[l][k];
+			c.note = b0 === 128 ? 128 : b0 & 127;
+			c.inst = b1 & 63;
+			c.cmd[0] = b2;
+			c.val[0] = b3;
+		}
+		pages.forEach((p, i) => {
+			if (!p || !r.can(t * lines * 2, p)) return;
+			r.seek(p);
+			for (let l = 0; l < lines; l++) for (let k = 0; k < t; k++) {
+				const c = block.cells[l][k];
+				c.cmd[i + 1] = r.u8();
+				c.val[i + 1] = r.u8();
+			}
+		});
+		blocks.push(block);
+	}
+	for (const b of blocks) for (const row of b.cells) while (row.length < tracks) row.push({
+		note: 0,
+		inst: 0,
+		cmd: new Array(b.pages).fill(0),
+		val: new Array(b.pages).fill(0)
+	});
+	const exp = readExp(r, h.expData);
+	const instruments = [];
+	for (let i = 0; i < numSamples; i++) {
+		const head = sampleHeads[i];
+		const inst = emptyInstrument();
+		inst.volume = Math.min(64, head.volume);
+		inst.transpose = head.transpose;
+		inst.loopStart = head.loopStart;
+		inst.loopLength = head.loopLength > 2 ? head.loopLength : 0;
+		const ext = exp.instrExt(i);
+		if (ext) {
+			inst.hold = ext.hold;
+			inst.decay = ext.decay;
+			inst.finetune = Math.max(-8, Math.min(7, ext.finetune));
+			if (ext.volume !== void 0) inst.gain = (ext.volume + 1) / 128;
+		}
+		inst.name = exp.instrName(i);
+		const at = h.sampleArr && r.can(4, h.sampleArr + i * 4) ? r.seek(h.sampleArr + i * 4).u32() : 0;
+		if (at && r.can(6, at)) readInstrumentData(r, at, inst, h.version);
+		if (ext && inst.kind === "sample") {
+			if (ext.loopLength !== void 0) {
+				inst.loopStart = ext.loopStart ?? 0;
+				inst.loopLength = ext.loopLength;
+			}
+			if (ext.flags !== void 0) {
+				if (!(ext.flags & 1)) inst.loopLength = 0;
+				inst.pingPong = !!(ext.flags & 8);
+				if (ext.flags & 4) inst.gain = 0;
+			}
+		}
+		if (inst.loopStart + inst.loopLength > inst.data.length) inst.loopLength = Math.max(0, inst.data.length - inst.loopStart);
+		if (inst.loopLength <= 2) inst.loopStart = 0, inst.loopLength = 0;
+		instruments.push(inst);
+	}
+	const song = {
+		title: exp.songName,
+		format: `MMD${h.version}`,
+		tracks,
+		blocks,
+		sequence: sequence.filter((b) => b < blocks.length),
+		restart: 0,
+		instruments,
+		tempoMode,
+		tempo: defaultTempo,
+		speed: Math.max(1, Math.min(32, tempo2 || 6)),
+		lpb: bpmMode ? 1 + (flags2 & 31) : 4,
+		transpose: playTranspose,
+		noteShift: h.version > 2 ? -24 : 0,
+		masterVolume: masterVol ? Math.min(64, masterVol) : 64,
+		trackVolume: Array.from({ length: tracks }, (_, i) => Math.max(0, Math.min(64, trackVolume[i] ?? 64))),
+		trackPan: trackPan && trackPan.length === tracks ? trackPan : amigaPan(tracks),
+		trackNames: new Array(tracks).fill(""),
+		flags: {
+			volHex: !!(flags & 16),
+			vol7bit: h.version > 2,
+			ptSlides: !!(flags & 32),
+			eightChannel: !!(flags & 64),
+			hardwareMix,
+			filter: !!(flags & 1)
+		}
+	};
+	if (!song.sequence.length) song.sequence = [0];
+	if (!song.blocks.length) song.blocks.push(newBlock(tracks));
+	if (echo) song.echo = echo;
+	return song;
+}
+/** The expansion data: instrument names and extras, the song's name. */
+function readExp(r, at) {
+	const out = {
+		songName: "",
+		instrExt: (_i) => null,
+		instrName: (_i) => ""
+	};
+	if (!at || !r.can(52, at)) return out;
+	r.seek(at + 4);
+	const extAt = r.u32();
+	const extEntries = r.u16();
+	const extSize = r.u16();
+	r.u32();
+	r.u32();
+	const infoAt = r.u32();
+	const infoEntries = r.u16();
+	const infoSize = r.u16();
+	r.seek(at + 44);
+	const nameAt = r.u32();
+	const nameLength = r.u32();
+	if (nameAt && nameLength && r.can(Math.min(nameLength, 255), nameAt)) out.songName = r.seek(nameAt).text(Math.min(nameLength, 255));
+	out.instrExt = (i) => {
+		if (!extAt || i >= extEntries || extSize < 4 || !r.can(extSize, extAt + i * extSize)) return null;
+		r.seek(extAt + i * extSize);
+		const e = {
+			hold: r.u8(),
+			decay: r.u8(),
+			finetune: (r.u8(), r.s8())
+		};
+		if (extSize > 5) {
+			r.u8();
+			e.flags = r.u8();
+		}
+		if (extSize >= 18) {
+			r.seek(extAt + i * extSize + 10);
+			e.loopStart = r.u32();
+			e.loopLength = r.u32();
+		}
+		if (extSize >= 19) e.volume = r.u8();
+		return e;
+	};
+	out.instrName = (i) => infoAt && i < infoEntries && infoSize > 0 && r.can(Math.min(40, infoSize), infoAt + i * infoSize) ? r.seek(infoAt + i * infoSize).text(Math.min(40, infoSize)) : "";
+	return out;
+}
+/** An instrument's sound: a sample (8 / 16 bits, mono / stereo, delta, several octaves), a synth or a hybrid. */
+function readInstrumentData(r, at, inst, version) {
+	r.seek(at);
+	const length = r.u32();
+	const type = r.s16();
+	if (type === -1 || type === -2) {
+		if (!r.can(272)) return;
+		r.u32();
+		const loopStart = r.u16() * 2;
+		const loopLength = r.u16() * 2;
+		const volLen = Math.min(128, r.u16());
+		const waveLen = Math.min(128, r.u16());
+		inst.volSpeed = r.u8();
+		inst.waveSpeed = r.u8();
+		const numWaves = r.u16();
+		const volTable = Array.from(r.bytes(128));
+		const waveTable = Array.from(r.bytes(128));
+		inst.volTable = volTable.slice(0, volLen);
+		inst.waveTable = waveTable.slice(0, waveLen);
+		if (numWaves > 64) return;
+		const offsets = Array.from({ length: numWaves }, () => r.can(4) ? r.u32() : 0);
+		inst.waves = [];
+		offsets.forEach((o, i) => {
+			if (o <= 278 || !r.can(2, at + o)) return void inst.waves.push(/* @__PURE__ */ new Float32Array(0));
+			r.seek(at + o);
+			if (type === -2 && i === 0) {
+				const len = r.u32();
+				r.s16();
+				inst.waves.push(r.can(len) ? s8ToFloats(r.bytes(len)) : /* @__PURE__ */ new Float32Array(0));
+			} else {
+				const len = r.u16() * 2;
+				inst.waves.push(r.can(len) ? s8ToFloats(r.bytes(len)) : /* @__PURE__ */ new Float32Array(0));
+			}
+		});
+		inst.kind = type === -1 ? "synth" : "hybrid";
+		const first = inst.waves[0] ?? /* @__PURE__ */ new Float32Array(0);
+		inst.data = first;
+		if (type === -1) {
+			inst.loopStart = 0;
+			inst.loopLength = first.length;
+			if (version <= 2) inst.transpose -= 24;
+		} else if (loopLength > 2) {
+			inst.loopStart = loopStart;
+			inst.loopLength = loopLength;
+		}
+		return;
+	}
+	if (type < 0 || type & 128) return;
+	const octaves = [
+		1,
+		5,
+		3,
+		2,
+		4,
+		6,
+		7,
+		1
+	][type & 15] ?? 1;
+	const bits16 = !!(type & 16);
+	const stereo = !!(type & 32);
+	const delta = !!(type & 64);
+	const total = stereo ? length * 2 : length;
+	if (!r.can(total)) return;
+	let raw = r.bytes(total);
+	if (delta && !bits16) raw = undelta8(raw);
+	const decode = (b) => bits16 ? s16beToFloats(b) : s8ToFloats(b);
+	let left = decode(stereo ? raw.subarray(0, length) : raw);
+	inst.right = stereo ? decode(raw.subarray(length)) : void 0;
+	if (octaves > 1) {
+		const first = Math.floor(left.length / ((1 << octaves) - 1));
+		const start = first * ((1 << octaves - 1) - 1);
+		left = left.slice(start, start + first * (1 << octaves - 1));
+		inst.loopStart *= 1 << octaves - 1;
+		inst.loopLength *= 1 << octaves - 1;
+		if (octaves >= 5) inst.transpose += 12;
+	}
+	inst.data = left;
+	inst.bits16 = bits16;
+	inst.kind = left.length ? "sample" : "empty";
+}
+// src/format/mod.ts
+/**
+* ProTracker .mod files: reading (writing comes with step 3). The format is the
+* well-known public one: a title, 31 instruments, the order list, a tag
+* ("M.K.", "6CHN", "8CHN"…), patterns of 64 lines × 4 bytes a cell, the samples.
+* A file without a tag is read as an old 15-instrument SoundTracker module.
+*
+* Effects are translated into OctaMED's numbering (song.ts), the way OctaMED
+* itself reads a .mod: 4 → 14 (ProTracker's vibrato depth), D → 1D (the line in
+* hex), Ex → 11/12/15/16/18/1A/1B/1E/1F, F → 09 (speed) or 0F (BPM).
+*/
+var TAGS4 = /* @__PURE__ */ new Set([
+	"M.K.",
+	"M!K!",
+	"M&K!",
+	"FLT4",
+	"4CHN",
+	"N.T."
+]);
+/** The tracks a tag means (0: not a tag we know). */
+function tracksOfTag(tag) {
+	if (TAGS4.has(tag)) return 4;
+	if (tag === "FLT8" || tag === "OCTA" || tag === "CD81") return 8;
+	let m = /^(\d)CHN$/.exec(tag);
+	if (m) return +m[1];
+	m = /^(\d\d)C[HN]$/.exec(tag);
+	if (m) return +m[1];
+	return 0;
+}
+/** Does it look like a .mod (31 instruments and a tag)? */
+function isMod(b) {
+	if (b.length < 1084) return false;
+	return tracksOfTag(String.fromCharCode(b[1080], b[1081], b[1082], b[1083])) > 0;
+}
+function readMod(bytes) {
+	const r = new Reader(bytes);
+	if (bytes.length < 600) throw new Error("too short for a .mod");
+	const tag = bytes.length >= 1084 ? String.fromCharCode(bytes[1080], bytes[1081], bytes[1082], bytes[1083]) : "";
+	let tracks = tracksOfTag(tag);
+	const old = tracks === 0;
+	if (old) tracks = 4;
+	const numInst = old ? 15 : 31;
+	const title = r.text(20);
+	const heads = [];
+	for (let i = 0; i < numInst; i++) {
+		const inst = emptyInstrument();
+		inst.name = r.text(22);
+		const len = r.u16() * 2;
+		const ft = r.u8() & 15;
+		inst.finetune = ft > 7 ? ft - 16 : ft;
+		inst.volume = Math.min(64, r.u8());
+		let ls = r.u16() * 2;
+		const ll = r.u16() * 2;
+		if (old) ls >>= 1;
+		if (ll > 2) {
+			inst.loopStart = ls;
+			inst.loopLength = ll;
+		}
+		heads.push({
+			inst,
+			bytes: len
+		});
+	}
+	const songLength = Math.max(1, Math.min(128, r.u8()));
+	let restart = r.u8();
+	const orders = Array.from(r.bytes(128));
+	if (!old) r.u32();
+	const used = orders.slice(0, songLength);
+	const numPat = Math.max(...orders.filter((o) => o < 128)) + 1;
+	if (restart >= songLength || restart === 127) restart = 0;
+	const song = {
+		title,
+		format: old ? "MOD 15" : `MOD ${tag}`,
+		tracks,
+		blocks: [],
+		sequence: used,
+		restart,
+		instruments: [],
+		tempoMode: "pt",
+		tempo: 125,
+		speed: 6,
+		lpb: 4,
+		transpose: 0,
+		noteShift: 0,
+		masterVolume: 64,
+		trackVolume: new Array(tracks).fill(64),
+		trackPan: amigaPan(tracks),
+		trackNames: new Array(tracks).fill(""),
+		flags: {
+			volHex: true,
+			vol7bit: false,
+			ptSlides: true,
+			eightChannel: false,
+			hardwareMix: true,
+			filter: false
+		}
+	};
+	for (let p = 0; p < numPat; p++) {
+		const block = newBlock(tracks, 64, 1);
+		for (let line = 0; line < 64; line++) for (let t = 0; t < tracks; t++) {
+			if (!r.can(4)) break;
+			const a = r.u8(), b = r.u8(), c = r.u8(), d = r.u8();
+			const period = (a & 15) << 8 | b;
+			const cell = block.cells[line][t];
+			cell.inst = a & 240 | c >> 4;
+			if (cell.inst > 63) cell.inst = 0;
+			if (period) cell.note = Math.max(1, semiOfPeriod(period) + 1);
+			const [cmd, val] = modToMed(c & 15, d);
+			cell.cmd[0] = cmd;
+			cell.val[0] = val;
+		}
+		song.blocks.push(block);
+	}
+	for (const h of heads) {
+		const n = Math.min(h.bytes, Math.max(0, bytes.length - r.pos));
+		if (n > 0) {
+			h.inst.data = s8ToFloats(r.bytes(n));
+			h.inst.kind = "sample";
+		}
+		if (h.inst.loopStart + h.inst.loopLength > h.inst.data.length) {
+			h.inst.loopLength = Math.max(0, h.inst.data.length - h.inst.loopStart);
+			if (h.inst.loopLength <= 2) h.inst.loopStart = 0, h.inst.loopLength = 0;
+		}
+		song.instruments.push(h.inst);
+	}
+	while (song.instruments.length && song.instruments[song.instruments.length - 1].kind === "empty") song.instruments.pop();
+	return song;
+}
+/** A ProTracker effect as an OctaMED command. Returns [0, 0] for what has none. */
+function modToMed(e, p) {
+	switch (e) {
+		case 0: return p ? [0, p] : [0, 0];
+		case 4: return [20, p];
+		case 8: return [0, 0];
+		case 9: return [25, p];
+		case 13: return [29, Math.min(63, (p >> 4) * 10 + (p & 15))];
+		case 14: {
+			const x = p >> 4, y = p & 15;
+			switch (x) {
+				case 0: return [15, y ? 248 : 249];
+				case 1: return [17, y];
+				case 2: return [18, y];
+				case 5: return [21, y];
+				case 6: return [22, y];
+				case 9: return [31, y];
+				case 10: return [26, y];
+				case 11: return [27, y];
+				case 12: return [24, y];
+				case 13: return [31, y << 4];
+				case 14: return [30, y];
+				default: return [0, 0];
+			}
+		}
+		case 15:
+			if (p === 0) return [15, 254];
+			return p < 32 ? [9, p] : [15, p];
+		default: return [e, p];
+	}
+}
+// src/format/index.ts
+/** the names songs have: "x.med", "x.mod", and the Amiga's way: "mod.x", "med.x" */
+var SONG_EXTS = [
+	".med",
+	".mod",
+	".mmd0",
+	".mmd1",
+	".mmd2",
+	".mmd3"
+];
+function readSong(bytes, name = "") {
+	if (isMed(bytes)) return readMed(bytes);
+	if (isMod(bytes) || /\.mod$|(^|\/)mod\./i.test(name)) return readMod(bytes);
+	throw new Error("not a .med (MMD0–MMD3) or .mod file");
+}
+// src/demo.ts
+/**
+* breakerMED — a little song of our own (our samples, our notes: free to use),
+* made as a .mod file in memory so `med demo` plays something right away and
+* goes through the same reader as a real file.
+*/
+var PERIODS = [
+	856,
+	808,
+	762,
+	720,
+	678,
+	640,
+	604,
+	570,
+	538,
+	508,
+	480,
+	453,
+	428,
+	404,
+	381,
+	360,
+	339,
+	320,
+	302,
+	285,
+	269,
+	254,
+	240,
+	226,
+	214,
+	202,
+	190,
+	180,
+	170,
+	160,
+	151,
+	143,
+	135,
+	127,
+	120,
+	113
+];
+function demoMod() {
+	const sq = Array.from({ length: 64 }, (_, i) => i < 32 ? 90 : -90);
+	const saw = Array.from({ length: 64 }, (_, i) => Math.round(i * 3.5 - 112));
+	const kick = Array.from({ length: 3e3 }, (_, i) => Math.round(120 * Math.exp(-i / 700) * Math.sin(2 * Math.PI * i * (60 + 200 * Math.exp(-i / 150)) / 8287)));
+	let seed = 1;
+	const rnd = () => (seed = seed * 1103515245 + 12345 & 2147483647) / 2147483647 * 2 - 1;
+	const hat = Array.from({ length: 900 }, (_, i) => Math.round(90 * Math.exp(-i / 120) * rnd()));
+	const samples = [
+		[
+			"square",
+			sq,
+			true,
+			40
+		],
+		[
+			"saw bass",
+			saw,
+			true,
+			52
+		],
+		[
+			"kick",
+			kick,
+			false,
+			64
+		],
+		[
+			"hat",
+			hat,
+			false,
+			34
+		]
+	];
+	const w = new Writer();
+	w.text("breakerMED demo", 20);
+	for (let i = 0; i < 31; i++) {
+		const s = samples[i];
+		w.text(s ? s[0] : "", 22);
+		if (!s) w.u16(0).u8(0).u8(0).u16(0).u16(1);
+		else w.u16(s[1].length / 2).u8(0).u8(s[3]).u16(0).u16(s[2] ? s[1].length / 2 : 1);
+	}
+	const order = [
+		0,
+		1,
+		0,
+		2
+	];
+	w.u8(order.length).u8(127);
+	for (let i = 0; i < 128; i++) w.u8(order[i] ?? 0);
+	w.text("M.K.", 4);
+	const melody = [
+		24,
+		27,
+		31,
+		34,
+		31,
+		27,
+		24,
+		22,
+		24,
+		27,
+		31,
+		29,
+		27,
+		26,
+		24,
+		19
+	];
+	const bass = [
+		12,
+		12,
+		15,
+		15,
+		17,
+		17,
+		10,
+		10
+	];
+	for (const variant of [
+		0,
+		1,
+		2
+	]) for (let line = 0; line < 64; line++) for (let t = 0; t < 4; t++) {
+		let note = -1, inst = 0, e = 0, p = 0;
+		if (t === 0 && line % 4 === 0) note = melody[(line / 4 + variant * 3) % 16] - (variant === 2 ? 12 : 0), inst = 1, e = 10, p = 1;
+		if (t === 0 && line % 4 === 2 && variant === 1) note = melody[(line / 4 + 5) % 16], inst = 1, e = 4, p = 70;
+		if (t === 1 && line % 8 === 0) note = bass[line / 8 % 8], inst = 2;
+		if (t === 2 && line % 8 === 0) note = 12, inst = 3;
+		if (t === 2 && line % 16 === 12 && variant) note = 12, inst = 3, e = 12, p = 40;
+		if (t === 3 && line % 2 === 1) note = 24, inst = 4, e = 12, p = line % 4 === 3 ? 48 : 24;
+		if (t === 3 && line === 0 && variant === 0) e = 15, p = 5;
+		const per = note >= 0 ? PERIODS[Math.max(0, Math.min(35, note))] : 0;
+		w.u8(inst & 240 | per >> 8).u8(per & 255).u8((inst & 15) << 4 | e).u8(p);
+	}
+	for (const s of samples) for (const v of s[1]) w.u8(v);
+	return w.done();
+}
+/** a note as text: "C-3", "^^^" (off), "---" (none); past octave 9, "N7F" (hex) */
+function noteText(n) {
+	if (!n) return "---";
+	if (n === 128) return "^^^";
+	const oct = Math.floor((n - 1) / 12) + 1;
+	return oct <= 9 ? `${NOTE_NAMES[(n - 1) % 12]}${oct}` : `N${hex(n)}`;
+}
+function parseNoteText(s) {
+	if (s === "---") return 0;
+	if (s === "^^^") return 128;
+	if (/^N[0-9A-F]{2}$/i.test(s)) return parseInt(s.slice(1), 16);
+	const m = /^([A-G])([#-])(\d)$/.exec(s.toUpperCase());
+	if (!m) throw new Error(`song.json: "${s}" isn't a note`);
+	const base = {
+		C: 0,
+		D: 2,
+		E: 4,
+		F: 5,
+		G: 7,
+		A: 9,
+		B: 11
+	}[m[1]];
+	return (+m[3] - 1) * 12 + base + (m[2] === "#" ? 1 : 0) + 1;
+}
+/** The files of a song saved as .bmed (paths relative to its folder). */
+function writeBmed(song) {
+	const files = [];
+	const sampleRate = 8363;
+	const wav = (path, data) => {
+		files.push({
+			path,
+			data: writeWav({
+				rate: sampleRate,
+				channels: [data]
+			}, 16)
+		});
+		return path;
+	};
+	const instruments = song.instruments.map((ins, i) => {
+		const n = String(i + 1).padStart(2, "0");
+		const j = {
+			name: ins.name,
+			kind: ins.kind,
+			loopStart: ins.loopStart,
+			loopLength: ins.loopLength,
+			volume: ins.volume
+		};
+		if (ins.kind !== "empty" && ins.data.length) j.file = wav(`samples/${n}.wav`, ins.data);
+		if (ins.right?.length) j.right = wav(`samples/${n}-right.wav`, ins.right);
+		if (ins.waves?.length) j.waves = ins.waves.map((w, k) => wav(`samples/${n}-wave${k}.wav`, w));
+		if (ins.pingPong) j.pingPong = true;
+		if (ins.gain !== 1) j.gain = ins.gain;
+		if (ins.finetune) j.finetune = ins.finetune;
+		if (ins.transpose) j.transpose = ins.transpose;
+		if (ins.hold) j.hold = ins.hold;
+		if (ins.decay) j.decay = ins.decay;
+		if (ins.bits16) j.bits16 = true;
+		if (ins.kind === "analog") j.synth = ins.synth;
+		if (ins.kind === "drums") j.drums = ins.drums;
+		if (ins.kind === "fm") j.fm = ins.fm;
+		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
+		return j;
+	});
+	const blocks = song.blocks.map((b) => ({
+		name: b.name,
+		lines: b.lines,
+		pages: b.pages,
+		rows: b.cells.map((row) => row.map((c) => {
+			let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}${c.chord ? `:${c.chord.toString(16).toUpperCase()}` : ""}`;
+			for (let p = 0; p < b.pages; p++) s += c.cmd[p] || c.val[p] ? ` ${hex(c.cmd[p])}${hex(c.val[p])}` : " ....";
+			return s;
+		}).join(" | "))
+	}));
+	const json = {
+		breakermed: 1,
+		title: song.title,
+		from: song.format,
+		tempo: {
+			mode: song.tempoMode,
+			tempo: song.tempo,
+			speed: song.speed,
+			lpb: song.lpb
+		},
+		transpose: song.transpose,
+		noteShift: song.noteShift,
+		masterVolume: song.masterVolume,
+		restart: song.restart,
+		flags: song.flags,
+		tracks: Array.from({ length: song.tracks }, (_, t) => ({
+			name: song.trackNames[t] ?? "",
+			volume: song.trackVolume[t] ?? 64,
+			pan: song.trackPan[t] ?? 0,
+			...song.trackStrum?.[t] ? { strum: song.trackStrum[t] } : {}
+		})),
+		sequence: song.sequence,
+		...song.chords ? { chords: song.chords } : {},
+		...song.chordColumn ? { chordColumn: true } : {},
+		...song.echo ? { echo: song.echo } : {},
+		...song.swing ? { swing: song.swing } : {},
+		instruments,
+		blocks
+	};
+	files.unshift({
+		path: "song.json",
+		data: JSON.stringify(json, null, 1)
+	});
+	return files;
+}
+/** Read a .bmed song: its song.json, and a way to read the files next to it. */
+async function readBmed(jsonText, readFile) {
+	let j;
+	try {
+		j = JSON.parse(jsonText);
+	} catch {
+		throw new Error("song.json isn't valid JSON");
+	}
+	if (typeof j.breakermed !== "number") throw new Error("song.json isn't a breakerMED song");
+	if (j.breakermed > 1) throw new Error("this song was saved by a newer breakerMED: update the module");
+	const tracks = Math.max(1, Math.min(64, (j.tracks ?? []).length || 4));
+	const num = (v, d, lo = -Infinity, hi = Infinity) => typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d;
+	const sample = async (path) => {
+		if (!path || typeof path !== "string" || path.includes("..")) return /* @__PURE__ */ new Float32Array(0);
+		return readWav(await readFile(path))?.channels[0] ?? /* @__PURE__ */ new Float32Array(0);
+	};
+	const instruments = [];
+	for (const ij of (j.instruments ?? []).slice(0, 63)) {
+		const ins = emptyInstrument();
+		ins.name = String(ij.name ?? "").slice(0, 40);
+		ins.kind = [
+			"sample",
+			"synth",
+			"hybrid",
+			"analog",
+			"fm",
+			"drums",
+			"empty"
+		].includes(ij.kind) ? ij.kind : "empty";
+		ins.data = await sample(ij.file);
+		if (ij.right) ins.right = await sample(ij.right);
+		if (Array.isArray(ij.waves)) ins.waves = await Promise.all(ij.waves.slice(0, 64).map((w) => sample(w)));
+		ins.loopStart = num(ij.loopStart, 0, 0);
+		ins.loopLength = num(ij.loopLength, 0, 0);
+		ins.pingPong = !!ij.pingPong;
+		ins.volume = num(ij.volume, 64, 0, 64);
+		ins.gain = num(ij.gain, 1, 0, 1);
+		ins.finetune = num(ij.finetune, 0, -8, 7);
+		ins.transpose = num(ij.transpose, 0, -48, 48);
+		ins.hold = num(ij.hold, 0, 0, 255);
+		ins.decay = num(ij.decay, 0, 0, 255);
+		ins.bits16 = !!ij.bits16;
+		if (Array.isArray(ij.volTable)) ins.volTable = ij.volTable, ins.waveTable = ij.waveTable ?? [], ins.volSpeed = ij.volSpeed, ins.waveSpeed = ij.waveSpeed;
+		if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
+		else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
+		else if (ins.kind === "fm") ins.fm = sanitizeFm(ij.fm);
+		else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
+		instruments.push(ins);
+	}
+	const blocks = (j.blocks ?? []).map((bj, n) => {
+		const lines = num(bj.lines, 64, 1, 3200);
+		const pages = num(bj.pages, 1, 1, 16);
+		const b = newBlock(tracks, lines, pages, String(bj.name ?? ""));
+		(bj.rows ?? []).slice(0, lines).forEach((row, l) => {
+			String(row).split("|").slice(0, tracks).forEach((cellText, t) => {
+				const parts = cellText.trim().split(/\s+/);
+				const c = emptyCell(pages);
+				c.note = parseNoteText(parts[0] ?? "---");
+				const [instText, chordText] = (parts[1] ?? "..").split(":");
+				c.inst = instText && instText !== ".." ? Math.min(63, parseInt(instText, 16) || 0) : 0;
+				const chord = chordText ? parseInt(chordText, 16) : 0;
+				if (chord >= 1 && chord <= 15) c.chord = chord;
+				for (let p = 0; p < pages; p++) {
+					const x = parts[2 + p];
+					if (x && x !== "....") {
+						if (!/^[0-9a-f]{4}$/i.test(x)) throw new Error(`song.json: block ${n}, line ${l}: "${x}" isn't a command`);
+						c.cmd[p] = parseInt(x.slice(0, 2), 16);
+						c.val[p] = parseInt(x.slice(2), 16);
+					}
+				}
+				b.cells[l][t] = c;
+			});
+		});
+		return b;
+	});
+	const song = {
+		title: String(j.title ?? ""),
+		format: typeof j.from === "string" && /^(MMD[0-3]|MOD .{1,6}|BMED)$/.test(j.from) ? j.from : "BMED",
+		tracks,
+		blocks: blocks.length ? blocks : [newBlock(tracks)],
+		sequence: (Array.isArray(j.sequence) ? j.sequence : [0]).map((x) => num(x, 0, 0)).filter((x) => x < Math.max(1, blocks.length)),
+		restart: num(j.restart, 0, 0),
+		instruments,
+		tempoMode: [
+			"pt",
+			"spd",
+			"bpm"
+		].includes(j.tempo?.mode) ? j.tempo.mode : "bpm",
+		tempo: num(j.tempo?.tempo, 125, 1, 999),
+		speed: num(j.tempo?.speed, 6, 1, 32),
+		lpb: num(j.tempo?.lpb, 4, 1, 32),
+		transpose: num(j.transpose, 0, -48, 48),
+		noteShift: num(j.noteShift, 0, -48, 48),
+		masterVolume: num(j.masterVolume, 64, 0, 64),
+		trackVolume: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.volume, 64, 0, 64)),
+		trackPan: Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.pan, amigaPan(tracks)[t], -1, 1)),
+		trackNames: Array.from({ length: tracks }, (_, t) => String(j.tracks?.[t]?.name ?? "").slice(0, 24)),
+		flags: Object.fromEntries(Object.entries({
+			volHex: true,
+			vol7bit: false,
+			ptSlides: false,
+			eightChannel: false,
+			hardwareMix: true,
+			filter: false
+		}).map(([k, d]) => [k, typeof j.flags?.[k] === "boolean" ? j.flags[k] : d]))
+	};
+	if (!song.sequence.length) song.sequence = [0];
+	if (j.chordColumn === true) song.chordColumn = true;
+	const echo = cleanEcho(j.echo);
+	if (echo) song.echo = echo;
+	const swing = num(j.swing, 0, 0, 100);
+	if (swing) song.swing = swing;
+	const strum = Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.strum, 0, 0, 200));
+	if (strum.some((x) => x)) song.trackStrum = strum;
+	if (Array.isArray(j.chords)) song.chords = DEFAULT_CHORDS.map((d, i) => {
+		const x = j.chords[i];
+		const notes = Array.isArray(x?.notes) ? x.notes.filter((n) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, 5) : [];
+		return notes.length ? {
+			name: String(x.name ?? "").slice(0, 8),
+			notes
+		} : {
+			name: d.name,
+			notes: [...d.notes]
+		};
+	});
+	return song;
+}
+// src/template.ts
+/**
+* breakerMED — the "new song" template: 8 named tracks, a drum machine, an analog
+* bass, a lead, a pad and an FM e-piano for the chords, and a first bar written so
+* that ▶ plays something at once. Everything is computed (no sample to load).
+*/
+/** the template's tracks, in order (a 9th track and more stay unnamed) */
+var TEMPLATE_TRACKS = [
+	"kick",
+	"snare",
+	"hats",
+	"bass",
+	"lead",
+	"pad",
+	"chords",
+	"fx"
+];
+/** C-1 = 1: a note's number from its name in octave n ("C", 3) */
+var note = (name, octave) => 1 + (octave - 1) * 12 + [
+	"C",
+	"C#",
+	"D",
+	"D#",
+	"E",
+	"F",
+	"F#",
+	"G",
+	"G#",
+	"A",
+	"A#",
+	"B"
+].indexOf(name);
+function synth(kind, preset) {
+	const sk = SYNTHS.find((s) => s.kind === kind);
+	const i = {
+		...emptyInstrument(),
+		kind,
+		name: `${sk.cmd} ${preset}`
+	};
+	i[sk.field] = sk.preset(preset);
+	return i;
+}
+/** A new song ready to play: `tracks` tracks (8 by default), the template's instruments and a first bar. */
+function templateSong(tracks = TEMPLATE_TRACKS.length) {
+	const n = Math.max(1, Math.min(16, tracks));
+	const s = newSong(n);
+	s.title = "untitled";
+	s.chordColumn = true;
+	s.trackNames = Array.from({ length: n }, (_, t) => TEMPLATE_TRACKS[t] ?? "");
+	s.instruments = [
+		{
+			...emptyInstrument(),
+			kind: "drums",
+			name: "drums classic",
+			drums: drumKit("classic")
+		},
+		synth("analog", "bass"),
+		synth("analog", "lead"),
+		synth("analog", "pad"),
+		synth("fm", "epiano")
+	];
+	const b = s.blocks[0];
+	const put = (line, track, n, inst, chord) => {
+		if (track >= s.tracks) return;
+		for (let at = line; at < b.lines; at += 16) {
+			const c = b.cells[at][track];
+			c.note = n, c.inst = inst;
+			if (chord) c.chord = chord;
+		}
+	};
+	for (const l of [
+		0,
+		6,
+		8
+	]) put(l, 0, note("C", 3), 1);
+	for (const l of [4, 12]) put(l, 1, note("D", 3), 1);
+	for (let l = 0; l < 16; l += 2) put(l, 2, note("E", 3), 1);
+	put(10, 2, note("F#", 3), 1);
+	for (const [l, nm] of [
+		[0, "C"],
+		[3, "C"],
+		[6, "D#"],
+		[8, "F"],
+		[11, "G"],
+		[14, "D#"]
+	]) put(l, 3, note(nm, 2), 2);
+	put(0, 6, note("C", 3), 5, 2);
+	put(8, 6, note("G#", 2), 5, 1);
+	return s;
 }
 /** our imports and bounces: twice that (and the instrument transposed an octave up), for a clean sound */
 var HQ_RATE = 3546895 / 214 * 2;
@@ -7726,7 +8247,7 @@ function activate(ib) {
 	registerCommands(ib, engine, st);
 	ib.apps.register({
 		kind: "breakermed",
-		title: "breakerMED",
+		title: "BreakerMED (beta)",
 		description: "a tracker: .med and .mod songs, played and edited",
 		icon: "♫",
 		launcher: true,
@@ -7940,6 +8461,59 @@ var FR = {
 	"this block, rendered into a new instrument": "ce bloc, rendu en un nouvel instrument",
 	"the A500's low-pass (0FF9 / 0FF8)": "le passe-bas de l'A500 (0FF9 / 0FF8)",
 	"the keys play it · alt ←→ another · alt B the block · med sample -h": "les touches le jouent · alt ←→ un autre · alt B le bloc · med sample -h",
-	"a new song": "un nouveau morceau"
+	"a new song": "un nouveau morceau",
+	"SONG": "MORCEAU",
+	"EXPORT": "EXPORT",
+	"title": "titre",
+	"the song's title": "le titre du morceau",
+	"tempo": "tempo",
+	"ticks a line": "ticks par ligne",
+	"lines a beat": "lignes par temps",
+	"swing": "swing",
+	"straight": "droit",
+	"every other line longer: 50 a lazy shuffle, 100 triplets": "une ligne sur deux plus longue : 50 un shuffle paresseux, 100 des triolets",
+	"echo": "écho",
+	"normal": "normal",
+	"cross": "croisé",
+	"delay": "délai",
+	"depth": "profondeur",
+	"long": "long",
+	"short": "court",
+	"medium": "moyen",
+	"positions": "positions",
+	"blocks": "blocs",
+	"name": "nom",
+	"vol": "vol",
+	"pan": "pano",
+	"strum": "arpège",
+	"double-click: rename": "double-clic : renommer",
+	"wheel or ⇧←→: change": "molette ou ⇧←→ : changer",
+	"click: switch": "clic : basculer",
+	"track name": "nom de la piste",
+	"file": "fichier",
+	"format": "format",
+	"encoder pack": "pack d'encodeurs",
+	"rate": "fréquence",
+	"quality": "qualité",
+	"bits": "bits",
+	"32-bit float": "32 bits flottant",
+	"master": "master",
+	"master + stems": "master + pistes",
+	"stems only": "pistes seules",
+	"on (-0.3 dB)": "oui (-0,3 dB)",
+	"tail": "traîne",
+	"export to": "exporter vers",
+	"normalized": "normalisé",
+	"needs the encoder pack: run `encoders install` in the shell (once, ~3 MB)": "il faut le pack d'encodeurs : lance `encoders install` dans le shell (une fois, ~3 Mo)",
+	"needs a newer ICEBREAKER (0.5.5+): WAV, AIFF and FLAC work here": "il faut un ICEBREAKER plus récent (0.5.5+) : WAV, AIFF et FLAC marchent ici",
+	"no encoder pack for this computer yet": "pas encore de pack d'encodeurs pour cet ordinateur",
+	"export…": "exporter…",
+	"exporting… (the LOG shows each file)": "export en cours… (le LOG montre chaque fichier)",
+	exported: "exporté",
+	"✗ the export failed: the LOG says why": "✗ l'export a échoué : le LOG dit pourquoi",
+	position: "position",
+	"the song's settings": "les réglages du morceau",
+	"off": "non",
+	"on": "oui"
 };
 export { activate, deactivate };

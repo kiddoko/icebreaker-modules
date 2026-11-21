@@ -1,5 +1,5 @@
 /**
- * breakerMED — the page. Left: the play sequence and the instruments; right:
+ * BreakerMED — the page. Left: the play sequence and the instruments; right:
  * the block, its tracks side by side, one line a step, the cursor's line in the
  * middle (the line being heard, while the song plays).
  *
@@ -21,9 +21,10 @@
  *   alt C / X / V copy cut paste · alt Q / A transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
  *   the chord column (when the song has chords): one digit, 1–F of the song's table
  *
- * alt I shows the INSTRUMENT screen instead of the block (alt B the block
- * again): a sample's tools, a synth's settings (↑↓ ←→), a kit's drums
- * (↑↓ a drum, ←→ a setting, ⇧←→ its value), or a free slot's choices.
+ * The tabs over the right side (or alt B / I / S / E): the BLOCK; the INSTRUMENT
+ * (a sample's tools, a synth's settings ↑↓ ←→, a kit's drums: ↑↓ a drum, ←→ a
+ * setting, ⇧←→ its value, or a free slot's choices); the SONG (its settings and
+ * tracks) and EXPORT (one window for med export): screens.ts.
  */
 import type { Action, App, IcebreakerAPI, KeyInput, MenuEntry, Rect, UI } from "./icebreaker";
 import { CHORD_COL, CMD_COL, colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
@@ -32,6 +33,7 @@ import { pianoKey } from "./keys";
 import { nudgeIn, showIn } from "./dsp/params";
 import { settingsOf, synthOf, type SynthKind } from "./synths";
 import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, nudgeDrum } from "./dsp/drums";
+import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "./screens";
 import { chordsOf, hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
@@ -54,8 +56,14 @@ export interface State {
   sel: Selection | null;
   clip: Clip | null;
   error: string;
-  /** what the right side shows: the block, or the instrument's tools (alt I / alt B) */
-  screen: "block" | "instrument";
+  /** what the right side shows (the tabs, alt B / I / S / E) */
+  screen: Screen;
+  /** the SONG screen's cursor: a setting or a track (past the settings), a track's column */
+  songRow: number;
+  songCol: number;
+  /** the EXPORT screen: its choices, and its cursor (one past the rows: the button) */
+  exp: ExportChoices;
+  expRow: number;
   /** the synth setting the INSTRUMENT screen's cursor is on */
   synthRow: number;
   /** the drum machine's cursor: a drum (0–11), a setting (0–3) */
@@ -82,7 +90,7 @@ export function undoRedo(st: State, redo: boolean): string | null {
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", synthRow: 0, drumRow: 0, drumCol: 0 };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -109,6 +117,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("insert a copy of this block"), cmd: `med seq copy ${hex(i)}` },
     { label: t("remove this position"), cmd: `med seq rm ${hex(i)}`, danger: true },
   ];
+  const screens = makeScreens(ib, engine, st);
   instList.onSelect = (i) => (st.inst = i);
   instList.onActivate = (i) => preview(st.octave * 12, i);
   /** first track shown (the page scrolls sideways when they don't fit) */
@@ -427,6 +436,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     "-",
     { label: t("save"), hint: "med save", cmd: "med save" },
     { label: t("export (WAV + tracks)"), hint: "med export", cmd: "med export --stems" },
+    { label: t("export…"), hint: "alt E", run: () => (st.screen = "export") },
+    { label: t("the song's settings"), hint: "alt S", run: () => (st.screen = "song") },
   ];
 
   /** the cell (and column) under the mouse, from where the block was drawn */
@@ -447,7 +458,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     kind: "breakermed",
     key: "breakermed",
     rawKeys: true,
-    title: () => (st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "breakerMED"),
+    title: () => (st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED"),
     dirty: () => !!st.editor?.dirty,
     status: () =>
       st.song
@@ -466,7 +477,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       }
       // ── the top line ──
       const name = s ? s.title || st.path.split("/").pop() || "" : "";
-      let x = ui.text(r.x + 1, r.y, "breakerMED", { fg: c.accent, attrs: BOLD });
+      let x = ui.text(r.x + 1, r.y, "BreakerMED", { fg: c.accent, attrs: BOLD });
+      x = ui.text(x + 1, r.y, "β", { fg: c.warning });
       if (s) {
         const f = s.flags;
         const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
@@ -521,13 +533,17 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
-      if (st.screen === "instrument") return drawInstrument(ui, { x: body.x + leftW, y: body.y, w: body.w - leftW, h: body.h }, focused);
+      // ── right: the tabs, then the screen ──
+      screens.drawTabs(ui, body.x + leftW, body.y, body.w - leftW);
+      const right = { x: body.x + leftW, y: body.y + 1, w: body.w - leftW, h: body.h - 1 };
+      if (st.screen === "instrument") return drawInstrument(ui, right, focused);
+      if (st.screen === "song") return screens.drawSong(ui, right, focused);
+      if (st.screen === "export") return screens.drawExport(ui, right, focused);
 
-      // ── right: the block ──
+      // ── the block ──
       const bn = blockNo();
       const b = s.blocks[bn];
-      const px = body.x + leftW;
-      const inner = ui.box({ x: px, y: body.y, w: body.w - leftW, h: body.h }, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`, focused });
+      const inner = ui.box(right, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`, focused });
       if (!b) return;
       const chords = !!s.chordColumn;
       if (!chords && st.col === CHORD_COL) st.col = CMD_COL;
@@ -613,6 +629,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     onKey(k: KeyInput) {
       const s = st.song;
       const e = ed();
+      // SONG and EXPORT: their own arrows and ⏎; the piano keys only play there
+      if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
+        if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
+        const semi = k.key === "space" ? null : pianoKey(k.code);
+        if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
+      }
       if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
       if (k.key === "space") {
         if (engine.playing) run("med stop");
@@ -628,6 +650,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         switch (k.code) {
           case "KeyI": return (st.screen = "instrument"), true;
           case "KeyB": return (st.screen = "block"), true;
+          case "KeyS": return (st.screen = "song"), true;
+          case "KeyE": return (st.screen = "export"), true;
           case "ArrowUp": return (st.octave = Math.min(7, st.octave + 1)), true;
           case "ArrowDown": return (st.octave = Math.max(0, st.octave - 1)), true;
           case "ArrowLeft": return (st.inst = Math.max(0, st.inst - 1)), true;
