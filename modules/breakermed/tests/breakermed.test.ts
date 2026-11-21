@@ -188,25 +188,25 @@ describe("breakerMED: the replayer", () => {
     const e = t.events.find((x) => x.voice === 0)!;
     expect(e.play).toBe(0);
     expect(e.rate).toBeCloseTo(PAULA_CLOCK / 428);
-    expect(e.volume).toBeCloseTo((48 / 64) * 0.5);
+    expect(e.volume).toBeCloseTo((48 / 64) * 1);
     expect(e.pan).toBeLessThan(0); // track 1 is on the left
   });
 
   it("a volume slide moves on the ticks after the first (ProTracker), from the first too (OctaMED)", () => {
     const pt = new Player(readSong(makeMod([{ "0:0": { period: 428, inst: 1, e: 0xa, p: 0x02 } }])));
     const vols = [0, 1, 2].map(() => pt.step().events.find((x) => x.voice === 0)?.volume);
-    expect(vols[0]).toBeCloseTo((48 / 64) * 0.5);
-    expect(vols[1]).toBeCloseTo((46 / 64) * 0.5);
-    expect(vols[2]).toBeCloseTo((44 / 64) * 0.5);
+    expect(vols[0]).toBeCloseTo((48 / 64) * 1);
+    expect(vols[1]).toBeCloseTo((46 / 64) * 1);
+    expect(vols[2]).toBeCloseTo((44 / 64) * 1);
     const med = new Player(readSong(makeMed(1, { "0:0": [13, 1, 0x0d, 0x04] })));
-    expect(med.step().events.find((x) => x.voice === 0)?.volume).toBeCloseTo((60 / 64) * 0.5);
+    expect(med.step().events.find((x) => x.voice === 0)?.volume).toBeCloseTo((60 / 64) * 1);
   });
 
   it("0C sets the volume in decimal unless the song says hex", () => {
     const dec = new Player(readSong(makeMed(1, { "0:0": [13, 1, 0x0c, 0x32] }, { flags: 0 })));
-    expect(dec.step().events[0].volume).toBeCloseTo((32 / 64) * 0.5);
+    expect(dec.step().events[0].volume).toBeCloseTo((32 / 64) * 1);
     const hx = new Player(readSong(makeMed(1, { "0:0": [13, 1, 0x0c, 0x20] }, { flags: 0x10 })));
-    expect(hx.step().events[0].volume).toBeCloseTo((32 / 64) * 0.5);
+    expect(hx.step().events[0].volume).toBeCloseTo((32 / 64) * 1);
   });
 
   it("a note off and a muted track silence their voice", () => {
@@ -243,8 +243,9 @@ describe("breakerMED: the renderer", () => {
     const l = new Float32Array(20_000), rr = new Float32Array(20_000);
     r.render(l, rr);
     expect(r.marks.slice(0, 3).map((m) => [m.line, m.frame])).toEqual([[0, 0], [1, 6000], [2, 12000]]); // 6 ticks × 20 ms × 50 kHz
-    expect(Math.max(...l.slice(0, 100).map(Math.abs))).toBeGreaterThan(0.1); // the square, on the left
-    expect(Math.max(...rr.slice(0, 100).map(Math.abs))).toBeLessThan(0.2);
+    const left = Math.max(...l.slice(0, 100).map(Math.abs));
+    expect(left).toBeGreaterThan(0.1); // the square, on the left
+    expect(Math.max(...rr.slice(0, 100).map(Math.abs))).toBeLessThan(left * 0.5);
   });
 
   it("renders the same whatever the block size (an export and the live sound agree)", () => {

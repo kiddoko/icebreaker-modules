@@ -21,7 +21,7 @@
  * Not yet: 08 hold/decay (the instrument's own hold/decay works), 0E synth jump,
  * 20 reverse, the synth instruments' programs, MIDI.
  */
-import { chordNotes, NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, swingFactor, type Instrument, type Song } from "./song";
+import { chordNotes, computed, NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, swingFactor, type Instrument, type Song } from "./song";
 
 /** What a voice does on a tick: only what changed. */
 export interface VoiceEvent {
@@ -111,8 +111,8 @@ export class Player {
     this.speed = song.speed;
     this.tempo = song.tempo;
     this.chans = Array.from({ length: song.tracks }, (_, i) => this.newChan(i));
-    // headroom: four Amiga voices at full volume make a full signal
-    this.mix = 0.5 * Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
+    // loud enough: four voices at full volume reach full scale (the renderer's limiter catches the peaks)
+    this.mix = Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
   }
 
   private newChan(i: number): Chan {
@@ -175,7 +175,9 @@ export class Player {
   /** a note number → the semitone it plays (0 = C-1), the Amiga's octave folding included */
   private semiOf(note: number, inst: Instrument | undefined): number {
     let s = note - 1 + this.song.transpose + this.song.noteShift + (inst?.transpose ?? 0);
-    if (this.song.format.startsWith("MMD")) {
+    // OctaMED's range: past it, a sample folds an octave down (B-3 with the Amiga's voices, B-4 mixing).
+    // Our synths, chips and drums aren't samples: they play every octave as written
+    if (this.song.format.startsWith("MMD") && !computed(inst)) {
       const top = this.song.flags.hardwareMix ? 36 : 48;
       if (s >= top) s -= Math.floor((s - top + 12) / 12) * 12;
     }

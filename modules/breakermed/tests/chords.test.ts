@@ -43,6 +43,7 @@ describe("breakerMED: chords", () => {
     s.blocks[0].cells[0][0] = { ...emptyCell(1), note: 25, inst: 1, chord: 1 };
     s.blocks[0].cells[8][0] = { ...emptyCell(1), note: NOTE_OFF };
     const r = new Renderer(s, RATE);
+    r.limit = false; // the chord's own level
     r.play(0, 0);
     const l = new Float32Array(RATE / 2), rr = new Float32Array(RATE / 2);
     r.render(l, rr);
@@ -50,7 +51,7 @@ describe("breakerMED: chords", () => {
     const c = energyAt(part, 261.63), e = energyAt(part, 329.63), g = energyAt(part, 392), fs = energyAt(part, 370);
     expect(Math.min(c, e, g)).toBeGreaterThan(fs * 5);
     // about as loud as one note, not three times
-    expect(Math.max(...part.map(Math.abs))).toBeLessThan(0.8);
+    expect(Math.max(...part.map(Math.abs))).toBeLessThan(1.6);
     // later: silent (the note off released all three)
     const late = new Float32Array(RATE * 2), lr = new Float32Array(RATE * 2);
     r.render(late, lr);

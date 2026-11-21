@@ -70,6 +70,68 @@ export const DRUM_KITS: Record<string, (k: DrumKit) => void> = {
     k.hold = 3;
     k.drums[0] = { tune: -2, decay: 1, level: 1, tone: 0.4 };
   },
+  /** a long sub kick that hums, a soft snare, airy hats */
+  boom: (k) => {
+    k.drums[0] = { tune: -3, decay: 2.6, level: 1, tone: 0.1 };
+    k.drums[2] = { tune: -1, decay: 1.1, level: 0.7, tone: 0.3 };
+    k.drums[3] = { tune: -1, decay: 1.2, level: 0.75, tone: 0.4 };
+    k.drums[6] = { tune: 0, decay: 1.4, level: 0.6, tone: 0.4 };
+  },
+  /** four on the floor: a firm kick, a wide clap, a bright open hat and ride */
+  house: (k) => {
+    k.drums[0] = { tune: 1, decay: 0.9, level: 1, tone: 0.7 };
+    k.drums[3] = { tune: 1, decay: 1.3, level: 0.9, tone: 0.6 };
+    k.drums[4] = { tune: 1, decay: 0.7, level: 0.65, tone: 0.75 };
+    k.drums[6] = { tune: 1, decay: 1.3, level: 0.65, tone: 0.75 };
+    k.drums[11] = { tune: 2, decay: 1.2, level: 0.6, tone: 0.8 };
+  },
+  /** snappy and high: clicky kick, tight snare, toms and cowbell tuned up */
+  electro: (k) => {
+    k.drums[0] = { tune: 5, decay: 0.6, level: 1, tone: 0.9 };
+    k.drums[2] = { tune: 4, decay: 0.6, level: 0.85, tone: 0.9 };
+    for (const t of [5, 7, 9]) k.drums[t] = { tune: 5, decay: 0.7, level: 0.8, tone: 0.6 };
+    k.drums[8] = { tune: 3, decay: 0.8, level: 0.7, tone: 0.5 };
+    k.drums[4] = { tune: 2, decay: 0.35, level: 0.6, tone: 0.9 };
+  },
+  /** a kick that slides on and on, a hard snare, ticking hats */
+  trap: (k) => {
+    k.drums[0] = { tune: -5, decay: 3.2, level: 1, tone: 0.35 };
+    k.drums[2] = { tune: 3, decay: 0.6, level: 0.9, tone: 0.8 };
+    k.drums[3] = { tune: 2, decay: 0.9, level: 0.9, tone: 0.7 };
+    k.drums[4] = { tune: 3, decay: 0.3, level: 0.55, tone: 0.85 };
+    k.drums[6] = { tune: 3, decay: 0.8, level: 0.55, tone: 0.85 };
+  },
+  /** soft and warm, 8 bits: drums off an old record */
+  dusty: (k) => {
+    k.bits = 8;
+    k.hold = 2;
+    k.drums[0] = { tune: -1, decay: 1.1, level: 1, tone: 0.3 };
+    k.drums[2] = { tune: -2, decay: 1.2, level: 0.8, tone: 0.3 };
+    k.drums[4] = { tune: -1, decay: 0.8, level: 0.55, tone: 0.3 };
+    k.drums[6] = { tune: -1, decay: 1.1, level: 0.55, tone: 0.3 };
+  },
+  /** tuned down, long and crushed to 4 bits: metal and machines */
+  industrial: (k) => {
+    k.bits = 4;
+    k.hold = 2;
+    for (const d of k.drums) Object.assign(d, { tune: -4, decay: 1.5, tone: 0.9 });
+    k.drums[0].level = 1;
+  },
+  /** toms that ring, a rim and a cowbell up front */
+  tribal: (k) => {
+    k.drums[0] = { tune: -2, decay: 1.2, level: 0.95, tone: 0.4 };
+    k.drums[1] = { tune: 0, decay: 1.2, level: 0.9, tone: 0.6 };
+    k.drums[5] = { tune: -3, decay: 2, level: 0.95, tone: 0.3 };
+    k.drums[7] = { tune: 0, decay: 1.8, level: 0.95, tone: 0.3 };
+    k.drums[9] = { tune: 3, decay: 1.6, level: 0.95, tone: 0.3 };
+    k.drums[8] = { tune: 0, decay: 1, level: 0.9, tone: 0.5 };
+  },
+  /** every drum short and quiet, a clicky rim: room for the rest */
+  minimal: (k) => {
+    for (const d of k.drums) Object.assign(d, { decay: 0.35, level: 0.65 });
+    k.drums[0] = { tune: 0, decay: 0.6, level: 0.95, tone: 0.5 };
+    k.drums[1] = { tune: 2, decay: 0.5, level: 0.8, tone: 0.85 };
+  },
 };
 
 export function drumKit(name?: string): DrumKit {

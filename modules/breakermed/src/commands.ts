@@ -18,31 +18,10 @@ import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
 import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
+import { EFFECTS, GUIDE } from "./guide";
+import { findPack, PACK, PACK_DIR } from "./pack";
+import { SCREENS, type Screen } from "./screens";
 
-const EFFECTS: [string, string][] = [
-  ["00xy", "arpeggio: the note, +x, +y semitones"],
-  ["01xx / 02xx", "slide the pitch up / down"],
-  ["03xx", "slide to the note (xx: speed)"],
-  ["04xy", "vibrato (x speed, y depth, twice ProTracker's)"],
-  ["05xy / 06xy", "03 / 04 going on, with a volume slide"],
-  ["07xy", "tremolo"],
-  ["09xx", "speed: ticks a line (01–20)"],
-  ["0Axy / 0Dxy", "volume slide (x up, y down)"],
-  ["0Bxx", "jump to position xx"],
-  ["0Cxx", "volume (decimal 00–64, or hex in hex mode)"],
-  ["0Fxx", "tempo · 0F00 next block · F1 note twice · F2 half a line late · F3 three times · FE stop · FF note off"],
-  ["11x / 12x", "fine slide up / down"],
-  ["14xy", "vibrato, ProTracker's depth"],
-  ["15x", "finetune (-8…7)"],
-  ["16x", "loop: 1600 marks, 16x plays x more times"],
-  ["18x", "cut the note at tick x"],
-  ["19xx", "start xx × 256 frames into the sample"],
-  ["1Ax / 1Bx", "fine volume up / down"],
-  ["1Dxx", "next block, at line xx"],
-  ["1Ex", "play the line x more times"],
-  ["1Fxy", "note x ticks late · y: again every y ticks"],
-  ["2Exx", "pan (F0 left … 00 middle … 10 right)"],
-];
 
 export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): void {
   const { fmt, parseFlags } = ib.lib;
@@ -120,6 +99,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
   };
 
+  /** the pack's sounds that are in the vault (their files, under PACK_DIR) */
+  const packHave = async () => {
+    const out = new Set<string>();
+    for (const dir of new Set(PACK.map((p) => p.file.split("/")[0])))
+      for (const e of await ib.vault.list(`${PACK_DIR}/${dir}`).catch(() => [])) if (!e.isDir) out.add(`${dir}/${e.name}`);
+    return out;
+  };
+
   const need = (): Song => {
     if (!st.song) throw new Error("no song loaded (med open <file>)");
     return st.song;
@@ -141,11 +128,18 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
       "med play [song|block] [position] [line]",
       "med stop",
-      "med pos <position> [line]  move the cursor (and where play starts)",
+      "med pos <position> [line] [track]   move the cursor (and where play starts)",
       "med mute <track> · med solo <track>   (again: back)",
       "med paula on|off           stepped like the Amiga (on), or smooth",
       "med edit on|off            typing writes in the block (space on the page)",
       "med step <0–9>             lines the cursor moves after a note",
+      "med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
+      "med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
+      "med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)",
+      "med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
+      "med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
+      "med sampler [file]         load a sound into a free instrument (no file: choose one)",
+      "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
       "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
       "med block new [lines] · med block copy · med block lines <n>",
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
@@ -314,6 +308,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med: position 0–${hex(s.sequence.length - 1)}\n`), 1;
             st.seq = seq;
             st.line = rest[1] ? parseInt(rest[1], 16) || 0 : 0;
+            if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
             if (engine.playing) await engine.play(engine.mode ?? "song", { seq: st.seq, line: st.line });
             return 0;
           }
@@ -415,6 +410,96 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             }
             ctx.out(chordsOf(s).map((d, i) => `  ${(i + 1).toString(16).toUpperCase()}  ${d.name.padEnd(6)} ${d.notes.map((x) => (x > 0 ? `+${x}` : x)).join(" ")}`).join("\n") + `\n${fmt.dim(`the chord column: ${s.chordColumn ? "on" : "off"} (med chords on|off)`)}\n`);
             return 0;
+          }
+          case "octave": {
+            const n = parseInt(rest[0] ?? "", 10);
+            if (!(n >= 1 && n <= 8)) return ctx.err("med octave 1–8 (the piano's bottom row)\n"), 1;
+            st.octave = n - 1;
+            return 0;
+          }
+          case "ins": {
+            const s = need();
+            const n = parseInt(rest[0] ?? "", 16);
+            if (!(n >= 1 && n <= Math.min(63, s.instruments.length + 1))) return ctx.err(`med ins 01–${hex(Math.min(63, s.instruments.length + 1))} (the instrument the keys play)\n`), 1;
+            st.inst = n - 1;
+            return 0;
+          }
+          case "guide": {
+            if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${b}`).join("\n")}`).join("\n\n") + "\n"), 0;
+            if (st.screen !== "guide") st.back = st.screen;
+            st.screen = "guide";
+            void ib.apps.open("breakermed");
+            ctx.out("the guide is on the page: ↑↓ to read, ? to go back · med guide --text: here\n");
+            return 0;
+          }
+          case "screen": {
+            const id = rest[0] as Screen;
+            if (!SCREENS.some((x) => x.id === id)) return ctx.err(`med screen ${SCREENS.map((x) => x.id).join("|")}\n`), 1;
+            if (id === "guide" && st.screen !== "guide") st.back = st.screen;
+            st.screen = id;
+            void ib.apps.open("breakermed");
+            return 0;
+          }
+          case "copy":
+          case "cut":
+          case "paste":
+          case "clear":
+          case "transpose": {
+            const s = need();
+            const e = st.editor!;
+            const block = s.sequence[st.seq];
+            // the selection, or the cell under the cursor
+            const sel = st.sel && st.sel.block === block ? st.sel : { block, line0: st.line, line1: st.line, track0: st.track, track1: st.track };
+            if (sub === "copy") st.clip = e.copy(sel);
+            else if (sub === "cut") (st.clip = e.cut(sel)), (st.sel = null);
+            else if (sub === "clear") e.clearSelection(sel);
+            else if (sub === "paste") {
+              if (!st.clip) return ctx.err("med paste: nothing copied (med copy)\n"), 1;
+              e.paste(block, st.line, st.track, st.clip);
+            } else {
+              const n = parseInt(rest[0] ?? "", 10);
+              if (!(n >= -48 && n <= 48 && n !== 0)) return ctx.err("med transpose <±1–48 semitones> (12: an octave)\n"), 1;
+              e.transpose(sel, n);
+            }
+            return 0;
+          }
+          case "line": {
+            const s = need();
+            const tracks = flags.all ? [...Array(s.tracks).keys()] : [st.track];
+            if (rest[0] === "insert") st.editor!.insertLine(s.sequence[st.seq], st.line, tracks);
+            else if (rest[0] === "delete") st.editor!.deleteLine(s.sequence[st.seq], st.line, tracks);
+            else return ctx.err("med line insert|delete [--all]\n"), 1;
+            return 0;
+          }
+          case "pack": {
+            // the starter pack: which sounds a musician has made (in the vault), which are still placeholders
+            if (rest[0] === "load") {
+              const p = findPack(rest[1] ?? "");
+              if (!p) return ctx.err(`med pack load <name>: ${PACK.map((x) => x.file.split("/").pop()!.replace(/\.wav$/, "")).join(" · ")}\n`), 1;
+              if (!(await packHave()).has(p.file)) return ctx.err(`${p.file}: a placeholder — nobody has recorded it yet (SOUND_DESIGN.md)\n`), 1;
+              return ib.shell.run(`med sampler ${PACK_DIR}/${p.file}`);
+            }
+            let have = 0;
+            const found = await packHave();
+            for (const p of PACK) {
+              const there = found.has(p.file);
+              if (there) have++;
+              ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
+            }
+            ctx.out(`${have}/${PACK.length} in ${PACK_DIR}/ · the others are placeholders: sounds made by people, see the module's SOUND_DESIGN.md\n`);
+            return 0;
+          }
+          case "sampler": {
+            // a song first if there's none (a new one), then the first free slot, then the sound
+            if (!st.song) await adopt(ctx, templateSong(), "untitled.bmed");
+            const s = need();
+            let n = s.instruments.findIndex((x) => x.kind === "empty");
+            if (n < 0) n = s.instruments.length;
+            if (n >= 63) return ctx.err("med sampler: the 63 instruments are taken\n"), 1;
+            st.inst = n;
+            st.screen = "instrument";
+            void ib.apps.open("breakermed");
+            return sampleCommand(ib, st, ctx, [hex(n + 1), "load", ...rest], flags);
           }
           case "step": {
             const n = parseInt(rest[0] ?? "", 10);

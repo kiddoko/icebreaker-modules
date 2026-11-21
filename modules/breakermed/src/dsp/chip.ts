@@ -21,6 +21,7 @@
  *
  * The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
  */
+import { PRESET_LEVELS } from "./levels";
 import { adsr, C3_HZ, C3_RATE, type Adsr } from "./analog";
 import { findIn, nudgeIn, sanitizeWith, setIn, showIn, type Param } from "./params";
 import type { NoteStart, Voice } from "./voice";
@@ -43,6 +44,8 @@ export const CHIP_LIKE: Record<ChipModel, string> = {
 };
 
 export interface ChipParams {
+  /** the sound's loudness, in dB (the presets come matched to each other) */
+  level: number;
   chip: ChipModel;
   wave: ChipWave;
   /** the pulse's width, 0–1 (2a03 / dmg snap it to 12.5, 25, 50, 75 %) */
@@ -69,6 +72,7 @@ export interface ChipParams {
 
 export function defaultChip(): ChipParams {
   return {
+    level: 0,
     chip: "2a03",
     wave: "pulse",
     duty: 0.5,
@@ -151,6 +155,7 @@ export const CHIP_PRESETS: Record<string, (p: ChipParams) => void> = {
 export function chipPreset(name?: string): ChipParams {
   const p = defaultChip();
   CHIP_PRESETS[name ?? ""]?.(p);
+  p.level = PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0;
   return structuredClone(p);
 }
 
@@ -179,6 +184,7 @@ export const CHIP_PARAMS: readonly Param[] = [
   { key: "filter.type", label: "filter", choices: ["off", "lp", "bp", "hp"] },
   { key: "filter.cutoff", label: "cutoff", min: 30, max: 18000, step: 1.12, log: true, unit: "Hz" },
   { key: "filter.reso", label: "resonance", min: 0, max: 0.95, step: 0.05 },
+  { key: "level", label: "level", min: -24, max: 12, step: 0.5, unit: "dB" },
 ];
 
 export const findChip = (name: string) => findIn(CHIP_PARAMS, name);
@@ -359,7 +365,8 @@ export class ChipVoice implements Voice {
 
   set(rate: number, volume: number, pan: number): void {
     this.hz = (Math.max(1, rate) / C3_RATE) * C3_HZ;
-    const v = Math.max(0, Math.min(1, volume));
+    // the sound's own level (dB) after the volume: a preset can be louder than a full-volume note
+    const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
     this.gl = v * Math.min(1, 1 - pan);
     this.gr = v * Math.min(1, 1 + pan);
   }

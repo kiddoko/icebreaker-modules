@@ -263,7 +263,8 @@ export function newSong(tracks = DEFAULT_TRACKS): Song {
     trackVolume: new Array(tracks).fill(64),
     trackPan: amigaPan(tracks),
     trackNames: new Array(tracks).fill(""),
-    flags: { volHex: true, vol7bit: false, ptSlides: false, eightChannel: false, hardwareMix: true, filter: false },
+    // mixing mode: a new song's notes play where they're written (the Amiga voices fold C-4 and up an octave down)
+    flags: { volHex: true, vol7bit: false, ptSlides: false, eightChannel: false, hardwareMix: false, filter: false },
   };
 }
 

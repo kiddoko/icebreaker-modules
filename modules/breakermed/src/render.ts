@@ -12,6 +12,7 @@ import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
 import { ECHO_MAX_MS, MAX_CHORD_NOTES, type Echo, type Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
 import { C3_RATE } from "./dsp/analog";
+import { Limiter } from "./dsp/limiter";
 import { DrumVoice, drumOf } from "./dsp/drums";
 import { ChipVoice } from "./dsp/chip";
 
@@ -25,6 +26,8 @@ export interface LineMark {
 
 /** keys played on the piano: a few voices of their own, in turn */
 const PREVIEWS = 4;
+/** a key played alone: about as loud as a note of the song */
+const PREVIEW_GAIN = 0.7;
 
 export class Renderer {
   /** frames written so far */
@@ -45,6 +48,10 @@ export class Renderer {
   private led = { b0: 0, b1: 0, b2: 0, a1: 0, a2: 0, x: [0, 0, 0, 0], y: [0, 0, 0, 0] };
   /** frames left in the current tick (and the fraction carried, so ticks don't drift) */
   private tickLeft = 0;
+  /** the mix's last stage: loud, never clipping */
+  private readonly limiter: Limiter;
+  /** the limiter on (tests of the echo or the mix turn it off to measure them) */
+  limit = true;
   private carry = 0;
 
   constructor(
@@ -52,6 +59,7 @@ export class Renderer {
     readonly rate: number,
     public paula = true,
   ) {
+    this.limiter = new Limiter(rate);
     // a Butterworth low-pass (two poles) at 3275 Hz, the LED filter's corner
     const w = Math.tan((Math.PI * Math.min(3275, rate * 0.45)) / rate);
     const n = 1 / (1 + Math.SQRT2 * w + w * w);
@@ -115,7 +123,7 @@ export class Renderer {
     const slot = this.nextPreview++ % PREVIEWS;
     const voice = voiceFor(instrument, this.rate, this.paula);
     voice.start({ instrument, rate, offset: 0 });
-    voice.set(rate, 0.45 * instrument.gain * (instrument.volume / 64), 0);
+    voice.set(rate, PREVIEW_GAIN * instrument.gain * (instrument.volume / 64), 0);
     this.previews[slot] = { voice, until: this.frame + Math.round(seconds * this.rate) };
   }
 
@@ -137,6 +145,7 @@ export class Renderer {
       if (this.song.flags.filter) this.filter(left, right, at, at + span);
       if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
       else if (this.echoL) this.echoL = this.echoR = null; // off: the next echo starts clean
+      if (this.limit) this.limiter.process(left, right, at, at + span);
       at += span;
       this.tickLeft -= span;
     }

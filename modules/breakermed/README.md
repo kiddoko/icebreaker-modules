@@ -25,7 +25,14 @@ keyboard, the mouse and a gamepad.
 
 ## The page
 
-Four screens on the right, by their tabs or **alt B / I / S / E**:
+With no song, the page shows the logo and **START**: **N** new song · **O** open · **D** demo ·
+**?** guide · **C** a chiptune song · **S** the sampler (a click, the letter, or the arrows and ⏎).
+
+**Space** turns the **edit mode** on and off: the block's frame says "● EDIT", the cursor's line
+turns red, and the keys write notes. **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
+how to start, the edit mode, the keys, a cell's columns, every effect command in hex, the sampler.
+
+Five screens on the right, by their tabs or **alt B / I / S / E** and **?**:
 
 - **BLOCK**: the editor (below).
 - **INSTRUMENT**: the selected instrument: a sample's tools, a synth's settings, a kit's drums, or
@@ -165,6 +172,11 @@ the note written (`med save` says so); `med bounce` keeps a chord's sound as a s
 
 ## The sampler
 
+`med sampler` (or START's **S**, a free instrument's "sampler · load a sound…", the menus) loads a
+sound of the vault into a free instrument. `med pack` lists the **starter sound pack**: sampled
+sounds recorded by people, placeholders until someone makes them ([SOUND_DESIGN.md](SOUND_DESIGN.md)
+says which, and how); `med pack load <name>` loads one.
+
 alt I shows the instrument (alt B the block again): its sound in braille dots, and a button a
 tool. Each runs a `med sample` command (the LOG shows it, ⌘Z undoes it):
 
@@ -260,7 +272,8 @@ med new --chip                                a chiptune song: pulse 1, pulse 2,
 ## The drum machine
 
 An instrument can be a **kit of twelve drums**, computed as they play (no samples), one a note
-of the octave, whatever the octave:
+of the octave, whatever the octave. Twelve kits (`med drums kits`): classic, punch, tight, lofi,
+boom, house, electro, trap, dusty, industrial, tribal, minimal:
 
 ```
 C  kick      C# rim     D  snare     D# clap      E  closed hat   F  low tom
@@ -300,6 +313,11 @@ med echo off
 ```
 
 ## How it plays
+
+Loudness: every synth has a **level** setting (dB), and every preset comes matched to the others
+(hats a little lower); the mix ends in a limiter at −1 dBFS, so a song is loud and never clips.
+A new song plays every note in the octave written (OctaMED's mixing mode); songs read with the
+Amiga's four voices keep their range for samples, never for our synths.
 
 breakerMED computes its sound itself (every track, every instrument) and streams it to the deck
 (`ib.audio.stream`): about 30 ms from a key to the sound, and an export will be exactly what you

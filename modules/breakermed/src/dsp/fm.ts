@@ -8,11 +8,14 @@
  *
  * The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
  */
+import { PRESET_LEVELS } from "./levels";
 import { adsr, C3_HZ, C3_RATE, type Adsr } from "./analog";
 import { findIn, nudgeIn, sanitizeWith, setIn, showIn, type Param } from "./params";
 import type { NoteStart, Voice } from "./voice";
 
 export interface FmParams {
+  /** the sound's loudness, in dB (the presets come matched to each other) */
+  level: number;
   /** the modulator's frequency, × the note's */
   ratio: number;
   /** cents added to the modulator (a slow beating) */
@@ -31,6 +34,7 @@ export interface FmParams {
 
 export function defaultFm(): FmParams {
   return {
+    level: 0,
     ratio: 1,
     detune: 0,
     index: 2,
@@ -62,6 +66,7 @@ export const FM_PRESETS: Record<string, (p: FmParams) => void> = {
 export function fmPreset(name?: string): FmParams {
   const p = defaultFm();
   FM_PRESETS[name ?? ""]?.(p);
+  p.level = PRESET_LEVELS[`fm:${name ?? ""}`] ?? 0;
   return structuredClone(p);
 }
 
@@ -80,6 +85,7 @@ export const FM_PARAMS: readonly Param[] = [
   { key: "amp.r", label: "release", min: 0, max: 10, step: 1.25, log: true, unit: "s" },
   { key: "lfo.rate", label: "lfo rate", min: 0.05, max: 40, step: 1.15, log: true, unit: "Hz" },
   { key: "lfo.pitch", label: "lfo → pitch", min: 0, max: 12, step: 0.05, unit: "st" },
+  { key: "level", label: "level", min: -24, max: 12, step: 0.5, unit: "dB" },
 ];
 
 export const findFm = (name: string) => findIn(FM_PARAMS, name);
@@ -120,7 +126,8 @@ export class FmVoice implements Voice {
 
   set(rate: number, volume: number, pan: number): void {
     this.hz = (Math.max(1, rate) / C3_RATE) * C3_HZ;
-    const v = Math.max(0, Math.min(1, volume));
+    // the sound's own level (dB) after the volume: a preset can be louder than a full-volume note
+    const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
     this.gl = v * Math.min(1, 1 - pan);
     this.gr = v * Math.min(1, 1 + pan);
   }

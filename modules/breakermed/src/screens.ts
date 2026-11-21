@@ -18,12 +18,13 @@ import type { IcebreakerAPI, KeyInput, Rect, UI } from "./icebreaker";
 import { cleanEcho, ECHO_MAX_MS, MAX_TRACKS, ptBpmOf, trackName, type Song } from "./song";
 import type { State } from "./app";
 
-export type Screen = "block" | "instrument" | "song" | "export";
+export type Screen = "block" | "instrument" | "song" | "export" | "guide";
 export const SCREENS: { id: Screen; label: string; short: string; key: string }[] = [
   { id: "block", label: "BLOCK", short: "BLK", key: "B" },
   { id: "instrument", label: "INSTRUMENT", short: "INST", key: "I" },
   { id: "song", label: "SONG", short: "SONG", key: "S" },
   { id: "export", label: "EXPORT", short: "EXP", key: "E" },
+  { id: "guide", label: "? GUIDE", short: "?", key: "?" },
 ];
 
 const FORMATS: ExportFormat[] = ["wav", "aiff", "flac", "mp3", "m4a", "ogg", "opus"];
@@ -372,9 +373,10 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     const fit = (labels: string[]) => labels.reduce((n, l) => n + l.length + 2, 0) <= w;
     const names = SCREENS.map((s) => t(s.label));
     const labels = [names.map((l) => ` ${l} `), names, SCREENS.map((s) => t(s.short))].find(fit) ?? SCREENS.map((s) => s.key);
+    const open = (s: Screen) => () => (s === "guide" && st.screen !== "guide" && (st.back = st.screen), (st.screen = s));
     let xx = x;
-    SCREENS.forEach((s, i) => (xx += ui.button(xx, y, labels[i], () => (st.screen = s.id), { selected: st.screen === s.id, quiet: st.screen !== s.id })));
-    if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E", { fg: c.faint });
+    SCREENS.forEach((s, i) => (xx += ui.button(xx, y, labels[i], open(s.id), { selected: st.screen === s.id, quiet: st.screen !== s.id })));
+    if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E · ?", { fg: c.faint });
   };
 
   return { drawSong, keySong, drawExport, keyExport, drawTabs };
