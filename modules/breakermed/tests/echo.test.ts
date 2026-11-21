@@ -11,6 +11,7 @@ function impulse(type: "normal" | "cross", ms: number, depth: number) {
   const s = newSong(2);
   s.echo = { type, ms, depth };
   const r = new Renderer(s, RATE);
+  r.limit = false; // the echo's own numbers
   const l = new Float32Array(RATE), rr = new Float32Array(RATE);
   l[0] = 1; // a click on the left
   r.render(l, rr);

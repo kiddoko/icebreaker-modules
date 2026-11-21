@@ -27,7 +27,7 @@ describe("CHIP: the sound chips", () => {
       const out = play(chipIns(name), 0.12);
       expect(out.every(Number.isFinite), name).toBe(true);
       expect(peak(out), name).toBeGreaterThan(0.01);
-      expect(peak(out), name).toBeLessThan(1);
+      expect(peak(out), name).toBeLessThan(10 ** (chipPreset(name).level / 20)); // full volume, its level on top
     }
   });
   it("every chip plays every wave", () => {

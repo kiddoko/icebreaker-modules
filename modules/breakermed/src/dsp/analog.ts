@@ -8,6 +8,7 @@
  * A note's pitch comes from the tracker like a sample's (a "rate"), so slides,
  * vibrato and arpeggios work the same: C-3 is middle C (261.63 Hz).
  */
+import { PRESET_LEVELS } from "./levels";
 import type { NoteStart, Voice } from "./voice";
 import { findIn, getIn, nudgeIn, sanitizeWith, setIn, showIn, type Param } from "./params";
 
@@ -24,6 +25,8 @@ export interface Adsr {
 }
 
 export interface AnalogParams {
+  /** the sound's loudness, in dB (the presets come matched to each other) */
+  level: number;
   osc1: { wave: Wave; pw: number; level: number };
   osc2: { wave: Wave; pw: number; level: number; semi: number; detune: number };
   /** a square an octave down */
@@ -42,6 +45,7 @@ export const C3_HZ = 261.6256;
 
 export function defaultAnalog(): AnalogParams {
   return {
+    level: 0,
     osc1: { wave: "saw", pw: 0.5, level: 0.8 },
     osc2: { wave: "saw", pw: 0.5, level: 0, semi: 0, detune: 7 },
     sub: 0,
@@ -68,6 +72,7 @@ export const ANALOG_PRESETS: Record<string, (p: AnalogParams) => void> = {
 export function analogPreset(name?: string): AnalogParams {
   const p = defaultAnalog();
   ANALOG_PRESETS[name ?? ""]?.(p);
+  p.level = PRESET_LEVELS[`analog:${name ?? ""}`] ?? 0;
   return structuredClone(p);
 }
 
@@ -154,7 +159,8 @@ export class AnalogVoice implements Voice {
   set(rate: number, volume: number, pan: number): void {
     this.targetHz = (Math.max(1, rate) / C3_RATE) * C3_HZ;
     if (!(this.p.glide > 0)) this.hz = this.targetHz;
-    const v = Math.max(0, Math.min(1, volume));
+    // the sound's own level (dB) after the volume: a preset can be louder than a full-volume note
+    const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
     this.gl = v * Math.min(1, 1 - pan);
     this.gr = v * Math.min(1, 1 + pan);
   }
@@ -268,6 +274,7 @@ export const ANALOG_PARAMS: readonly Param[] = [
   { key: "lfo.cutoff", label: "lfo → cutoff", min: 0, max: 4, step: 0.1, unit: "oct" },
   { key: "lfo.pw", label: "lfo → width", min: 0, max: 1, step: 0.05 },
   { key: "glide", label: "glide", min: 0, max: 2, step: 0.01, unit: "s" },
+  { key: "level", label: "level", min: -24, max: 12, step: 0.5, unit: "dB" },
 ];
 
 export const findParam = (name: string) => findIn(ANALOG_PARAMS, name);
