@@ -50,6 +50,13 @@ export const FM_PRESETS: Record<string, (p: FmParams) => void> = {
   organ: (p) => Object.assign(p, { ratio: 2, index: 0.9, menv: { a: 0.005, d: 0.1, s: 1, r: 0.05 }, amp: { a: 0.008, d: 0.1, s: 1, r: 0.06 } }),
   pluck: (p) => Object.assign(p, { ratio: 2, index: 3, menv: { a: 0.001, d: 0.12, s: 0, r: 0.1 }, amp: { a: 0.001, d: 0.6, s: 0, r: 0.2 } }),
   metal: (p) => Object.assign(p, { ratio: 1.41, index: 5, feedback: 0.45, menv: { a: 0.001, d: 1.2, s: 0.3, r: 0.8 }, amp: { a: 0.001, d: 2, s: 0.2, r: 1 } }),
+  // the YM2612's sound (Mega Drive-style), as far as two operators go: punchy basses, brass, leads
+  "ym-bass": (p) => Object.assign(p, { ratio: 1, index: 4.5, feedback: 0.35, menv: { a: 0.001, d: 0.12, s: 0.25, r: 0.06 }, amp: { a: 0.001, d: 0.4, s: 0.8, r: 0.05 } }),
+  "ym-slap": (p) => Object.assign(p, { ratio: 2, index: 6, feedback: 0.2, menv: { a: 0.001, d: 0.06, s: 0.1, r: 0.05 }, amp: { a: 0.001, d: 0.3, s: 0.5, r: 0.05 } }),
+  "ym-brass": (p) => Object.assign(p, { ratio: 1, index: 3.4, feedback: 0.3, menv: { a: 0.04, d: 0.25, s: 0.75, r: 0.15 }, amp: { a: 0.02, d: 0.2, s: 0.9, r: 0.15 }, lfo: { rate: 6, pitch: 0.1 } }),
+  "ym-lead": (p) => Object.assign(p, { ratio: 1, index: 2.2, feedback: 0.55, menv: { a: 0.005, d: 0.4, s: 0.6, r: 0.2 }, amp: { a: 0.003, d: 0.3, s: 0.85, r: 0.2 }, lfo: { rate: 5.5, pitch: 0.15 } }),
+  "ym-epiano": (p) => Object.assign(p, { ratio: 14, index: 1.2, menv: { a: 0.001, d: 0.25, s: 0, r: 0.2 }, amp: { a: 0.001, d: 1.5, s: 0.25, r: 0.4 } }),
+  "ym-bell": (p) => Object.assign(p, { ratio: 7, index: 2.8, menv: { a: 0.001, d: 1.5, s: 0.05, r: 1 }, amp: { a: 0.001, d: 2.5, s: 0, r: 1.5 } }),
 };
 
 export function fmPreset(name?: string): FmParams {

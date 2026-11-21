@@ -218,6 +218,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ["load…", `med sample ${n} load`, "a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault"],
         ["analog synth", `med synth ${n} new`, "two oscillators, a filter, two envelopes, an LFO"],
         ["FM synth", `med fm ${n} new`, "two sine waves, one bending the other: pianos, bells, basses"],
+        ["chip synth", `med chip ${n} new 2a03-lead`, "old consoles' sound chips, for chiptune: NES, Game Boy, C64, AY, SN76489, PC Engine-style"],
         ["drum machine", `med drums ${n} new`, "twelve drums, one a note: C kick, D snare, E hat…"],
       ];
       let x = inner.x + 1, y = inner.y + 3;
@@ -306,7 +307,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     let x = inner.x + 1;
     ui.text(x, inner.y, t("preset"), { fg: c.muted });
     x += t("preset").length + 1;
-    for (const name of sk.presets) {
+    for (const name of sk.presetsFor?.(p) ?? sk.presets) {
       if (x + name.length + 2 > inner.x + inner.w - 1) break;
       x += ui.button(x, inner.y, name, () => {}, { cmd: `med ${sk.cmd} ${n} preset ${name}`, quiet: true }) + 1;
     }
@@ -529,7 +530,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       instList.render(ui, instBox, false, (i, row, sel) => {
         const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
-        const tag = ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+        const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 

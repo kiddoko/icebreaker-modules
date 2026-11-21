@@ -178,10 +178,10 @@ export interface Block {
 }
 
 /** sample: a sound read at the note's speed · analog / fm: our synths · drums: our drum machine · synth / hybrid: OctaMED's (read from .med) */
-export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog" | "fm" | "drums";
+export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog" | "fm" | "drums" | "chip";
 
 /** our own instruments: computed, no sound data */
-export const computed = (i: Instrument | undefined) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums";
+export const computed = (i: Instrument | undefined) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums" || i?.kind === "chip";
 
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
 export const playable = (i: Instrument | undefined) => !!i && (computed(i) || (i.kind !== "empty" && i.data.length > 0));
@@ -221,6 +221,8 @@ export interface Instrument {
   fm?: import("./dsp/fm").FmParams;
   /** the drum machine's kit (kind "drums") */
   drums?: import("./dsp/drums").DrumKit;
+  /** the chip synth's settings (kind "chip") */
+  chip?: import("./dsp/chip").ChipParams;
 }
 
 export function emptyCell(pages = 1): Cell {

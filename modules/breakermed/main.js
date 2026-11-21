@@ -148,7 +148,7 @@ var chordsOf = (s) => s.chords ?? DEFAULT_CHORDS;
 /** the notes chord `n` (1–15) adds; none for 0 */
 var chordNotes = (s, n) => n ? chordsOf(s)[n - 1]?.notes ?? [] : [];
 /** our own instruments: computed, no sound data */
-var computed = (i) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums";
+var computed = (i) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums" || i?.kind === "chip";
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
 var playable = (i) => !!i && (computed(i) || i.kind !== "empty" && i.data.length > 0);
 function emptyCell(pages = 1) {
@@ -634,6 +634,7 @@ var Editor = class {
 			if (old.synth) copy.synth = structuredClone(old.synth);
 			if (old.drums) copy.drums = structuredClone(old.drums);
 			if (old.fm) copy.fm = structuredClone(old.fm);
+			if (old.chip) copy.chip = structuredClone(old.chip);
 			fn(copy);
 			if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
 			if (copy.loopLength <= 2) copy.loopStart = 0, copy.loopLength = 0;
@@ -1660,6 +1661,114 @@ var FM_PRESETS = {
 			s: .2,
 			r: 1
 		}
+	}),
+	"ym-bass": (p) => Object.assign(p, {
+		ratio: 1,
+		index: 4.5,
+		feedback: .35,
+		menv: {
+			a: .001,
+			d: .12,
+			s: .25,
+			r: .06
+		},
+		amp: {
+			a: .001,
+			d: .4,
+			s: .8,
+			r: .05
+		}
+	}),
+	"ym-slap": (p) => Object.assign(p, {
+		ratio: 2,
+		index: 6,
+		feedback: .2,
+		menv: {
+			a: .001,
+			d: .06,
+			s: .1,
+			r: .05
+		},
+		amp: {
+			a: .001,
+			d: .3,
+			s: .5,
+			r: .05
+		}
+	}),
+	"ym-brass": (p) => Object.assign(p, {
+		ratio: 1,
+		index: 3.4,
+		feedback: .3,
+		menv: {
+			a: .04,
+			d: .25,
+			s: .75,
+			r: .15
+		},
+		amp: {
+			a: .02,
+			d: .2,
+			s: .9,
+			r: .15
+		},
+		lfo: {
+			rate: 6,
+			pitch: .1
+		}
+	}),
+	"ym-lead": (p) => Object.assign(p, {
+		ratio: 1,
+		index: 2.2,
+		feedback: .55,
+		menv: {
+			a: .005,
+			d: .4,
+			s: .6,
+			r: .2
+		},
+		amp: {
+			a: .003,
+			d: .3,
+			s: .85,
+			r: .2
+		},
+		lfo: {
+			rate: 5.5,
+			pitch: .15
+		}
+	}),
+	"ym-epiano": (p) => Object.assign(p, {
+		ratio: 14,
+		index: 1.2,
+		menv: {
+			a: .001,
+			d: .25,
+			s: 0,
+			r: .2
+		},
+		amp: {
+			a: .001,
+			d: 1.5,
+			s: .25,
+			r: .4
+		}
+	}),
+	"ym-bell": (p) => Object.assign(p, {
+		ratio: 7,
+		index: 2.8,
+		menv: {
+			a: .001,
+			d: 1.5,
+			s: .05,
+			r: 1
+		},
+		amp: {
+			a: .001,
+			d: 2.5,
+			s: 0,
+			r: 1.5
+		}
 	})
 };
 function fmPreset(name) {
@@ -1784,7 +1893,7 @@ var FM_PARAMS = [
 	}
 ];
 var sanitizeFm = (j) => sanitizeWith(FM_PARAMS, defaultFm(), j);
-var TAU = 2 * Math.PI;
+var TAU$1 = 2 * Math.PI;
 var FmVoice = class {
 	constructor(sr) {
 		_defineProperty(this, "sr", void 0);
@@ -1838,7 +1947,7 @@ var FmVoice = class {
 		const fb = p.feedback * Math.PI;
 		for (let i = from; i < to; i++) {
 			this.lfoPh = (this.lfoPh + p.lfo.rate * dt) % 1;
-			const hz = p.lfo.pitch ? this.hz * 2 ** (Math.sin(TAU * this.lfoPh) * p.lfo.pitch / 12) : this.hz;
+			const hz = p.lfo.pitch ? this.hz * 2 ** (Math.sin(TAU$1 * this.lfoPh) * p.lfo.pitch / 12) : this.hz;
 			const r = this.released;
 			const amp = adsr(p.amp, this.t, r && {
 				at: r.at,
@@ -1848,10 +1957,10 @@ var FmVoice = class {
 				at: r.at,
 				from: r.mod
 			});
-			const m = Math.sin(TAU * this.pm + fb * (this.m1 + this.m2) * .5);
+			const m = Math.sin(TAU$1 * this.pm + fb * (this.m1 + this.m2) * .5);
 			this.m2 = this.m1;
 			this.m1 = m;
-			const y = Math.sin(TAU * this.pc + idx * m) * amp;
+			const y = Math.sin(TAU$1 * this.pc + idx * m) * amp;
 			this.pc = (this.pc + hz * dt) % 1;
 			this.pm = (this.pm + hz * modRatio * dt) % 1;
 			this.t += dt;
@@ -1864,6 +1973,1091 @@ var FmVoice = class {
 		}
 	}
 };
+// src/dsp/chip.ts
+/**
+* BreakerMED — CHIP: the sound chips of old consoles and home computers, for
+* chiptune. One instrument, a mode per chip; everything is computed here from
+* how the chips worked (their clocks, period registers, DACs, noise shift
+* registers) — no sample or ROM taken from any machine. Our own code.
+*
+*   2a03   (NES-style)            pulse 12.5 / 25 / 50 / 75 %, a 4-bit stepped triangle,
+*                                 noise from a 15-bit LFSR, long or short (metallic)
+*   dmg    (Game Boy-style)       pulse, a 32-step 4-bit wave channel, 15/7-bit noise
+*   sid    (C64-style)            saw, triangle, pulse of any width (and its sweep),
+*                                 ring mod and hard sync, a LP / BP / HP filter
+*   ay     (ZX / MSX / ST-style)  square, noise, and the envelope "buzzer"
+*   psg    (SN76489, Master System-style)  square, white or periodic noise
+*   pce    (PC Engine-style)      a 32-step 5-bit wavetable
+*
+* What makes them sound like chips: the pitch snaps to each chip's period grid
+* (high notes go a little out of tune, like on the real thing), the volume moves
+* in 16 steps (SID: 256), the waves come out of a few-bit DAC. Plus what chiptune
+* musicians did by hand: an automatic vibrato (after a delay), a pitch sweep
+* (kicks, lasers), a pulse-width sweep, and chords played as a fast arpeggio.
+*
+* The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
+*/
+var CHIPS = [
+	"2a03",
+	"dmg",
+	"sid",
+	"ay",
+	"psg",
+	"pce"
+];
+var CHIP_WAVES = [
+	"pulse",
+	"triangle",
+	"saw",
+	"noise",
+	"wave",
+	"buzz-saw",
+	"buzz-tri",
+	"tone+noise"
+];
+/** the wavetables (for "wave"): ours, 32 steps; "custom" is the instrument's own */
+var TABLE_NAMES = [
+	"sine",
+	"saw",
+	"square",
+	"organ",
+	"bass",
+	"pluck",
+	"vox",
+	"custom"
+];
+/** what each chip is called in the help (the console it's like) */
+var CHIP_LIKE = {
+	"2a03": "NES-style",
+	dmg: "Game Boy-style",
+	sid: "C64-style",
+	ay: "ZX Spectrum / MSX / Atari ST-style",
+	psg: "SN76489, Master System-style",
+	pce: "PC Engine-style"
+};
+function defaultChip() {
+	return {
+		chip: "2a03",
+		wave: "pulse",
+		duty: .5,
+		noise: "long",
+		table: "sine",
+		amp: {
+			a: 0,
+			d: .3,
+			s: .8,
+			r: .08
+		},
+		vib: {
+			depth: 0,
+			rate: 6,
+			delay: .2
+		},
+		sweep: 0,
+		arp: 0,
+		pwm: {
+			depth: 0,
+			rate: 1
+		},
+		ring: 0,
+		sync: 0,
+		filter: {
+			type: "off",
+			cutoff: 2e3,
+			reso: .3
+		}
+	};
+}
+var pre = (o) => (p) => {
+	const { amp, vib, pwm, filter, ...rest } = o;
+	Object.assign(p, rest);
+	if (amp) Object.assign(p.amp, amp);
+	if (vib) Object.assign(p.vib, vib);
+	if (pwm) Object.assign(p.pwm, pwm);
+	if (filter) Object.assign(p.filter, filter);
+};
+/** our own presets, named by the chip (the console it's like is in the help) */
+var CHIP_PRESETS = {
+	"2a03-lead": pre({
+		chip: "2a03",
+		wave: "pulse",
+		duty: .25,
+		amp: {
+			d: .5,
+			s: .7
+		},
+		vib: {
+			depth: .25,
+			rate: 6,
+			delay: .25
+		}
+	}),
+	"2a03-lead12": pre({
+		chip: "2a03",
+		wave: "pulse",
+		duty: .125,
+		amp: {
+			d: .4,
+			s: .6
+		},
+		vib: {
+			depth: .2,
+			rate: 6,
+			delay: .3
+		}
+	}),
+	"2a03-square": pre({
+		chip: "2a03",
+		wave: "pulse",
+		duty: .5,
+		amp: {
+			d: .2,
+			s: .75
+		}
+	}),
+	"2a03-bass": pre({
+		chip: "2a03",
+		wave: "triangle",
+		amp: {
+			d: .1,
+			s: 1,
+			r: .02
+		}
+	}),
+	"2a03-arp": pre({
+		chip: "2a03",
+		wave: "pulse",
+		duty: .125,
+		arp: 50,
+		amp: {
+			d: .3,
+			s: .6
+		}
+	}),
+	"2a03-pluck": pre({
+		chip: "2a03",
+		wave: "pulse",
+		duty: .25,
+		amp: {
+			d: .18,
+			s: 0,
+			r: .05
+		}
+	}),
+	"2a03-kick": pre({
+		chip: "2a03",
+		wave: "triangle",
+		sweep: -260,
+		amp: {
+			d: .18,
+			s: 0,
+			r: .02
+		}
+	}),
+	"2a03-snare": pre({
+		chip: "2a03",
+		wave: "noise",
+		amp: {
+			d: .16,
+			s: 0,
+			r: .04
+		}
+	}),
+	"2a03-hat": pre({
+		chip: "2a03",
+		wave: "noise",
+		noise: "short",
+		amp: {
+			d: .05,
+			s: 0,
+			r: .02
+		}
+	}),
+	"dmg-lead": pre({
+		chip: "dmg",
+		wave: "pulse",
+		duty: .5,
+		amp: {
+			d: .6,
+			s: .6
+		},
+		vib: {
+			depth: .3,
+			rate: 5.5,
+			delay: .3
+		}
+	}),
+	"dmg-lead25": pre({
+		chip: "dmg",
+		wave: "pulse",
+		duty: .25,
+		amp: {
+			d: .4,
+			s: .5
+		}
+	}),
+	"dmg-sweep": pre({
+		chip: "dmg",
+		wave: "pulse",
+		duty: .5,
+		sweep: 30,
+		amp: {
+			d: .35,
+			s: 0,
+			r: .05
+		}
+	}),
+	"dmg-wave-bass": pre({
+		chip: "dmg",
+		wave: "wave",
+		table: "bass",
+		amp: {
+			a: 0,
+			d: .1,
+			s: 1,
+			r: .03
+		}
+	}),
+	"dmg-wave-pad": pre({
+		chip: "dmg",
+		wave: "wave",
+		table: "organ",
+		amp: {
+			a: .08,
+			d: .3,
+			s: .8,
+			r: .25
+		},
+		vib: {
+			depth: .15,
+			rate: 5,
+			delay: .4
+		}
+	}),
+	"dmg-arp": pre({
+		chip: "dmg",
+		wave: "pulse",
+		duty: .25,
+		arp: 60,
+		amp: {
+			d: .3,
+			s: .5
+		}
+	}),
+	"dmg-snare": pre({
+		chip: "dmg",
+		wave: "noise",
+		amp: {
+			d: .14,
+			s: 0,
+			r: .03
+		}
+	}),
+	"dmg-hat": pre({
+		chip: "dmg",
+		wave: "noise",
+		noise: "short",
+		amp: {
+			d: .04,
+			s: 0,
+			r: .02
+		}
+	}),
+	"sid-pwm-lead": pre({
+		chip: "sid",
+		wave: "pulse",
+		duty: .4,
+		pwm: {
+			depth: .3,
+			rate: 1.2
+		},
+		amp: {
+			a: .005,
+			d: .4,
+			s: .7,
+			r: .2
+		},
+		vib: {
+			depth: .25,
+			rate: 6,
+			delay: .3
+		}
+	}),
+	"sid-pwm-bass": pre({
+		chip: "sid",
+		wave: "pulse",
+		duty: .3,
+		pwm: {
+			depth: .2,
+			rate: .7
+		},
+		filter: {
+			type: "lp",
+			cutoff: 900,
+			reso: .5
+		},
+		amp: {
+			d: .25,
+			s: .6,
+			r: .06
+		}
+	}),
+	"sid-saw-bass": pre({
+		chip: "sid",
+		wave: "saw",
+		filter: {
+			type: "lp",
+			cutoff: 600,
+			reso: .7
+		},
+		amp: {
+			d: .2,
+			s: .5,
+			r: .05
+		}
+	}),
+	"sid-sync-lead": pre({
+		chip: "sid",
+		wave: "saw",
+		sync: 2.5,
+		amp: {
+			a: .003,
+			d: .5,
+			s: .7,
+			r: .15
+		},
+		vib: {
+			depth: .2,
+			rate: 6,
+			delay: .25
+		}
+	}),
+	"sid-ring-bell": pre({
+		chip: "sid",
+		wave: "triangle",
+		ring: 3.5,
+		amp: {
+			a: 0,
+			d: .9,
+			s: 0,
+			r: .6
+		}
+	}),
+	"sid-arp": pre({
+		chip: "sid",
+		wave: "pulse",
+		duty: .25,
+		arp: 50,
+		pwm: {
+			depth: .15,
+			rate: 2
+		},
+		amp: {
+			d: .4,
+			s: .6
+		}
+	}),
+	"sid-kick": pre({
+		chip: "sid",
+		wave: "triangle",
+		sweep: -320,
+		amp: {
+			d: .2,
+			s: 0,
+			r: .02
+		}
+	}),
+	"sid-snare": pre({
+		chip: "sid",
+		wave: "noise",
+		filter: {
+			type: "hp",
+			cutoff: 1200,
+			reso: .2
+		},
+		amp: {
+			d: .18,
+			s: 0,
+			r: .05
+		}
+	}),
+	"ay-square": pre({
+		chip: "ay",
+		wave: "pulse",
+		duty: .5,
+		amp: {
+			d: .3,
+			s: .8
+		}
+	}),
+	"ay-buzz-saw": pre({
+		chip: "ay",
+		wave: "buzz-saw",
+		amp: {
+			d: .2,
+			s: .9,
+			r: .05
+		}
+	}),
+	"ay-buzz-tri": pre({
+		chip: "ay",
+		wave: "buzz-tri",
+		amp: {
+			d: .2,
+			s: .9,
+			r: .05
+		}
+	}),
+	"ay-arp": pre({
+		chip: "ay",
+		wave: "pulse",
+		arp: 50,
+		amp: {
+			d: .3,
+			s: .7
+		}
+	}),
+	"ay-kick": pre({
+		chip: "ay",
+		wave: "tone+noise",
+		sweep: -280,
+		amp: {
+			d: .16,
+			s: 0,
+			r: .02
+		}
+	}),
+	"ay-snare": pre({
+		chip: "ay",
+		wave: "noise",
+		amp: {
+			d: .15,
+			s: 0,
+			r: .04
+		}
+	}),
+	"ay-hat": pre({
+		chip: "ay",
+		wave: "noise",
+		amp: {
+			d: .045,
+			s: 0,
+			r: .02
+		}
+	}),
+	"psg-square": pre({
+		chip: "psg",
+		wave: "pulse",
+		amp: {
+			d: .3,
+			s: .8
+		}
+	}),
+	"psg-bass": pre({
+		chip: "psg",
+		wave: "noise",
+		noise: "short",
+		amp: {
+			d: .2,
+			s: .9,
+			r: .03
+		}
+	}),
+	"psg-arp": pre({
+		chip: "psg",
+		wave: "pulse",
+		arp: 50,
+		amp: {
+			d: .3,
+			s: .7
+		}
+	}),
+	"psg-pluck": pre({
+		chip: "psg",
+		wave: "pulse",
+		amp: {
+			d: .2,
+			s: 0,
+			r: .05
+		}
+	}),
+	"psg-snare": pre({
+		chip: "psg",
+		wave: "noise",
+		amp: {
+			d: .14,
+			s: 0,
+			r: .04
+		}
+	}),
+	"psg-hat": pre({
+		chip: "psg",
+		wave: "noise",
+		amp: {
+			d: .04,
+			s: 0,
+			r: .02
+		}
+	}),
+	"pce-wave-lead": pre({
+		chip: "pce",
+		wave: "wave",
+		table: "vox",
+		amp: {
+			a: .01,
+			d: .4,
+			s: .7,
+			r: .15
+		},
+		vib: {
+			depth: .2,
+			rate: 6,
+			delay: .3
+		}
+	}),
+	"pce-wave-bass": pre({
+		chip: "pce",
+		wave: "wave",
+		table: "bass",
+		amp: {
+			d: .15,
+			s: .9,
+			r: .04
+		}
+	}),
+	"pce-organ": pre({
+		chip: "pce",
+		wave: "wave",
+		table: "organ",
+		amp: {
+			a: .01,
+			d: .2,
+			s: .9,
+			r: .1
+		}
+	}),
+	"pce-pluck": pre({
+		chip: "pce",
+		wave: "wave",
+		table: "pluck",
+		amp: {
+			d: .25,
+			s: 0,
+			r: .08
+		}
+	}),
+	"pce-arp": pre({
+		chip: "pce",
+		wave: "wave",
+		table: "saw",
+		arp: 50,
+		amp: {
+			d: .3,
+			s: .6
+		}
+	})
+};
+function chipPreset(name) {
+	const p = defaultChip();
+	CHIP_PRESETS[name ?? ""]?.(p);
+	return structuredClone(p);
+}
+/** the presets of one chip (the INSTRUMENT screen shows those) */
+var chipPresetsFor = (chip) => Object.keys(CHIP_PRESETS).filter((n) => n.startsWith(chip + "-"));
+var CHIP_PARAMS = [
+	{
+		key: "chip",
+		label: "chip",
+		choices: CHIPS
+	},
+	{
+		key: "wave",
+		label: "wave",
+		choices: CHIP_WAVES
+	},
+	{
+		key: "duty",
+		label: "pulse width",
+		min: .0625,
+		max: .9375,
+		step: .0625
+	},
+	{
+		key: "noise",
+		label: "noise",
+		choices: ["long", "short"]
+	},
+	{
+		key: "table",
+		label: "wavetable",
+		choices: TABLE_NAMES
+	},
+	{
+		key: "amp.a",
+		label: "attack",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.d",
+		label: "decay",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.s",
+		label: "sustain",
+		min: 0,
+		max: 1,
+		step: .0625
+	},
+	{
+		key: "amp.r",
+		label: "release",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "vib.depth",
+		label: "vibrato",
+		min: 0,
+		max: 2,
+		step: .05,
+		unit: "st"
+	},
+	{
+		key: "vib.rate",
+		label: "vibrato rate",
+		min: .5,
+		max: 20,
+		step: .5,
+		unit: "Hz"
+	},
+	{
+		key: "vib.delay",
+		label: "vibrato delay",
+		min: 0,
+		max: 2,
+		step: .05,
+		unit: "s"
+	},
+	{
+		key: "sweep",
+		label: "pitch sweep",
+		min: -600,
+		max: 600,
+		step: 10,
+		unit: "st/s"
+	},
+	{
+		key: "arp",
+		label: "chord arpeggio",
+		min: 0,
+		max: 100,
+		step: 5,
+		unit: "/s"
+	},
+	{
+		key: "pwm.depth",
+		label: "pwm depth",
+		min: 0,
+		max: .45,
+		step: .025
+	},
+	{
+		key: "pwm.rate",
+		label: "pwm rate",
+		min: .05,
+		max: 20,
+		step: 1.25,
+		log: true,
+		unit: "Hz"
+	},
+	{
+		key: "ring",
+		label: "ring mod",
+		min: 0,
+		max: 8,
+		step: .25
+	},
+	{
+		key: "sync",
+		label: "hard sync",
+		min: 0,
+		max: 8,
+		step: .25
+	},
+	{
+		key: "filter.type",
+		label: "filter",
+		choices: [
+			"off",
+			"lp",
+			"bp",
+			"hp"
+		]
+	},
+	{
+		key: "filter.cutoff",
+		label: "cutoff",
+		min: 30,
+		max: 18e3,
+		step: 1.12,
+		log: true,
+		unit: "Hz"
+	},
+	{
+		key: "filter.reso",
+		label: "resonance",
+		min: 0,
+		max: .95,
+		step: .05
+	}
+];
+function sanitizeChip(j) {
+	const p = sanitizeWith(CHIP_PARAMS, defaultChip(), j);
+	const c = j?.custom;
+	if (Array.isArray(c) && c.length === 32 && c.every((x) => Number.isInteger(x) && x >= 0 && x <= 31)) p.custom = [...c];
+	return p;
+}
+/** "0123…" (32 hex digits, 0–F, or 0–V for 5 bits) → a custom wave; null if it isn't one */
+function parseTable(text) {
+	const t = text.replace(/\s+/g, "").toLowerCase();
+	if (t.length !== 32) return null;
+	const v = [...t].map((ch) => parseInt(ch, 32));
+	if (v.some((x) => !(x >= 0 && x <= 31))) return null;
+	return v.every((x) => x <= 15) ? v.map((x) => x * 2 + (x > 7 ? 1 : 0)) : v;
+}
+/** our wavetables, 32 steps from 0 to 31 */
+var TABLES = (() => {
+	const make = (f) => Array.from({ length: 32 }, (_, i) => Math.max(0, Math.min(31, Math.round(15.5 + 15.5 * f(i / 32)))));
+	const s = (x) => Math.sin(2 * Math.PI * x);
+	return {
+		sine: make(s),
+		saw: make((x) => 1 - 2 * x),
+		square: make((x) => x < .5 ? 1 : -1),
+		organ: make((x) => (s(x) + .5 * s(2 * x) + .33 * s(4 * x)) / 1.5),
+		bass: make((x) => x < .25 ? 1 : x < .5 ? .2 : x < .75 ? -.6 : -1),
+		pluck: make((x) => s(x) * .6 + s(3 * x) * .4),
+		vox: make((x) => (s(x) + .6 * s(3 * x) + .3 * s(5 * x)) / 1.6)
+	};
+})();
+var tableOf = (p) => p.table === "custom" && p.custom ? p.custom : TABLES[p.table] ?? TABLES.sine;
+var NES = 1789773;
+var SID = 985248;
+var AY = 1773400;
+var PSG = 3579545;
+var NES_NOISE = [
+	4,
+	8,
+	16,
+	32,
+	64,
+	96,
+	128,
+	160,
+	202,
+	254,
+	380,
+	508,
+	762,
+	1016,
+	2034,
+	4068
+];
+/** a period register: f = clock / (k × n), n whole, from lo to hi */
+var grid = (hz, clock, k, lo, hi) => clock / (k * Math.max(lo, Math.min(hi, Math.round(clock / (k * hz)))));
+/** the tone's frequency on this chip */
+function chipHz(chip, wave, hz) {
+	if (hz <= 0) return 0;
+	switch (chip) {
+		case "2a03": return wave === "triangle" ? grid(hz, NES, 32, 1, 2048) : grid(hz, NES, 16, 1, 2048);
+		case "dmg": {
+			const base = wave === "wave" ? 65536 : 131072;
+			return base / Math.max(1, Math.min(2048, Math.round(base / hz)));
+		}
+		case "sid": return Math.max(1, Math.min(65535, Math.round(hz * 16777216 / SID))) * SID / 16777216;
+		case "ay": return wave === "buzz-saw" ? grid(hz, AY, 256, 1, 65535) : wave === "buzz-tri" ? grid(hz, AY, 512, 1, 65535) : grid(hz, AY, 16, 1, 4095);
+		case "psg": return grid(hz, PSG, 32, 1, 1023);
+		case "pce": return grid(hz, PSG, 32, 1, 4095);
+	}
+}
+/** the noise's shift rate on this chip, for a note (higher notes, brighter noise) */
+function noiseHz(chip, hz) {
+	const want = hz * 16;
+	switch (chip) {
+		case "2a03": {
+			let best = NES / NES_NOISE[0];
+			for (const n of NES_NOISE) if (Math.abs(NES / n - want) < Math.abs(best - want)) best = NES / n;
+			return best;
+		}
+		case "dmg": {
+			let best = 0;
+			for (const r of [
+				.5,
+				1,
+				2,
+				3,
+				4,
+				5,
+				6,
+				7
+			]) for (let s = 0; s < 14; s++) {
+				const f = 524288 / r / 2 ** (s + 1);
+				if (Math.abs(f - want) < Math.abs(best - want)) best = f;
+			}
+			return best;
+		}
+		case "ay": return grid(want, AY, 16, 1, 31);
+		case "psg": return grid(want, PSG, 32, 1, 1023);
+		default: return Math.min(want, 4e4);
+	}
+}
+/** how many volume steps the chip has (2a03, dmg, ay, psg, pce: 16; SID: 256) */
+var VOLUME_STEPS = (chip) => chip === "sid" ? 255 : 15;
+/** an envelope's level as the chip can set it */
+var chipVolume = (chip, env) => Math.round(Math.max(0, Math.min(1, env)) * VOLUME_STEPS(chip)) / VOLUME_STEPS(chip);
+/** the four pulse widths of the 2A03 and the Game Boy */
+var DUTIES = [
+	.125,
+	.25,
+	.5,
+	.75
+];
+var snapDuty = (chip, d) => chip === "2a03" || chip === "dmg" ? DUTIES.reduce((a, b) => Math.abs(b - d) < Math.abs(a - d) ? b : a) : Math.max(.02, Math.min(.98, d));
+var TAU = 2 * Math.PI;
+/** sub-steps a frame: the waves are computed 4× faster and averaged (less aliasing, still sharp) */
+var OVER = 4;
+/** frames between two pitch updates (~1.5 kHz: smooth enough for vibrato and sweeps) */
+var CONTROL = 32;
+/** a state-variable filter (TPT), for the SID's */
+var Svf$1 = class {
+	constructor() {
+		_defineProperty(this, "s1", 0);
+		_defineProperty(this, "s2", 0);
+		_defineProperty(this, "g", 0);
+		_defineProperty(this, "k", 1);
+	}
+	set(hz, sr, reso) {
+		this.g = Math.tan(Math.PI * Math.min(hz, sr * .45) / sr);
+		this.k = 2 - 1.9 * reso;
+	}
+	run(x, type) {
+		const hp = (x - (this.k + this.g) * this.s1 - this.s2) / (1 + this.g * (this.k + this.g));
+		const bp = this.g * hp + this.s1;
+		const lp = this.g * bp + this.s2;
+		this.s1 = this.g * hp + bp;
+		this.s2 = this.g * bp + lp;
+		return type === "lp" ? lp : type === "bp" ? bp : hp;
+	}
+};
+var ChipVoice = class {
+	constructor(sr) {
+		_defineProperty(this, "sr", void 0);
+		_defineProperty(this, "on", false);
+		_defineProperty(this, "rings", true);
+		_defineProperty(this, "p", defaultChip());
+		_defineProperty(this, "table", TABLES.sine);
+		_defineProperty(
+			this,
+			/** the note's frequency (from the tracker, slides and vibrato included) */
+			"hz",
+			C3_HZ
+		);
+		_defineProperty(this, "ph", 0);
+		_defineProperty(this, "inner", 0);
+		_defineProperty(this, "ringPh", 0);
+		_defineProperty(this, "noisePh", 0);
+		_defineProperty(
+			this,
+			/** the pitch, the noise rate and the width, worked out every CONTROL frames (the grid search isn't free) */
+			"ctl",
+			0
+		);
+		_defineProperty(this, "cur", {
+			hz: 0,
+			nhz: 0,
+			duty: .5
+		});
+		_defineProperty(this, "lfsr", 32767);
+		_defineProperty(this, "bit", 1);
+		_defineProperty(this, "t", 0);
+		_defineProperty(this, "released", null);
+		_defineProperty(this, "gl", 0);
+		_defineProperty(this, "gr", 0);
+		_defineProperty(
+			this,
+			/** the chord, as semitones over the note, when it's played as an arpeggio */
+			"arpSteps",
+			[]
+		);
+		_defineProperty(this, "filt", new Svf$1());
+		_defineProperty(
+			this,
+			/** a DC blocker (the chips' outputs went through a capacitor) */
+			"dcx",
+			0
+		);
+		_defineProperty(this, "dcy", 0);
+		this.sr = sr;
+	}
+	start(n) {
+		this.p = n.instrument.chip ?? defaultChip();
+		this.table = tableOf(this.p);
+		this.hz = n.rate / C3_RATE$2 * C3_HZ;
+		this.ph = this.inner = this.ringPh = this.noisePh = 0;
+		this.ctl = 0;
+		this.lfsr = 32767;
+		this.t = 0;
+		this.released = null;
+		this.arpSteps = [];
+		this.on = true;
+	}
+	/** play the chord's notes one after the other (the renderer calls it when the instrument's arp is on) */
+	arpeggio(steps) {
+		this.arpSteps = steps;
+	}
+	set(rate, volume, pan) {
+		this.hz = Math.max(1, rate) / C3_RATE$2 * C3_HZ;
+		const v = Math.max(0, Math.min(1, volume));
+		this.gl = v * Math.min(1, 1 - pan);
+		this.gr = v * Math.min(1, 1 + pan);
+	}
+	stop() {
+		if (!this.on || this.released) return;
+		this.released = {
+			at: this.t,
+			amp: adsr(this.p.amp, this.t, null)
+		};
+	}
+	/** one noise step: the chip's shift register */
+	shift() {
+		const p = this.p;
+		const s = this.lfsr;
+		let fb;
+		switch (p.chip) {
+			case "ay":
+				fb = (s ^ s >> 3) & 1;
+				this.lfsr = (s >> 1 | fb << 16) & 131071;
+				break;
+			case "psg":
+				if (p.noise === "short") this.lfsr = (s >> 1 | (s & 1) << 15) & 65535 || 32768;
+				else fb = (s ^ s >> 3) & 1, this.lfsr = (s >> 1 | fb << 15) & 65535;
+				break;
+			default:
+				fb = (s ^ s >> (p.noise === "short" && p.chip === "2a03" ? 6 : 1)) & 1;
+				this.lfsr = s >> 1 | fb << 14;
+				if (p.noise === "short" && p.chip === "dmg") this.lfsr = this.lfsr & -65 | fb << 6;
+		}
+		this.bit = this.lfsr & 1;
+	}
+	render(left, right, from, to) {
+		if (!this.on) return;
+		const p = this.p, sr = this.sr, dt = 1 / sr, sub = dt / OVER;
+		const filterOn = p.chip === "sid" && p.filter.type !== "off";
+		if (filterOn) this.filt.set(p.filter.cutoff, sr, p.filter.reso);
+		const tri4 = p.chip !== "sid";
+		for (let i = from; i < to; i++) {
+			const r = this.released;
+			const env = adsr(p.amp, this.t, r && {
+				at: r.at,
+				from: r.amp
+			});
+			if (r && env <= 0 || !r && p.amp.s <= 0 && this.t > p.amp.a + p.amp.d) {
+				this.on = false;
+				return;
+			}
+			const vol = chipVolume(p.chip, env);
+			const noisy = p.wave === "noise" || p.wave === "tone+noise";
+			if (this.ctl-- <= 0) {
+				this.ctl = CONTROL;
+				let semis = 0;
+				if (this.arpSteps.length && p.arp > 0) {
+					const all = [0, ...this.arpSteps];
+					semis += all[Math.floor(this.t * p.arp) % all.length];
+				}
+				if (p.sweep) semis += Math.max(-72, Math.min(72, p.sweep * this.t));
+				if (p.vib.depth && this.t > p.vib.delay) semis += Math.sin(TAU * p.vib.rate * (this.t - p.vib.delay)) * p.vib.depth;
+				const want = this.hz * 2 ** (semis / 12);
+				this.cur.hz = want < 8 ? 0 : chipHz(p.chip, p.wave, want);
+				this.cur.nhz = noisy ? noiseHz(p.chip, want) : 0;
+				this.cur.duty = snapDuty(p.chip, p.duty + (p.pwm.depth ? Math.sin(TAU * p.pwm.rate * this.t) * p.pwm.depth : 0));
+			}
+			const { hz, nhz, duty } = this.cur;
+			let acc = 0;
+			for (let k = 0; k < OVER; k++) {
+				let ph = this.ph;
+				if (p.sync > 0) {
+					this.inner += hz * sub;
+					if (this.inner >= 1) this.inner -= 1, this.ph = 0;
+					this.ph = (this.ph + hz * p.sync * sub) % 1;
+					ph = this.ph;
+				} else {
+					this.ph = (this.ph + hz * sub) % 1;
+					ph = this.ph;
+				}
+				if (noisy) {
+					this.noisePh += nhz * sub;
+					while (this.noisePh >= 1) this.noisePh -= 1, this.shift();
+				}
+				let y;
+				switch (p.wave) {
+					case "pulse":
+						y = ph < duty ? 1 : -1;
+						break;
+					case "triangle": {
+						const x = ph < .5 ? 4 * ph - 1 : 3 - 4 * ph;
+						y = tri4 ? Math.round((x + 1) * 7.5) / 7.5 - 1 : x;
+						break;
+					}
+					case "saw":
+						y = 1 - 2 * ph;
+						if (p.chip !== "sid") y = Math.round((y + 1) * 7.5) / 7.5 - 1;
+						break;
+					case "noise":
+						y = this.bit ? 1 : -1;
+						break;
+					case "tone+noise":
+						y = (ph < .5 ? 1 : 0) & this.bit ? 1 : -1;
+						break;
+					case "wave": {
+						const bits = p.chip === "dmg" ? 15 : 31;
+						const v = this.table[Math.floor(ph * 32) & 31];
+						y = (bits === 15 ? v >> 1 : v) / (bits / 2) - 1;
+						break;
+					}
+					case "buzz-saw":
+						y = (15 - Math.floor(ph * 16)) / 7.5 - 1;
+						break;
+					case "buzz-tri": {
+						const s = Math.floor(ph * 32);
+						y = (s < 16 ? 15 - s : s - 16) / 7.5 - 1;
+						break;
+					}
+				}
+				if (p.ring > 0 && (this.ringPh = (this.ringPh + hz * p.ring * sub) % 1) >= .5) y = -y;
+				acc += y;
+			}
+			let y = acc / OVER * vol;
+			if (filterOn) y = this.filt.run(y, p.filter.type);
+			const out = y - this.dcx + .995 * this.dcy;
+			this.dcx = y;
+			this.dcy = out;
+			this.t += dt;
+			left[i] += out * .35 * this.gl;
+			right[i] += out * .35 * this.gr;
+		}
+	}
+};
 // src/synths.ts
 /**
 * breakerMED — our synths, described once: the command that drives each, the
@@ -1871,27 +3065,42 @@ var FmVoice = class {
 * `med synth` / `med fm` and the INSTRUMENT screen work from this, so a new
 * synth is a voice (dsp/), a list of settings and one entry here.
 */
-var SYNTHS = [{
-	cmd: "synth",
-	kind: "analog",
-	field: "synth",
-	what: "an analog synth",
-	example: "set cutoff 800",
-	params: ANALOG_PARAMS,
-	presets: Object.keys(ANALOG_PRESETS),
-	preset: analogPreset,
-	sanitize: sanitizeAnalog
-}, {
-	cmd: "fm",
-	kind: "fm",
-	field: "fm",
-	what: "an FM synth",
-	example: "set index 4",
-	params: FM_PARAMS,
-	presets: Object.keys(FM_PRESETS),
-	preset: fmPreset,
-	sanitize: sanitizeFm
-}];
+var SYNTHS = [
+	{
+		cmd: "synth",
+		kind: "analog",
+		field: "synth",
+		what: "an analog synth",
+		example: "set cutoff 800",
+		params: ANALOG_PARAMS,
+		presets: Object.keys(ANALOG_PRESETS),
+		preset: analogPreset,
+		sanitize: sanitizeAnalog
+	},
+	{
+		cmd: "fm",
+		kind: "fm",
+		field: "fm",
+		what: "an FM synth",
+		example: "set index 4",
+		params: FM_PARAMS,
+		presets: Object.keys(FM_PRESETS),
+		preset: fmPreset,
+		sanitize: sanitizeFm
+	},
+	{
+		cmd: "chip",
+		kind: "chip",
+		field: "chip",
+		what: "a chip synth",
+		example: "set chip sid",
+		params: CHIP_PARAMS,
+		presets: Object.keys(CHIP_PRESETS),
+		presetsFor: (p) => chipPresetsFor(p.chip),
+		preset: chipPreset,
+		sanitize: sanitizeChip
+	}
+];
 /** the synth an instrument is (or none) */
 var synthOf = (ins) => SYNTHS.find((s) => s.kind === ins?.kind);
 /** an instrument's synth settings (or undefined) */
@@ -3305,6 +4514,7 @@ function voiceFor(instrument, outRate, paula) {
 	if (instrument.kind === "analog") return new AnalogVoice(outRate);
 	if (instrument.kind === "fm") return new FmVoice(outRate);
 	if (instrument.kind === "drums") return new DrumVoice(outRate);
+	if (instrument.kind === "chip") return new ChipVoice(outRate);
 	const v = new SampleVoice(outRate);
 	v.paula = paula;
 	return v;
@@ -3588,7 +4798,12 @@ var Renderer = class {
 				if (!(old instanceof DrumVoice || old instanceof Strummed && old.inner instanceof DrumVoice)) old.stop();
 				if (old.on && this.tails.length < 32) this.tails.push(old);
 			}
-			const steps = (e.chord ?? []).slice(0, 5);
+			let steps = (e.chord ?? []).slice(0, 5);
+			const main = this.voices[e.voice];
+			if (steps.length && main instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
+				main.arpeggio(steps);
+				steps = [];
+			}
 			this.chordSteps[e.voice] = steps;
 			const strum = Math.round((this.song.trackStrum?.[e.voice] ?? 0) / 1e3 * this.rate);
 			const order = steps.map((st, i) => ({
@@ -4522,6 +5737,11 @@ function makeApp(ib, engine, st) {
 					"two sine waves, one bending the other: pianos, bells, basses"
 				],
 				[
+					"chip synth",
+					`med chip ${n} new 2a03-lead`,
+					"old consoles' sound chips, for chiptune: NES, Game Boy, C64, AY, SN76489, PC Engine-style"
+				],
+				[
 					"drum machine",
 					`med drums ${n} new`,
 					"twelve drums, one a note: C kick, D snare, E hat…"
@@ -4692,7 +5912,7 @@ function makeApp(ib, engine, st) {
 		let x = inner.x + 1;
 		ui.text(x, inner.y, t("preset"), { fg: c.muted });
 		x += t("preset").length + 1;
-		for (const name of sk.presets) {
+		for (const name of sk.presetsFor?.(p) ?? sk.presets) {
 			if (x + name.length + 2 > inner.x + inner.w - 1) break;
 			x += ui.button(x, inner.y, name, () => {}, {
 				cmd: `med ${sk.cmd} ${n} preset ${name}`,
@@ -5044,7 +6264,7 @@ function makeApp(ib, engine, st) {
 					name: ""
 				};
 				const empty = ins.kind === "empty";
-				const tag = ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+				const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
 				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
@@ -6257,6 +7477,7 @@ function writeBmed(song) {
 		if (ins.kind === "analog") j.synth = ins.synth;
 		if (ins.kind === "drums") j.drums = ins.drums;
 		if (ins.kind === "fm") j.fm = ins.fm;
+		if (ins.kind === "chip") j.chip = ins.chip;
 		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
 		return j;
 	});
@@ -6332,6 +7553,7 @@ async function readBmed(jsonText, readFile) {
 			"analog",
 			"fm",
 			"drums",
+			"chip",
 			"empty"
 		].includes(ij.kind) ? ij.kind : "empty";
 		ins.data = await sample(ij.file);
@@ -6351,6 +7573,7 @@ async function readBmed(jsonText, readFile) {
 		if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
 		else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
 		else if (ins.kind === "fm") ins.fm = sanitizeFm(ij.fm);
+		else if (ins.kind === "chip") ins.chip = sanitizeChip(ij.chip);
 		else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
 		instruments.push(ins);
 	}
@@ -6473,6 +7696,104 @@ function synth(kind, preset) {
 	};
 	i[sk.field] = sk.preset(preset);
 	return i;
+}
+/** the chiptune template's tracks: the NES-style layout */
+var CHIP_TRACKS = [
+	"pulse 1",
+	"pulse 2",
+	"triangle",
+	"noise"
+];
+function chip(preset) {
+	const i = {
+		...emptyInstrument(),
+		kind: "chip",
+		name: `chip ${preset}`
+	};
+	i.chip = chipPreset(preset);
+	return i;
+}
+/**
+* The chiptune template (`med new --chip`): 4 tracks laid out like the NES's
+* (two pulses, a triangle, a noise), its instruments, and a bar written 4 times:
+* a lead, an arpeggio carrying the chords, a triangle bass, hats and snares.
+*/
+function chipSong() {
+	const s = newSong(4);
+	s.title = "untitled";
+	s.chordColumn = true;
+	s.trackNames = [...CHIP_TRACKS];
+	s.tempo = 150;
+	s.instruments = [
+		"2a03-lead",
+		"2a03-arp",
+		"2a03-bass",
+		"2a03-snare",
+		"2a03-hat",
+		"2a03-kick"
+	].map(chip);
+	const b = s.blocks[0];
+	const put = (line, track, n, inst, chord) => {
+		for (let at = line; at < b.lines; at += 16) {
+			const c = b.cells[at][track];
+			c.note = n, c.inst = inst;
+			if (chord) c.chord = chord;
+		}
+	};
+	for (const [l, nm, o] of [
+		[
+			0,
+			"E",
+			4
+		],
+		[
+			2,
+			"G",
+			4
+		],
+		[
+			4,
+			"A",
+			4
+		],
+		[
+			7,
+			"G",
+			4
+		],
+		[
+			8,
+			"E",
+			4
+		],
+		[
+			10,
+			"D",
+			4
+		],
+		[
+			12,
+			"C",
+			4
+		],
+		[
+			14,
+			"D",
+			4
+		]
+	]) put(l, 0, note(nm, o), 1);
+	put(0, 1, note("A", 3), 2, 2);
+	put(8, 1, note("F", 3), 2, 1);
+	for (const [l, nm] of [
+		[0, "A"],
+		[4, "A"],
+		[8, "F"],
+		[12, "G"]
+	]) put(l, 2, note(nm, 2), 3);
+	for (let l = 0; l < 16; l += 2) put(l, 3, note("C", 5), 5);
+	for (const l of [4, 12]) put(l, 3, note("C", 4), 4);
+	put(0, 3, note("C", 3), 6);
+	return s;
 }
 /** A new song ready to play: `tracks` tracks (8 by default), the template's instruments and a first bar. */
 function templateSong(tracks = TEMPLATE_TRACKS.length) {
@@ -6943,7 +8264,7 @@ var asSample = (from, name, data) => Object.assign(emptyInstrument(), {
 });
 /** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
 function bakeSynth(ins, hold = .8) {
-	const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
+	const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : ins.kind === "chip" ? new ChipVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
 	v.start({
 		instrument: ins,
 		rate: C3_RATE$2,
@@ -6972,13 +8293,14 @@ function bakeDrum(ins, drum) {
 */
 function withSynthsBaked(song) {
 	let baked = 0, drums = 0, lost = 0;
-	if (!song.instruments.some((i) => i.kind === "analog" || i.kind === "fm" || i.kind === "drums")) return {
+	const synth = (i) => i.kind === "analog" || i.kind === "fm" || i.kind === "chip";
+	if (!song.instruments.some((i) => synth(i) || i.kind === "drums")) return {
 		song,
 		baked,
 		drums,
 		lost
 	};
-	const instruments = song.instruments.map((i) => i.kind === "analog" || i.kind === "fm" ? (baked++, bakeSynth(i)) : i);
+	const instruments = song.instruments.map((i) => synth(i) ? (baked++, bakeSynth(i)) : i);
 	const slot = /* @__PURE__ */ new Map();
 	const kitOf = (n) => song.instruments[n - 1]?.kind === "drums";
 	const blocks = song.blocks.map((b) => {
@@ -7029,14 +8351,16 @@ var SYNTH_USAGE = [
 	"med synth <n|.> new [preset]             the instrument becomes an analog synth (presets: med synth presets)",
 	"med fm <n|.> new [preset]                the instrument becomes an FM synth (presets: med fm presets)",
 	"med synth|fm <n|.> preset <name> · set <setting> <value> · up|down <setting> · show · settings",
-	"med synth|fm <n|.> bake                  the synth as a sample of its C-3 (for the sampler's tools)"
+	"med synth|fm <n|.> bake                  the synth as a sample of its C-3 (for the sampler's tools)",
+	"med chip <n|.> new [preset]              the instrument becomes a chip synth (2a03 dmg sid ay psg pce · med chip presets)",
+	"med chip <n|.> set chip|wave|duty|noise|arp|sweep… <value> · table <32 hex digits>   its own wavetable"
 ];
 /** `med synth …` (the analog synth) and `med fm …` (the FM synth): the same commands, each its own settings */
 async function synthCommand(ib, st, ctx, rest, sk) {
 	const { fmt } = ib.lib;
 	const c = `med ${sk.cmd}`;
 	if (rest[0] === "presets" || rest[0] === "settings") {
-		ctx.out(rest[0] === "presets" ? `${sk.presets.join(" · ")}\n` : sk.params.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
+		ctx.out(rest[0] === "presets" ? sk.kind === "chip" ? CHIPS.map((ch) => `${ch.padEnd(5)} ${CHIP_LIKE[ch]}\n      ${chipPresetsFor(ch).join(" · ")}`).join("\n") + "\n" : `${sk.presets.join(" · ")}\n` : sk.params.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
 		return 0;
 	}
 	const song = st.song, e = st.editor;
@@ -7089,6 +8413,19 @@ async function synthCommand(ib, st, ctx, rest, sk) {
 			if (op === "set") setIn(sk.params, structuredClone(own(ins)), def.key, args[1]);
 			e.instrument(n, def.label, (i) => op === "set" ? setIn(sk.params, own(i), def.key, args[1]) : nudgeIn(sk.params, own(i), def.key, op === "up" ? 1 : -1, args[1] === "big"));
 			if (op === "set") ctx.out(`${fmt.green("✓")} ${id} ${def.label}: ${showIn(own(song.instruments[n]), def)}\n`);
+			return 0;
+		}
+		case "table": {
+			needSynth();
+			if (sk.kind !== "chip") return ctx.err(`${c}: unknown "table"\n`), 1;
+			const v = parseTable(args.join(""));
+			if (!v) return ctx.err(`${c} ${id} table <32 digits: 0–F (4 bits) or 0–V (5 bits)> e.g. 0123456789ABCDEFFEDCBA9876543210\n`), 1;
+			e.instrument(n, "wavetable", (i) => i.chip && Object.assign(i.chip, {
+				custom: v,
+				table: "custom",
+				wave: "wave"
+			}));
+			ctx.out(`${fmt.green("✓")} ${id}: its own wavetable (wave: wave, table: custom)\n`);
 			return 0;
 		}
 		case "bake": {
@@ -7558,6 +8895,7 @@ function registerCommands(ib, engine, st) {
 			"med ls                     the songs in the vault",
 			"med demo                   a little song of ours, to try it right away",
 			"med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
+			"med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
 			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
 			"med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
@@ -7652,6 +8990,9 @@ function registerCommands(ib, engine, st) {
 			"strum",
 			"invert",
 			"--empty",
+			"--chip",
+			"chip",
+			"table",
 			"block",
 			"seq",
 			"tracks",
@@ -7805,7 +9146,7 @@ function registerCommands(ib, engine, st) {
 					case "new": {
 						const n = rest[0] ? parseInt(rest[0], 10) : 8;
 						if (!(n >= 1 && n <= 16)) return ctx.err(`med new [tracks 1–16]\n`), 1;
-						const song = flags.empty ? newSong(n) : templateSong(n);
+						const song = flags.chip ? chipSong() : flags.empty ? newSong(n) : templateSong(n);
 						if (flags.empty) song.instruments = readSong(demoMod()).instruments, song.title = "untitled";
 						await adopt(ctx, song, "untitled.bmed");
 						ib.apps.open("breakermed");
@@ -8508,6 +9849,22 @@ var FR = {
 	"needs a newer ICEBREAKER (0.5.5+): WAV, AIFF and FLAC work here": "il faut un ICEBREAKER plus récent (0.5.5+) : WAV, AIFF et FLAC marchent ici",
 	"no encoder pack for this computer yet": "pas encore de pack d'encodeurs pour cet ordinateur",
 	"export…": "exporter…",
+	"chip synth": "synthé chip",
+	"old consoles' sound chips, for chiptune: NES, Game Boy, C64, AY, SN76489, PC Engine-style": "les puces son des vieilles consoles, pour la chiptune : façon NES, Game Boy, C64, AY, SN76489, PC Engine",
+	"chip": "puce",
+	"wave": "onde",
+	"pulse width": "largeur d'impulsion",
+	"noise": "bruit",
+	"wavetable": "table d'onde",
+	"vibrato": "vibrato",
+	"vibrato rate": "vitesse du vibrato",
+	"vibrato delay": "délai du vibrato",
+	"pitch sweep": "glissé de hauteur",
+	"chord arpeggio": "arpège des accords",
+	"pwm depth": "profondeur PWM",
+	"pwm rate": "vitesse PWM",
+	"ring mod": "modulation en anneau",
+	"hard sync": "synchro dure",
 	"exporting… (the LOG shows each file)": "export en cours… (le LOG montre chaque fichier)",
 	exported: "exporté",
 	"✗ the export failed: the LOG says why": "✗ l'export a échoué : le LOG dit pourquoi",

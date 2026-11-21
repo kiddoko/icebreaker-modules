@@ -13,6 +13,7 @@ import { ECHO_MAX_MS, MAX_CHORD_NOTES, type Echo, type Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
 import { C3_RATE } from "./dsp/analog";
 import { DrumVoice, drumOf } from "./dsp/drums";
+import { ChipVoice } from "./dsp/chip";
 
 export interface LineMark {
   /** the frame (since this renderer started) the line begins on */
@@ -243,7 +244,13 @@ export class Renderer {
         if (!(old instanceof DrumVoice || (old instanceof Strummed && old.inner instanceof DrumVoice))) old.stop();
         if (old.on && this.tails.length < 32) this.tails.push(old);
       }
-      const steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
+      let steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
+      // a chip with its arpeggio on plays the chord itself, one note after the other (the chiptune way)
+      const main = this.voices[e.voice];
+      if (steps.length && main instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
+        main.arpeggio(steps);
+        steps = [];
+      }
       this.chordSteps[e.voice] = steps;
       // strummed: each note of the chord a little after the one under it
       const strum = Math.round(((this.song.trackStrum?.[e.voice] ?? 0) / 1000) * this.rate);

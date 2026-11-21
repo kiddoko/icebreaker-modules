@@ -7,6 +7,7 @@
 import type { Instrument } from "../song";
 import { AnalogVoice } from "./analog";
 import { DrumVoice } from "./drums";
+import { ChipVoice } from "./chip";
 import { FmVoice } from "./fm";
 
 export interface NoteStart {
@@ -105,6 +106,7 @@ export function voiceFor(instrument: Instrument, outRate: number, paula: boolean
   if (instrument.kind === "analog") return new AnalogVoice(outRate);
   if (instrument.kind === "fm") return new FmVoice(outRate);
   if (instrument.kind === "drums") return new DrumVoice(outRate);
+  if (instrument.kind === "chip") return new ChipVoice(outRate);
   const v = new SampleVoice(outRate);
   v.paula = paula;
   return v;

@@ -7,7 +7,7 @@ import type { Engine } from "./engine";
 import { readSong, SONG_EXTS } from "./format";
 import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
-import { templateSong } from "./template";
+import { chipSong, templateSong } from "./template";
 import { checkFormat, describe, encode, encodeLossy, encoderProblem, extOf, formatOf, isLossy, renderSong, trackUsed } from "./export";
 import { bounce, sampleCommand, SAMPLE_USAGE } from "./commands-sample";
 import { SYNTHS } from "./synths";
@@ -134,6 +134,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med ls                     the songs in the vault",
       "med demo                   a little song of ours, to try it right away",
       "med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
+      "med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
       "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
       "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
@@ -161,7 +162,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "swing", "strum", "invert", "--empty", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "swing", "strum", "invert", "--empty", "--chip", "chip", "table", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail", "quality"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
@@ -268,7 +269,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const n = rest[0] ? parseInt(rest[0], 10) : DEFAULT_TRACKS;
             if (!(n >= 1 && n <= MAX_TRACKS)) return ctx.err(`med new [tracks 1–${MAX_TRACKS}]\n`), 1;
             // the template (named tracks, drums, synths, a first bar) — or a blank page with the demo's samples
-            const song = flags.empty ? newSong(n) : templateSong(n);
+            const song = flags.chip ? chipSong() : flags.empty ? newSong(n) : templateSong(n);
             if (flags.empty) (song.instruments = readSong(demoMod()).instruments), (song.title = "untitled");
             await adopt(ctx, song, "untitled.bmed");
             void ib.apps.open("breakermed");

@@ -10,12 +10,15 @@ import { putSettings, settingsOf, type SynthKind } from "./synths";
 import { bakeDrum, bakeSynth } from "./dsp/bake";
 import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, drumKit, findDrum, setDrum } from "./dsp/drums";
 import { emptyInstrument, hex, type Instrument } from "./song";
+import { CHIP_LIKE, chipPresetsFor, CHIPS, parseTable } from "./dsp/chip";
 
 export const SYNTH_USAGE = [
   "med synth <n|.> new [preset]             the instrument becomes an analog synth (presets: med synth presets)",
   "med fm <n|.> new [preset]                the instrument becomes an FM synth (presets: med fm presets)",
   "med synth|fm <n|.> preset <name> · set <setting> <value> · up|down <setting> · show · settings",
   "med synth|fm <n|.> bake                  the synth as a sample of its C-3 (for the sampler's tools)",
+  "med chip <n|.> new [preset]              the instrument becomes a chip synth (2a03 dmg sid ay psg pce · med chip presets)",
+  "med chip <n|.> set chip|wave|duty|noise|arp|sweep… <value> · table <32 hex digits>   its own wavetable",
 ];
 
 /** `med synth …` (the analog synth) and `med fm …` (the FM synth): the same commands, each its own settings */
@@ -23,7 +26,7 @@ export async function synthCommand(ib: IcebreakerAPI, st: State, ctx: ShellConte
   const { fmt } = ib.lib;
   const c = `med ${sk.cmd}`;
   if (rest[0] === "presets" || rest[0] === "settings") {
-    ctx.out(rest[0] === "presets" ? `${sk.presets.join(" · ")}\n` : sk.params.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
+    ctx.out(rest[0] === "presets" ? (sk.kind === "chip" ? CHIPS.map((ch) => `${ch.padEnd(5)} ${CHIP_LIKE[ch]}\n      ${chipPresetsFor(ch).join(" · ")}`).join("\n") + "\n" : `${sk.presets.join(" · ")}\n`) : sk.params.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
     return 0;
   }
   const song = st.song, e = st.editor;
@@ -72,6 +75,16 @@ export async function synthCommand(ib: IcebreakerAPI, st: State, ctx: ShellConte
       if (op === "set") setIn(sk.params, structuredClone(own(ins)), def.key, args[1]); // a bad value stops here, before the undo step
       e.instrument(n, def.label, (i) => (op === "set" ? setIn(sk.params, own(i), def.key, args[1]) : nudgeIn(sk.params, own(i), def.key, op === "up" ? 1 : -1, args[1] === "big")));
       if (op === "set") ctx.out(`${fmt.green("✓")} ${id} ${def.label}: ${showIn(own(song.instruments[n]), def)}\n`);
+      return 0;
+    }
+    case "table": {
+      // med chip <n> table <32 digits>: the instrument's own wave (0–F: 4 bits, or 0–V: 5 bits)
+      needSynth();
+      if (sk.kind !== "chip") return ctx.err(`${c}: unknown "table"\n`), 1;
+      const v = parseTable(args.join(""));
+      if (!v) return ctx.err(`${c} ${id} table <32 digits: 0–F (4 bits) or 0–V (5 bits)> e.g. 0123456789ABCDEFFEDCBA9876543210\n`), 1;
+      e.instrument(n, "wavetable", (i) => i.chip && Object.assign(i.chip, { custom: v, table: "custom", wave: "wave" }));
+      ctx.out(`${fmt.green("✓")} ${id}: its own wavetable (wave: wave, table: custom)\n`);
       return 0;
     }
     case "bake": {

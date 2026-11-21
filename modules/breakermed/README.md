@@ -209,10 +209,50 @@ The basic kind of FM, the 80s' electric pianos, bells and basses: two sine waves
 (whole ratios sound in tune, others clang), **index** how far it bends (the brightness), its own
 envelope (mod attack, decay, sustain, release) moves that over the note, **feedback** makes it
 bend itself (from pure to noisy); an amp envelope and a vibrato. Presets: epiano, bell, bass,
-brass, organ, pluck, metal. The same screen and the same commands as the analog synth:
+brass, organ, pluck, metal, and the YM2612's sound (Mega Drive-style, as far as two operators go):
+ym-bass, ym-slap, ym-brass, ym-lead, ym-epiano, ym-bell. The same screen and the same commands as
+the analog synth:
 
 ```
 med fm <n|.> new [preset] · preset <name> · set <setting> <value> · show · settings · bake
+```
+
+## The chip synth (chiptune)
+
+One instrument, the sound chips of old consoles and home computers, a mode a chip. Everything is
+computed from how the chips worked (clocks, period registers, few-bit DACs, noise shift registers):
+no sample or ROM from any machine.
+
+| chip | like | what it has |
+|---|---|---|
+| `2a03` | NES-style | pulse 12.5 / 25 / 50 / 75 %, a 4-bit stepped triangle, noise long or short (metallic) |
+| `dmg` | Game Boy-style | pulse, a 32-step 4-bit wave channel, noise 15 or 7 bits, the pitch sweep |
+| `sid` | C64-style | saw, triangle, pulse of any width and its sweep (PWM), ring mod, hard sync, LP / BP / HP filter |
+| `ay` | ZX Spectrum / MSX / Atari ST-style | square, noise, tone+noise, the envelope "buzzer" (saw, triangle) |
+| `psg` | SN76489, Master System-style | square, white noise or periodic noise (a buzzy bass) |
+| `pce` | PC Engine-style | a 32-step 5-bit wavetable |
+
+What makes them sound like chips: the pitch snaps to each chip's period grid (high notes go a bit out
+of tune, like the real thing), the volume moves in 16 steps (the SID: 256), the waves come out of a
+few-bit DAC. What chiptune musicians did by hand is built in: an automatic **vibrato** after a delay,
+a **pitch sweep** (kicks, lasers: -300 st/s), a **pulse-width sweep**, and **chords as an arpeggio**:
+with `chord arpeggio` above 0, a note carrying a chord (the chord column) plays its notes one after
+the other, at that speed, in one voice. OctaMED's own commands (00 arpeggio, 01 / 02 slides, 03
+portamento, 04 vibrato, 0C volume) work on it as on any instrument. Any wave goes on any chip: the chip
+sets the grid and the grit.
+
+Presets, by chip (`med chip presets`): `2a03-lead` `-lead12` `-square` `-bass` `-arp` `-pluck` `-kick`
+`-snare` `-hat` · `dmg-lead` `-lead25` `-sweep` `-wave-bass` `-wave-pad` `-arp` `-snare` `-hat` ·
+`sid-pwm-lead` `-pwm-bass` `-saw-bass` `-sync-lead` `-ring-bell` `-arp` `-kick` `-snare` · `ay-square`
+`-buzz-saw` `-buzz-tri` `-arp` `-kick` `-snare` `-hat` · `psg-square` `-bass` `-arp` `-pluck` `-snare`
+`-hat` · `pce-wave-lead` `-wave-bass` `-organ` `-pluck` `-arp`. The INSTRUMENT screen shows the chip's own.
+
+```
+med chip <n|.> new [preset]                   the instrument becomes a chip synth (a free slot: "chip synth")
+med chip <n|.> set chip sid · set wave saw · set duty 0.25 · set arp 50 · set sweep -300 …
+med chip <n|.> table 0123456789ABCDEFFEDCBA9876543210   its own wavetable (32 digits: 0–F, or 0–V for 5 bits)
+med chip <n|.> preset <name> · show · settings · bake
+med new --chip                                a chiptune song: pulse 1, pulse 2, triangle, noise (NES-style)
 ```
 
 ## The drum machine

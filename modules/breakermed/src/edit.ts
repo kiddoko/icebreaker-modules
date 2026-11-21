@@ -317,6 +317,7 @@ export class Editor {
       if (old.synth) copy.synth = structuredClone(old.synth); // a synth's settings are changed in place
       if (old.drums) copy.drums = structuredClone(old.drums);
       if (old.fm) copy.fm = structuredClone(old.fm);
+      if (old.chip) copy.chip = structuredClone(old.chip);
       fn(copy);
       if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
       if (copy.loopLength <= 2) (copy.loopStart = 0), (copy.loopLength = 0);
