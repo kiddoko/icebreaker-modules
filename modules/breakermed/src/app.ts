@@ -307,8 +307,14 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     let x = inner.x + 1;
     ui.text(x, inner.y, t("preset"), { fg: c.muted });
     x += t("preset").length + 1;
-    for (const name of sk.presetsFor?.(p) ?? sk.presets) {
-      if (x + name.length + 2 > inner.x + inner.w - 1) break;
+    const list = sk.presetsFor?.(p) ?? sk.presets;
+    for (const [k, name] of list.entries()) {
+      // the last that fits leaves room for "…" when more follow
+      const room = inner.x + inner.w - 1 - (k < list.length - 1 ? 4 : 0);
+      if (x + name.length + 2 > room) {
+        ui.button(x, inner.y, "…", () => {}, { cmd: `med ${sk.cmd} presets`, quiet: true, tip: `${list.slice(k).join(" · ")} · med ${sk.cmd} ${n} preset <name>` });
+        break;
+      }
       x += ui.button(x, inner.y, name, () => {}, { cmd: `med ${sk.cmd} ${n} preset ${name}`, quiet: true }) + 1;
     }
     const top = inner.y + 2;
@@ -524,14 +530,15 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.text(row.x, row.y, `${hex(i)} ${hex(s.sequence[i], 3)} ${b?.name ?? ""}`, { fg: sel ? c.accent : c.muted, attrs: sel ? BOLD : 0 }, row.w);
       });
       const instBox = ui.box({ x: body.x, y: body.y + seqH, w: leftW, h: body.h - seqH }, { title: t("INSTRUMENTS"), focused: false });
-      // the instruments, and the free slot past them when the keys are on it (alt →)
-      instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
+      // the instruments, and one free slot past them (a click there: load a sound or make a synth)
+      instList.items = Array.from({ length: Math.min(63, Math.max(s.instruments.length + 1, st.inst + 1)) }, (_, i) => i);
       if (instList.selected !== st.inst) instList.select(st.inst);
       instList.render(ui, instBox, false, (i, row, sel) => {
         const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
         const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-        ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
+        const label = ins.name || (empty ? (i >= s.instruments.length ? `· ${t("free")}` : "·") : t("(no name)"));
+        ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
       // ── right: the tabs, then the screen ──
@@ -573,6 +580,17 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
             { label: t("solo"), cmd: `med solo ${tr + 1}` },
           ],
         });
+      }
+      // tracks off to the side: ‹ and › with how many, a click goes there
+      if (firstTrack > 0) {
+        ui.text(inner.x, inner.y, `‹${firstTrack}`, { fg: c.accent, attrs: BOLD });
+        ui.hit({ x: inner.x, y: inner.y, w: numW - 1, h: 1 }, { onClick: () => (st.track = firstTrack - 1), tip: t("more tracks to the left") });
+      }
+      const after = s.tracks - (firstTrack + fits);
+      if (after > 0) {
+        const label = `${after}›`;
+        ui.textRight(inner.x + inner.w, inner.y, label, { fg: c.accent, attrs: BOLD });
+        ui.hit({ x: inner.x + inner.w - label.length, y: inner.y, w: label.length, h: 1 }, { onClick: () => (st.track = firstTrack + fits), tip: t("more tracks to the right") });
       }
       // the lines: the cursor's line in the middle
       const rows = inner.h - 1;
