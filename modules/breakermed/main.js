@@ -5820,7 +5820,10 @@ function makeScreens(ib, engine, st) {
 	/** the file: the song's own name (its folder too) until you choose another */
 	const ensurePath = () => {
 		const x = st.exp;
-		if (!x.path.trim()) x.path = (st.path || "songs/untitled").replace(/\.(bmed|med|mod)$/i, "").replace(/\.[^./]+$/, "") || "songs/untitled";
+		if (!x.path.trim()) {
+			const base = (st.path.split("/").pop() || "untitled").replace(/\.(bmed|med|mod)$/i, "").replace(/\.[^./]+$/, "") || "untitled";
+			x.path = st.path.startsWith("songs/") ? `${st.path.slice(0, st.path.lastIndexOf("/"))}/${base}` : `songs/${base}`;
+		}
 	};
 	const expRows = () => {
 		ensurePath();
@@ -5985,26 +5988,44 @@ function makeScreens(ib, engine, st) {
 	};
 	/** the tabs over the right side: one line */
 	/**
-	* The tabs: wide, then tight, then short names when the side is narrow, so all four
-	* always show. No tooltip: it would cover the screen's first line (a kit's, the
-	* presets); the keys are written at the end when there's room.
+	* The tabs (wide, then tight, then short names, so all five always show), and at the
+	* end of the row the buttons that save: save, save as… (⌘S, ⌘⇧S) — the one
+	* that doesn't fit goes first. No tooltip on the tabs: it would cover the screen's first line.
 	*/
 	const drawTabs = (ui, x, y, w) => {
-		const c = ui.c;
-		const fit = (labels) => labels.reduce((n, l) => n + l.length + 2, 0) <= w;
 		const names = SCREENS.map((s) => t(s.label));
-		const labels = [
+		const sets = [
 			names.map((l) => ` ${l} `),
 			names,
 			SCREENS.map((s) => t(s.short))
-		].find(fit) ?? SCREENS.map((s) => s.key);
+		];
+		const width = (labels) => labels.reduce((n, l) => n + l.length + 2, 0);
+		const saves = [[
+			t("save"),
+			"med save",
+			"⌘S"
+		], [
+			t("save as…"),
+			"med saveas",
+			"⌘⇧S"
+		]];
+		const savesW = (n) => saves.slice(0, n).reduce((m, [l]) => m + l.length + 3, 0);
+		let keep = saves.length;
+		while (keep > 0 && width(sets[2]) + savesW(keep) + 1 > w) keep--;
+		const room = w - savesW(keep) - 1;
+		const labels = sets.find((l) => width(l) <= room) ?? SCREENS.map((s) => s.key);
 		const open = (s) => () => (s === "guide" && st.screen !== "guide" && (st.back = st.screen), st.screen = s);
 		let xx = x;
 		SCREENS.forEach((s, i) => xx += ui.button(xx, y, labels[i], open(s.id), {
 			selected: st.screen === s.id,
 			quiet: st.screen !== s.id
 		}));
-		if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E · ?", { fg: c.faint });
+		let bx = x + w - savesW(keep);
+		for (const [label, cmd, key] of saves.slice(0, keep)) bx += ui.button(bx, y, label, () => {}, {
+			cmd,
+			quiet: true,
+			tip: `${key} · ${cmd}`
+		}) + 1;
 	};
 	return {
 		drawSong,
@@ -6047,7 +6068,7 @@ var GUIDE = [
 		rows: [
 			["med new", "a new song: 8 tracks, drums and synths, a beat ready to play"],
 			["med new --chip", "a chiptune song: 2 pulses, a triangle, a noise (NES-style)"],
-			["med open", "open a .med, .mod or .bmed of the vault"],
+			["med open", "open a .med, .mod or .bmed in songs/"],
 			["med demo", "the demo song"],
 			["med save", "save (a new song becomes a .bmed in songs/)"],
 			["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
@@ -6086,9 +6107,9 @@ var GUIDE = [
 	{
 		title: "THE SAMPLER (your own sounds)",
 		rows: [
-			["med sampler", "load a sound into a free instrument (a list of the vault's sounds)"],
+			["med sampler", "load a sound into a free instrument (a list of the sounds in songs/)"],
 			["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
-			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n"],
+			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n"],
 			["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
 			["med bounce", "this block, rendered into a new instrument"],
 			["med pack", "the starter sounds, recorded by people: which are there (med pack load <name>)"]
@@ -6225,7 +6246,7 @@ var START = [
 		key: "O",
 		label: "open…",
 		cmd: "med open",
-		tip: "a .med, .mod or .bmed of the vault"
+		tip: "a .med, .mod or .bmed in songs/"
 	},
 	{
 		key: "D",
@@ -6261,6 +6282,9 @@ function makeStart(ib) {
 	/** the newest autosaved copy never saved (R: back on the page) */
 	let rescue = null;
 	const setRescue = (r) => rescue = r;
+	/** the song still in memory after the page was closed (L: continue it) */
+	let song = null;
+	const setSong = (s) => song = s;
 	const draw = (ui, r, error) => {
 		const c = ui.c;
 		const now = performance.now();
@@ -6318,6 +6342,21 @@ function makeStart(ib) {
 		});
 		ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
 		let below = box.y + box.h + 1;
+		if (song && below < r.y + r.h) {
+			const label = `L  ${t("continue")} “${song.title}”${song.dirty ? " ●" : ""}`;
+			const extra = [[t("save"), "med save"], [t("save as…"), "med saveas"]];
+			const w = label.length + 2 + extra.reduce((n, [l]) => n + l.length + 3, 0);
+			let x = r.x + Math.max(0, Math.floor((r.w - w) / 2));
+			x += ui.button(x, below, label, () => run("med continue"), {
+				cmd: "med continue",
+				selected: true
+			}) + 1;
+			for (const [l, cmd] of extra) if (x + l.length + 2 < r.x + r.w) x += ui.button(x, below, l, () => run(cmd), {
+				cmd,
+				quiet: true
+			}) + 1;
+			below += 2;
+		}
 		if (rescue && below < r.y + r.h) {
 			const label = `R  ${t("recover")} “${rescue.title}” · ${t("autosaved")} ${new Date(rescue.at).toLocaleString([], {
 				weekday: "short",
@@ -6336,6 +6375,8 @@ function makeStart(ib) {
 	const key = (k) => {
 		const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
 		if (letter === "R" && rescue && !k.alt && !k.ctrl && !k.meta) return run("med recover"), true;
+		if (letter === "L" && song && !k.alt && !k.ctrl && !k.meta) return run("med continue"), true;
+		if (song && k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
 		const hit = START.find((ch) => ch.key === letter);
 		if (hit && !k.alt && !k.ctrl && !k.meta) return run(hit.cmd), true;
 		switch (k.key) {
@@ -6350,7 +6391,8 @@ function makeStart(ib) {
 	return {
 		draw,
 		key,
-		setRescue
+		setRescue,
+		setSong
 	};
 }
 // src/app.ts
@@ -6389,6 +6431,8 @@ function newState() {
 		error: "",
 		screen: "block",
 		back: "block",
+		home: false,
+		page: null,
 		autosave: null,
 		songRow: 0,
 		songCol: 0,
@@ -6437,6 +6481,8 @@ function makeApp(ib, engine, st) {
 		}
 	];
 	const screens = makeScreens(ib, engine, st);
+	/** this page (State.page says which one is on screen) */
+	const me = {};
 	const guide = makeGuide(ib);
 	const start = makeStart(ib);
 	let rescueAt = 0;
@@ -6602,7 +6648,7 @@ function makeApp(ib, engine, st) {
 				[
 					"sampler · load a sound…",
 					`med sample ${n} load`,
-					"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault (chop, stretch, loop it after)"
+					"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… in songs/ (chop, stretch, loop it after)"
 				],
 				[
 					"analog synth",
@@ -6667,7 +6713,7 @@ function makeApp(ib, engine, st) {
 			[
 				"load…",
 				`med sample ${n} load`,
-				"replace this sound with a file of the vault"
+				"replace this sound with a file in songs/"
 			],
 			[
 				"chop 4",
@@ -7039,8 +7085,13 @@ function makeApp(ib, engine, st) {
 		"-",
 		{
 			label: t("save"),
-			hint: "med save",
+			hint: "⌘S",
 			cmd: "med save"
+		},
+		{
+			label: t("save as…"),
+			hint: "⌘⇧S",
+			cmd: "med saveas"
 		},
 		{
 			label: t("export (WAV + tracks)"),
@@ -7096,7 +7147,11 @@ function makeApp(ib, engine, st) {
 		* doesn't has closed it already, so "cancel" opens it again (the song is still here).
 		*/
 		async close() {
+			if (st.page !== me) return true;
+			st.page = null;
 			const e = st.editor, a = st.autosave;
+			engine.stop();
+			st.home = true;
 			if (!st.song || !e?.dirty) return true;
 			await a?.flush();
 			const name = st.song.title || st.path.split("/").pop() || "untitled";
@@ -7112,11 +7167,13 @@ function makeApp(ib, engine, st) {
 				st.song = st.editor = null;
 				return true;
 			}
+			st.home = false;
 			ib.apps.open("breakermed");
 			return false;
 		},
 		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : `N ${t("new song")} · O ${t("open…")} · D ${t("demo")} · ? ${t("guide")}`,
 		render(ui, r, focused) {
+			st.page = me;
 			const c = ui.c;
 			const s = st.song;
 			const now = engine.current();
@@ -7161,7 +7218,7 @@ function makeApp(ib, engine, st) {
 				} : { fg: engine.playing ? c.success : c.muted }) - (x + 2) - 1;
 				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
 			}
-			if (!s) {
+			if (!s || st.home) {
 				const page = {
 					x: r.x,
 					y: r.y + 1,
@@ -7169,6 +7226,10 @@ function makeApp(ib, engine, st) {
 					h: r.h - 1
 				};
 				if (st.screen !== "guide") lookRescue();
+				start.setSong(s ? {
+					title: s.title || st.path.split("/").pop() || "untitled",
+					dirty: !!st.editor?.dirty
+				} : null);
 				return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
 			}
 			clampCursor();
@@ -7435,7 +7496,8 @@ function makeApp(ib, engine, st) {
 				if (guide.key(k)) return true;
 				if (!s) return false;
 			}
-			if (!s) return start.key(k);
+			if (!s || st.home) return start.key(k);
+			if (k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
 			if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
 				if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
 				const semi = k.key === "space" ? null : pianoKey(k.code);
@@ -9090,7 +9152,7 @@ async function readSample(bytes, name, decode, amiga = false) {
 }
 // src/commands-sample.ts
 var SAMPLE_USAGE = [
-	"med sample <n|.> load [file] [--amiga]   a sound file of the vault (wav, aif, iff/8svx, mp3, m4a, ogg…)",
+	"med sample <n|.> load [file] [--amiga]   a sound file in songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…)",
 	"med sample <n|.> chop <slices> | chop onsets    slices become new instruments",
 	"med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)",
 	"med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse",
@@ -9137,7 +9199,7 @@ async function sampleCommand(ib, st, ctx, rest, flags) {
 						if (!x.name.startsWith(".") && !x.name.endsWith(".bmed")) await walk(x.path, depth + 1);
 					} else if (SAMPLE_EXTS.some((ext) => x.name.toLowerCase().endsWith(ext))) found.push(x.path);
 				};
-				await walk("", 0);
+				await walk("songs", 0);
 				if (!found.length) return ctx.err("no sound file in the vault (drop a .wav, .aif, .mp3… in it)\n"), 1;
 				const i = await ib.ui.choose("LOAD A SOUND", found.map((p) => ({ label: p })));
 				if (i === null) return 1;
@@ -9823,8 +9885,8 @@ function writeMed(original) {
 * records one, it's a placeholder: listed, not there. SOUND_DESIGN.md says how to
 * make them; `med pack` shows which are in the vault, `med pack load <name>` loads one.
 */
-/** where the pack lives in the vault */
-var PACK_DIR = "sounds/breakermed-pack";
+/** where the pack lives in the vault (in songs/: the only folder the module may read) */
+var PACK_DIR = "songs/sound-pack";
 var PACK = [
 	{
 		file: "drums/kick-acoustic.wav",
@@ -10145,7 +10207,7 @@ var clampEvery = (v) => typeof v === "number" && Number.isFinite(v) ? Math.max(1
 // src/commands.ts
 function registerCommands(ib, engine, st) {
 	const { fmt, parseFlags } = ib.lib;
-	const find = async (dir = "", depth = 0, out = []) => {
+	const find = async (dir = "songs", depth = 0, out = []) => {
 		if (depth > 5 || out.length > 500) return out;
 		for (const e of await ib.vault.list(dir).catch(() => [])) if (e.isDir) {
 			if (e.name.toLowerCase().endsWith(".bmed")) out.push(e.path);
@@ -10204,13 +10266,15 @@ function registerCommands(ib, engine, st) {
 	};
 	/** where a song is saved when you don't say: next to where it came from, as .bmed */
 	const defaultPath = () => {
-		if (/\.bmed$/i.test(st.path)) return st.path;
+		const inSongs = st.path.startsWith("songs/");
+		if (inSongs && /\.bmed$/i.test(st.path)) return st.path;
 		const base = (st.path.split("/").pop() || "untitled").replace(/\.(med|mod|mmd\d|bmed)$/i, "").replace(/^(mod|med)\./i, "") || "untitled";
-		return `${st.path.includes("/") ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs"}/${base}.bmed`;
+		return `${inSongs ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs"}/${base}.bmed`;
 	};
 	/** this song is the one on the page now */
 	const adopt = async (ctx, song, path) => {
 		st.song = song;
+		st.home = false;
 		st.editor = new Editor(song);
 		st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
 		st.autosave?.reset();
@@ -10246,11 +10310,13 @@ function registerCommands(ib, engine, st) {
 		summary: "breakerMED: a tracker for .med (OctaMED) and .mod (ProTracker) songs",
 		usage: [
 			"med                        what's loaded, where it is",
-			"med open [file]            a .med / .mod of the vault (no file: choose one)",
+			"med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
 			"med ls                     the songs in the vault",
 			"med demo                   a little song of ours, to try it right away",
 			"med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
 			"med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
+			"med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
+			"med continue               back to the song in memory (after the page was closed)",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
 			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
 			"med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
@@ -10415,14 +10481,14 @@ function registerCommands(ib, engine, st) {
 					}
 					case "ls": {
 						const songs = await find();
-						ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no .med / .mod in the vault (drop one in it)\n"));
+						ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no .med / .mod in songs/ (drop one in it)\n"));
 						return 0;
 					}
 					case "open": {
 						let path = rest.join(" ");
 						if (!path) {
 							const songs = await find();
-							if (!songs.length) return ctx.err("no song in the vault (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
+							if (!songs.length) return ctx.err("no song in songs/ (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
 							const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
 							if (i === null) return 1;
 							path = songs[i];
@@ -10506,6 +10572,22 @@ function registerCommands(ib, engine, st) {
 						await save(ctx, path);
 						return 0;
 					}
+					case "saveas": {
+						need();
+						const name = await ib.ui.prompt("SAVE AS", {
+							initial: defaultPath(),
+							placeholder: "songs/my song.bmed (or .mod, .med)"
+						});
+						if (name === null || !name.trim()) return 1;
+						const p = name.trim();
+						await save(ctx, p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`);
+						return 0;
+					}
+					case "continue":
+						need();
+						st.home = false;
+						ib.apps.open("breakermed");
+						return 0;
 					case "new": {
 						const n = rest[0] ? parseInt(rest[0], 10) : 8;
 						if (!(n >= 1 && n <= 16)) return ctx.err(`med new [tracks 1–16]\n`), 1;
@@ -10693,6 +10775,7 @@ function registerCommands(ib, engine, st) {
 						if (!SCREENS.some((x) => x.id === id)) return ctx.err(`med screen ${SCREENS.map((x) => x.id).join("|")}\n`), 1;
 						if (id === "guide" && st.screen !== "guide") st.back = st.screen;
 						st.screen = id;
+						if (st.song) st.home = false;
 						ib.apps.open("breakermed");
 						return 0;
 					}
@@ -11140,6 +11223,8 @@ function deactivate() {
 	engine = null;
 }
 var FR = {
+	continue: "continuer",
+	"save as…": "enregistrer sous…",
 	"on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)": "actif par défaut : une copie 1,5 s après chaque changement, dans songs/.recovery/ (jamais par-dessus le morceau)",
 	"changes never saved (a quit, a crash): back on the page · START offers them too (R)": "des changements jamais enregistrés (quitter, un plantage) : de retour sur la page · START les propose aussi (R)",
 	recover: "reprendre",
@@ -11157,7 +11242,7 @@ var FR = {
 	"chiptune song": "morceau chiptune",
 	"sampler": "sampleur",
 	"8 tracks, drums and synths, a beat ready: ⏎ plays it, space to write": "8 pistes, batterie et synthés, un rythme prêt : ⏎ le joue, espace pour écrire",
-	"a .med, .mod or .bmed of the vault": "un .med, .mod ou .bmed du vault",
+	"a .med, .mod or .bmed in songs/": "un .med, .mod ou .bmed de songs/",
 	"listen to the demo song": "écouter le morceau de démo",
 	"the keys, the edit mode, the effects in hex, the sampler": "les touches, le mode édition, les effets en hexa, le sampleur",
 	"2 pulses, a triangle, a noise: an old console's sound": "2 pulses, un triangle, un bruit : le son d'une vieille console",
@@ -11178,7 +11263,7 @@ var FR = {
 	"play it": "le jouer",
 	"a chiptune song": "un morceau chiptune",
 	"sampler · load a sound…": "sampleur · charger un son…",
-	"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault (chop, stretch, loop it after)": "ton propre son : un .wav, .aif, .iff, .mp3, .m4a, .ogg… du vault (à découper, étirer, boucler ensuite)",
+	"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… in songs/ (chop, stretch, loop it after)": "ton propre son : un .wav, .aif, .iff, .mp3, .m4a, .ogg… de songs/ (à découper, étirer, boucler ensuite)",
 	"EDIT MODE (space: the line turns red, ● EDIT at the top)": "MODE ÉDITION (espace : la ligne devient rouge, ● EDIT en haut)",
 	"A CELL: C-3 01 . 0C20": "UNE CASE : C-3 01 . 0C20",
 	"EFFECTS (the last 4 hex digits of a cell: command, value)": "EFFETS (les 4 derniers chiffres hexa d'une case : commande, valeur)",
@@ -11186,7 +11271,7 @@ var FR = {
 	"SCREENS (the tabs, or alt B I S E, ? for this guide)": "ÉCRANS (les onglets, ou alt B I S E, ? pour ce guide)",
 	"a new song: 8 tracks, drums and synths, a beat ready to play": "un nouveau morceau : 8 pistes, batterie et synthés, un rythme prêt à jouer",
 	"a chiptune song: 2 pulses, a triangle, a noise (NES-style)": "un morceau chiptune : 2 pulses, un triangle, un bruit (façon NES)",
-	"open a .med, .mod or .bmed of the vault": "ouvrir un .med, .mod ou .bmed du vault",
+	"open a .med, .mod or .bmed in songs/": "ouvrir un .med, .mod ou .bmed de songs/",
 	"save (a new song becomes a .bmed in songs/)": "enregistrer (un nouveau morceau devient un .bmed dans songs/)",
 	"play the song from the cursor · ⇧enter: this block, again and again": "jouer le morceau depuis le curseur · ⇧entrée : ce bloc, en boucle",
 	"stop · when stopped: EDIT MODE on / off": "stop · à l'arrêt : MODE ÉDITION oui / non",
@@ -11203,9 +11288,9 @@ var FR = {
 	"the instrument (01–3F, the list on the left)": "l'instrument (01–3F, la liste à gauche)",
 	"the chord (1–F of the song's table: med chords), when the song has chords": "l'accord (1–F de la table du morceau : med chords), quand le morceau a des accords",
 	"an effect: the command (0C) and its value (20) — the list below": "un effet : la commande (0C) et sa valeur (20) — la liste en dessous",
-	"load a sound into a free instrument (a list of the vault's sounds)": "charger un son dans un instrument libre (la liste des sons du vault)",
+	"load a sound into a free instrument (a list of the sounds in songs/)": "charger un son dans un instrument libre (la liste des sons de songs/)",
 	"on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…": "sur une case libre : « sampleur · charger un son… » ; sur un son : découper, étirer, fondu, boucle…",
-	"a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n": "un .wav .aif .iff .mp3 .m4a .ogg… du vault dans l'instrument n",
+	"a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n": "un .wav .aif .iff .mp3 .m4a .ogg… de songs/ dans l'instrument n",
 	"8 slices, each a new instrument · chop onsets: a slice an attack": "8 tranches, chacune un nouvel instrument · chop onsets : une tranche par attaque",
 	"the notes, track by track": "les notes, piste par piste",
 	"the instrument the keys play: a sound's tools, a synth's settings, a drum kit": "l'instrument que jouent les touches : les outils d'un son, les réglages d'un synthé, un kit",
@@ -11374,7 +11459,7 @@ var FR = {
 	"bounce block": "bloc → sample",
 	"LED filter on": "filtre LED",
 	"LED filter off": "sans filtre LED",
-	"replace this sound with a file of the vault": "remplacer ce son par un fichier du vault",
+	"replace this sound with a file in songs/": "remplacer ce son par un fichier du vault",
 	"4 equal slices → new instruments": "4 tranches égales → nouveaux instruments",
 	"8 equal slices → new instruments": "8 tranches égales → nouveaux instruments",
 	"a slice at each attack": "une tranche à chaque attaque",

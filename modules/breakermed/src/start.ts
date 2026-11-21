@@ -31,7 +31,7 @@ export interface StartChoice {
 }
 export const START: StartChoice[] = [
   { key: "N", label: "new song", cmd: "med new", tip: "8 tracks, drums and synths, a beat ready: ⏎ plays it, space to write" },
-  { key: "O", label: "open…", cmd: "med open", tip: "a .med, .mod or .bmed of the vault" },
+  { key: "O", label: "open…", cmd: "med open", tip: "a .med, .mod or .bmed in songs/" },
   { key: "D", label: "demo", cmd: "med demo", tip: "listen to the demo song" },
   { key: "?", label: "guide", cmd: "med guide", tip: "the keys, the edit mode, the effects in hex, the sampler" },
   { key: "C", label: "chiptune song", cmd: "med new --chip", tip: "2 pulses, a triangle, a noise: an old console's sound" },
@@ -48,6 +48,9 @@ export function makeStart(ib: IcebreakerAPI) {
   /** the newest autosaved copy never saved (R: back on the page) */
   let rescue: { title: string; at: number } | null = null;
   const setRescue = (r: { title: string; at: number } | null) => (rescue = r);
+  /** the song still in memory after the page was closed (L: continue it) */
+  let song: { title: string; dirty: boolean } | null = null;
+  const setSong = (s: { title: string; dirty: boolean } | null) => (song = s);
 
   const draw = (ui: UI, r: Rect, error: string) => {
     const c = ui.c;
@@ -90,6 +93,16 @@ export function makeStart(ib: IcebreakerAPI) {
     });
     ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
     let below = box.y + box.h + 1;
+    if (song && below < r.y + r.h) {
+      // the song of before: continue it, or save it
+      const label = `L  ${t("continue")} “${song.title}”${song.dirty ? " ●" : ""}`;
+      const extra = [[t("save"), "med save"], [t("save as…"), "med saveas"]] as const;
+      const w = label.length + 2 + extra.reduce((n, [l]) => n + l.length + 3, 0);
+      let x = r.x + Math.max(0, Math.floor((r.w - w) / 2));
+      x += ui.button(x, below, label, () => run("med continue"), { cmd: "med continue", selected: true }) + 1;
+      for (const [l, cmd] of extra) if (x + l.length + 2 < r.x + r.w) x += ui.button(x, below, l, () => run(cmd), { cmd, quiet: true }) + 1;
+      below += 2;
+    }
     if (rescue && below < r.y + r.h) {
       const label = `R  ${t("recover")} “${rescue.title}” · ${t("autosaved")} ${new Date(rescue.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
       const w = Math.min(r.w - 2, label.length + 2);
@@ -102,6 +115,8 @@ export function makeStart(ib: IcebreakerAPI) {
   const key = (k: KeyInput): boolean => {
     const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
     if (letter === "R" && rescue && !k.alt && !k.ctrl && !k.meta) return run("med recover"), true;
+    if (letter === "L" && song && !k.alt && !k.ctrl && !k.meta) return run("med continue"), true;
+    if (song && k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
     const hit = START.find((ch) => ch.key === letter);
     if (hit && !k.alt && !k.ctrl && !k.meta) return run(hit.cmd), true;
     switch (k.key) {
@@ -114,5 +129,5 @@ export function makeStart(ib: IcebreakerAPI) {
     return false;
   };
 
-  return { draw, key, setRescue };
+  return { draw, key, setRescue, setSong };
 }

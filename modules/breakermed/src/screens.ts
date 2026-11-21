@@ -258,7 +258,11 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
   /** the file: the song's own name (its folder too) until you choose another */
   const ensurePath = () => {
     const x = st.exp;
-    if (!x.path.trim()) x.path = (st.path || "songs/untitled").replace(/\.(bmed|med|mod)$/i, "").replace(/\.[^./]+$/, "") || "songs/untitled";
+    if (!x.path.trim()) {
+      // in songs/ (the only folder the module may write), named after the song
+      const base = (st.path.split("/").pop() || "untitled").replace(/\.(bmed|med|mod)$/i, "").replace(/\.[^./]+$/, "") || "untitled";
+      x.path = st.path.startsWith("songs/") ? `${st.path.slice(0, st.path.lastIndexOf("/"))}/${base}` : `songs/${base}`;
+    }
   };
   const expRows = (): Row[] => {
     ensurePath();
@@ -364,19 +368,25 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
 
   /** the tabs over the right side: one line */
   /**
-   * The tabs: wide, then tight, then short names when the side is narrow, so all four
-   * always show. No tooltip: it would cover the screen's first line (a kit's, the
-   * presets); the keys are written at the end when there's room.
+   * The tabs (wide, then tight, then short names, so all five always show), and at the
+   * end of the row the buttons that save: save, save as… (⌘S, ⌘⇧S) — the one
+   * that doesn't fit goes first. No tooltip on the tabs: it would cover the screen's first line.
    */
   const drawTabs = (ui: UI, x: number, y: number, w: number) => {
-    const c = ui.c;
-    const fit = (labels: string[]) => labels.reduce((n, l) => n + l.length + 2, 0) <= w;
     const names = SCREENS.map((s) => t(s.label));
-    const labels = [names.map((l) => ` ${l} `), names, SCREENS.map((s) => t(s.short))].find(fit) ?? SCREENS.map((s) => s.key);
+    const sets = [names.map((l) => ` ${l} `), names, SCREENS.map((s) => t(s.short))];
+    const width = (labels: string[]) => labels.reduce((n, l) => n + l.length + 2, 0);
+    const saves: [string, string, string][] = [[t("save"), "med save", "⌘S"], [t("save as…"), "med saveas", "⌘⇧S"]];
+    const savesW = (n: number) => saves.slice(0, n).reduce((m, [l]) => m + l.length + 3, 0);
+    let keep = saves.length;
+    while (keep > 0 && width(sets[2]) + savesW(keep) + 1 > w) keep--;
+    const room = w - savesW(keep) - 1;
+    const labels = sets.find((l) => width(l) <= room) ?? SCREENS.map((s) => s.key);
     const open = (s: Screen) => () => (s === "guide" && st.screen !== "guide" && (st.back = st.screen), (st.screen = s));
     let xx = x;
     SCREENS.forEach((s, i) => (xx += ui.button(xx, y, labels[i], open(s.id), { selected: st.screen === s.id, quiet: st.screen !== s.id })));
-    if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E · ?", { fg: c.faint });
+    let bx = x + w - savesW(keep);
+    for (const [label, cmd, key] of saves.slice(0, keep)) bx += ui.button(bx, y, label, () => {}, { cmd, quiet: true, tip: `${key} · ${cmd}` }) + 1;
   };
 
   return { drawSong, keySong, drawExport, keyExport, drawTabs };

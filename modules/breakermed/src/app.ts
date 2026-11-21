@@ -63,6 +63,10 @@ export interface State {
   screen: Screen;
   /** where the guide goes back to */
   back: Screen;
+  /** the page was closed: it opens on START again (the song stays in memory: "continue") */
+  home: boolean;
+  /** the page on screen (the deck may make a second one and close it at once: that one changes nothing) */
+  page: object | null;
   /** the copies of the song after each change (main.ts makes it: it needs the deck) */
   autosave: Autosave | null;
   /** the SONG screen's cursor: a setting or a track (past the settings), a track's column */
@@ -97,7 +101,7 @@ export function undoRedo(st: State, redo: boolean): string | null {
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", autosave: null, songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", home: false, page: null, autosave: null, songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -130,6 +134,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("remove this position"), cmd: `med seq rm ${hex(i)}`, danger: true },
   ];
   const screens = makeScreens(ib, engine, st);
+  /** this page (State.page says which one is on screen) */
+  const me = {};
   const guide = makeGuide(ib);
   const start = makeStart(ib);
   // the start page offers the newest autosaved copy never saved (looked up now and then)
@@ -256,7 +262,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (!ins || ins.kind === "empty" || !ins.data.length) {
       ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
       const choices: [string, string, string][] = [
-        ["sampler · load a sound…", `med sample ${n} load`, "your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault (chop, stretch, loop it after)"],
+        ["sampler · load a sound…", `med sample ${n} load`, "your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… in songs/ (chop, stretch, loop it after)"],
         ["analog synth", `med synth ${n} new`, "two oscillators, a filter, two envelopes, an LFO"],
         ["FM synth", `med fm ${n} new`, "two sine waves, one bending the other: pianos, bells, basses"],
         ["chip synth", `med chip ${n} new 2a03-lead`, "old consoles' sound chips, for chiptune: NES, Game Boy, C64, AY, SN76489, PC Engine-style"],
@@ -299,7 +305,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
     y++;
     const tools: [string, string, string][] = [
-      ["load…", `med sample ${n} load`, "replace this sound with a file of the vault"],
+      ["load…", `med sample ${n} load`, "replace this sound with a file in songs/"],
       ["chop 4", `med sample ${n} chop 4`, "4 equal slices → new instruments"],
       ["chop 8", `med sample ${n} chop 8`, "8 equal slices → new instruments"],
       ["chop at attacks", `med sample ${n} chop onsets`, "a slice at each attack"],
@@ -499,7 +505,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("mute / unmute this track"), cmd: `med mute ${track + 1}` },
     { label: st.edit ? t("edit mode off") : t("edit mode on"), hint: "space", cmd: `med edit ${st.edit ? "off" : "on"}` },
     "-",
-    { label: t("save"), hint: "med save", cmd: "med save" },
+    { label: t("save"), hint: "⌘S", cmd: "med save" },
+    { label: t("save as…"), hint: "⌘⇧S", cmd: "med saveas" },
     { label: t("export (WAV + tracks)"), hint: "med export", cmd: "med export --stems" },
     { label: t("export…"), hint: "alt E", cmd: "med screen export" },
     { label: t("the song's settings"), hint: "alt S", cmd: "med screen song" },
@@ -534,7 +541,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
      * doesn't has closed it already, so "cancel" opens it again (the song is still here).
      */
     async close() {
+      // a page that was never on screen (a duplicate the deck closes at once): nothing to do
+      if (st.page !== me) return true;
+      st.page = null;
       const e = st.editor, a = st.autosave;
+      // closing the page stops the song; it opens on START next time ("continue" brings the song back)
+      engine.stop();
+      st.home = true;
       if (!st.song || !e?.dirty) return true;
       await a?.flush();
       const name = st.song.title || st.path.split("/").pop() || "untitled";
@@ -546,6 +559,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         st.song = st.editor = null;
         return true;
       }
+      st.home = false;
       void ib.apps.open("breakermed");
       return false;
     },
@@ -555,6 +569,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         : `N ${t("new song")} · O ${t("open…")} · D ${t("demo")} · ? ${t("guide")}`,
 
     render(ui: UI, r: Rect, focused: boolean) {
+      st.page = me;
       const c = ui.c;
       const s = st.song;
       const now = engine.current();
@@ -600,10 +615,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const room = sx - (x + 2) - 1;
         if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
       }
-      if (!s) {
-        // no song: the logo and START (or the guide, which needs no song)
+      if (!s || st.home) {
+        // no song (or the page was closed): the logo and START (or the guide, which needs no song)
         const page = { x: r.x, y: r.y + 1, w: r.w, h: r.h - 1 };
         if (st.screen !== "guide") lookRescue();
+        start.setSong(s ? { title: s.title || st.path.split("/").pop() || "untitled", dirty: !!st.editor?.dirty } : null);
         return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
       }
       clampCursor();
@@ -749,7 +765,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         if (guide.key(k)) return true;
         if (!s) return false;
       }
-      if (!s) return start.key(k);
+      if (!s || st.home) return start.key(k);
+      // ⌘S save · ⌘⇧S save as… (Ctrl on Windows and Linux)
+      if (k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
       // SONG and EXPORT: their own arrows and ⏎; the piano keys only play there
       if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
         if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
