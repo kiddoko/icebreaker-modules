@@ -109,7 +109,7 @@ export async function synthCommand(ib: IcebreakerAPI, st: State, ctx: ShellConte
 // ── the drum machine ──────────────────────────────────────────────────────
 
 export const DRUMS_USAGE = [
-  "med drums <n|.> new [kit]                the instrument becomes a drum machine (kits: classic punch tight lofi)",
+  "med drums <n|.> new [kit]                the instrument becomes a drum machine (med drums kits: classic punch tight lofi boom house…)",
   "med drums <n|.> kit <name> · set <drum> tune|decay|level|tone <value> · grit <bits> [hold] · show",
   "med drums <n|.> bake <drum>              one drum as a sample · drums: C kick C# rim D snare D# clap E closed hat",
   "                                         F low tom F# open hat G mid tom G# cowbell A high tom A# crash B ride",
