@@ -64,6 +64,7 @@ export function writeMod(original: Song): Written {
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
   if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
+  if (song.echo) warnings.push("the echo isn't written (.bmed keeps it; an export keeps its sound)");
   const w = new Writer();
   const tracks = song.tracks;
   if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -160,6 +161,7 @@ export function writeMed(original: Song): Written {
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
   if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
+  if (song.echo) warnings.push("the echo isn't written (.bmed keeps it; an export keeps its sound)");
   const w = new Writer();
   const T = song.tracks;
   const insts = song.instruments.slice(0, 63);

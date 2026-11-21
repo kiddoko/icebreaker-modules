@@ -83,6 +83,12 @@ export class Engine {
     }
   }
 
+  /** The deck silenced us (`audio stop`, the ♪): the song stops and nothing rings on. */
+  silence(): void {
+    this.stop();
+    this.r?.silence();
+  }
+
   /** The line being heard now (null when stopped). */
   current(): Position | null {
     const r = this.r;

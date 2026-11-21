@@ -10,7 +10,7 @@
  * Everything a .med / .mod can't hold (8–16 tracks, names, our synths' and kits' settings,
  * chords later) lives here; .med and .mod stay for sharing with other trackers.
  */
-import { DEFAULT_CHORDS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
+import { cleanEcho, DEFAULT_CHORDS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
 import { sanitizeKit, type DrumKit } from "../dsp/drums";
@@ -126,6 +126,7 @@ export function writeBmed(song: Song): SongFile[] {
     sequence: song.sequence,
     ...(song.chords ? { chords: song.chords } : {}),
     ...(song.chordColumn ? { chordColumn: true } : {}),
+    ...(song.echo ? { echo: song.echo } : {}),
     instruments,
     blocks,
   };
@@ -227,6 +228,8 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
   };
   if (!song.sequence.length) song.sequence = [0];
   if (j.chordColumn === true) song.chordColumn = true;
+  const echo = cleanEcho(j.echo);
+  if (echo) song.echo = echo;
   if (Array.isArray(j.chords)) {
     // the song's own chord table: each line checked, a wrong one → the default's
     song.chords = DEFAULT_CHORDS.map((d, i) => {

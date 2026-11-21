@@ -19,6 +19,11 @@
  *   delete clear · ⌫ delete the line · alt enter insert a line (⇧: in every track)
  *   alt ↑↓ octave · alt ←→ instrument · alt 0–9 edit step
  *   alt C / X / V copy cut paste · alt Q / A transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
+ *   the chord column (when the song has chords): one digit, 1–F of the song's table
+ *
+ * alt I shows the INSTRUMENT screen instead of the block (alt B the block
+ * again): a sample's tools, a synth's settings (↑↓ ←→), a kit's drums
+ * (↑↓ a drum, ←→ a setting, ⇧←→ its value), or a free slot's choices.
  */
 import type { Action, App, IcebreakerAPI, KeyInput, MenuEntry, Rect, UI } from "./icebreaker";
 import { CHORD_COL, CMD_COL, colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
@@ -465,7 +470,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (s) {
         const f = s.flags;
         const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-        const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}`;
+        const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}${s.echo ? `  ${t("ECHO")} ${s.echo.ms}` : ""}`;
         const rx = ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted });
         // the state: playing, stopped, or stopped in edit mode (red: typing writes in the block)
         const state = engine.playing ? (engine.mode === "block" ? "▶ BLOCK" : "▶ SONG") : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";

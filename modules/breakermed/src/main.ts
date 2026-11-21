@@ -29,7 +29,7 @@ export function activate(ib: IcebreakerAPI): void {
   const st: State = newState();
   engine.onChange = () => ib.ui.redraw();
   // you silence it from the deck (`audio stop`, the ♪ in the status bar): the song stops, not only its notes
-  ib.audio.onStop?.(() => engine?.stop());
+  ib.audio.onStop?.(() => engine?.silence());
   void ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
 
   registerCommands(ib, engine, st);
@@ -45,6 +45,10 @@ export function activate(ib: IcebreakerAPI): void {
   });
   ib.palette.register({ id: "breakermed.open", title: "breakerMED: open a song…", run: () => void ib.shell.run("med open") });
   ib.palette.register({ id: "breakermed.stop", title: "breakerMED: stop", run: () => void ib.shell.run("med stop") });
+  ib.palette.register({ id: "breakermed.new", title: "breakerMED: a new song", run: () => void ib.shell.run("med new") });
+  ib.palette.register({ id: "breakermed.demo", title: "breakerMED: the demo song", run: () => void ib.shell.run("med demo") });
+  ib.palette.register({ id: "breakermed.save", title: "breakerMED: save the song", run: () => void ib.shell.run("med save") });
+  ib.palette.register({ id: "breakermed.export", title: "breakerMED: export (WAV, 24 bits) and the tracks apart", run: () => void ib.shell.run("med export --stems") });
 }
 
 export function deactivate(): void {
@@ -123,6 +127,7 @@ const FR: Record<string, string> = {
   "analog synth": "synthé analogique",
   "FM synth": "synthé FM",
   "chord": "accord",
+  "ECHO": "ÉCHO",
   "two sine waves, one bending the other: pianos, bells, basses": "deux sinusoïdes, l'une tord l'autre : pianos, cloches, basses",
   "ratio": "rapport",
   "detune": "désaccord",

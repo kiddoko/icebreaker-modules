@@ -13,7 +13,7 @@ import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
-import { chordsOf, DEFAULT_TRACKS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
+import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 
@@ -148,6 +148,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
       "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
       "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
+      "med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
       "med undo · med redo",
       ...SAMPLE_USAGE,
       ...SYNTH_USAGE,
@@ -156,7 +157,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
@@ -329,6 +330,21 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             ctx.out(st.edit ? "edit mode: typing writes in the block\n" : "edit mode off: the keys only play\n");
             return 0;
           }
+          case "echo": {
+            // med echo off | normal|cross [ms] [depth 1–6]: OctaMED's echo on the whole mix
+            const s = need();
+            const [type, msS, depthS] = rest;
+            if (type === "off") delete s.echo;
+            else if (type === "normal" || type === "cross") {
+              const e = cleanEcho({ type, ms: msS ? parseInt(msS, 10) : s.echo?.ms ?? 250, depth: depthS ? parseInt(depthS, 10) : s.echo?.depth ?? 2 });
+              if (!e || (msS && !(parseInt(msS, 10) > 0)) || (depthS && !(parseInt(depthS, 10) >= 1 && parseInt(depthS, 10) <= 6))) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
+              s.echo = e;
+            } else if (type !== undefined) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
+            if (type !== undefined) st.editor!.dirty = true;
+            const e = s.echo;
+            ctx.out(e ? `echo: ${e.type} · ${e.ms} ms · depth ${e.depth} (each repeat at 1/${2 ** e.depth})\n` : "echo: off\n");
+            return 0;
+          }
           case "chord": {
             // med chord <line> <track> <0–F>: the chord a note plays (0: none)
             const s = need();
@@ -475,6 +491,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
                 `tempo       ${s.tempoMode.toUpperCase()} ${s.tempo} · speed ${s.speed} · lines a beat ${s.lpb}`,
                 `transpose   ${s.transpose} · master volume ${s.masterVolume}`,
                 `slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
+                `echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}`,
                 `length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
                 `instruments`,
                 ...s.instruments.map((i, n) => (i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`)).filter(Boolean),

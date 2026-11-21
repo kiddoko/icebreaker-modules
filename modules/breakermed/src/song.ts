@@ -57,6 +57,28 @@ export interface Song {
   chords?: ChordDef[];
   /** the block shows the chord column (it comes on by itself when a chord is written) */
   chordColumn?: boolean;
+  /** OctaMED's echo on the whole mix (none: off) */
+  echo?: Echo;
+}
+
+/**
+ * OctaMED's mix echo: the sound comes back after `ms`, softer each time:
+ * `depth` 1–6 (each repeat at 1/2^depth: 1 rings long, 6 is a short slap).
+ * "cross" bounces it from one side to the other.
+ */
+export interface Echo {
+  type: "normal" | "cross";
+  ms: number;
+  depth: number;
+}
+
+export const ECHO_MAX_MS = 2000;
+/** an echo checked and clamped (from a file, a command) */
+export function cleanEcho(x: unknown): Echo | undefined {
+  const o = x && typeof x === "object" ? (x as Record<string, unknown>) : null;
+  if (!o || (o.type !== "normal" && o.type !== "cross")) return undefined;
+  const num = (v: unknown, d: number, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d);
+  return { type: o.type, ms: num(o.ms, 250, 1, ECHO_MAX_MS), depth: num(o.depth, 2, 1, 6) };
 }
 
 /** a chord: the notes it adds over the one written, in semitones */

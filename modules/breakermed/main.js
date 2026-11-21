@@ -12,6 +12,18 @@ var NOTE_NAMES = [
 	"A#",
 	"B-"
 ];
+var ECHO_MAX_MS = 2e3;
+/** an echo checked and clamped (from a file, a command) */
+function cleanEcho(x) {
+	const o = x && typeof x === "object" ? x : null;
+	if (!o || o.type !== "normal" && o.type !== "cross") return void 0;
+	const num = (v, d, lo, hi) => typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d;
+	return {
+		type: o.type,
+		ms: num(o.ms, 250, 1, ECHO_MAX_MS),
+		depth: num(o.depth, 2, 1, 6)
+	};
+}
 /** our default chord table: 1–F in the chord column */
 var DEFAULT_CHORDS = [
 	{
@@ -2884,7 +2896,7 @@ function makeApp(ib, engine, st) {
 			if (s) {
 				const f = s.flags;
 				const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-				const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}`;
+				const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}${s.echo ? `  ${t("ECHO")} ${s.echo.ms}` : ""}`;
 				const rx = ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted });
 				const state = engine.playing ? engine.mode === "block" ? "▶ BLOCK" : "▶ SONG" : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
 				ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
@@ -3460,6 +3472,7 @@ function readMed(bytes) {
 	let tracks = 4;
 	let trackVolume = [];
 	let trackPan = null;
+	let echo;
 	if (h.version < 2) {
 		r.seek(songArea);
 		sequence = Array.from(r.bytes(256)).slice(0, Math.min(256, songLength));
@@ -3473,6 +3486,14 @@ function readMed(bytes) {
 		const numPlaySeqs = r.u16();
 		const trackPanOffset = r.u32();
 		const flags3 = r.u32();
+		r.u16();
+		r.u16();
+		const echoType = r.u8(), echoDepth = r.u8(), echoLen = r.u16();
+		if (!hardwareMix && (echoType === 1 || echoType === 2)) echo = cleanEcho({
+			type: echoType === 2 ? "cross" : "normal",
+			ms: echoLen || 250,
+			depth: echoDepth || 2
+		});
 		if (numTracks < 1 || numTracks > 64) throw new Error(`not a valid OctaMED song (${numTracks} tracks)`);
 		tracks = numTracks;
 		if (trackVols && r.can(numTracks, trackVols)) trackVolume = Array.from(r.seek(trackVols).bytes(numTracks));
@@ -3636,6 +3657,7 @@ function readMed(bytes) {
 	};
 	if (!song.sequence.length) song.sequence = [0];
 	if (!song.blocks.length) song.blocks.push(newBlock(tracks));
+	if (echo) song.echo = echo;
 	return song;
 }
 /** The expansion data: instrument names and extras, the song's name. */
@@ -4263,6 +4285,7 @@ function writeBmed(song) {
 		sequence: song.sequence,
 		...song.chords ? { chords: song.chords } : {},
 		...song.chordColumn ? { chordColumn: true } : {},
+		...song.echo ? { echo: song.echo } : {},
 		instruments,
 		blocks
 	};
@@ -4380,6 +4403,8 @@ async function readBmed(jsonText, readFile) {
 	};
 	if (!song.sequence.length) song.sequence = [0];
 	if (j.chordColumn === true) song.chordColumn = true;
+	const echo = cleanEcho(j.echo);
+	if (echo) song.echo = echo;
 	if (Array.isArray(j.chords)) song.chords = DEFAULT_CHORDS.map((d, i) => {
 		const x = j.chords[i];
 		const notes = Array.isArray(x?.notes) ? x.notes.filter((n) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, 5) : [];
@@ -5389,6 +5414,14 @@ var Renderer = class {
 			0
 		);
 		_defineProperty(this, "carry", 0);
+		_defineProperty(
+			this,
+			/** OctaMED's echo: a delay line a side, fed back softer each time (cross: from one side to the other) */
+			"echoL",
+			null
+		);
+		_defineProperty(this, "echoR", null);
+		_defineProperty(this, "echoAt", 0);
 		this.song = song;
 		this.rate = rate;
 		this.paula = paula;
@@ -5413,6 +5446,16 @@ var Renderer = class {
 		this.player = null;
 		this.stopAll();
 	}
+	/** Everything quiet now: no song, no note ringing, no echo (the deck silenced us). */
+	silence() {
+		this.player = null;
+		this.voices = [];
+		this.tails = [];
+		this.chordVoices = [];
+		this.chordSteps = [];
+		this.previews = [];
+		this.echoL = this.echoR = null;
+	}
 	stopAll() {
 		for (const v of this.voices) v?.stop();
 		for (const list of this.chordVoices) for (const v of list ?? []) v.stop();
@@ -5426,7 +5469,7 @@ var Renderer = class {
 	}
 	/** something to hear: the song, or a key still ringing */
 	get busy() {
-		return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on));
+		return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on)) || this.echoing();
 	}
 	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
 	preview(inst, rate, seconds = .6) {
@@ -5462,10 +5505,38 @@ var Renderer = class {
 				if (p.voice.on) p.voice.render(left, right, at, at + span);
 			}
 			if (this.song.flags.filter) this.filter(left, right, at, at + span);
+			if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
+			else if (this.echoL) this.echoL = this.echoR = null;
 			at += span;
 			this.tickLeft -= span;
 		}
 		this.frame += n;
+	}
+	echo(left, right, from, to, e) {
+		const size = Math.ceil(ECHO_MAX_MS / 1e3 * this.rate) + 1;
+		if (!this.echoL) this.echoL = new Float32Array(size), this.echoR = new Float32Array(size);
+		const bl = this.echoL, br = this.echoR;
+		const delay = Math.max(1, Math.min(size - 1, Math.round(e.ms / 1e3 * this.rate)));
+		const g = 2 ** -e.depth;
+		const cross = e.type === "cross";
+		let w = this.echoAt;
+		for (let i = from; i < to; i++) {
+			const r = (w - delay + size) % size;
+			const dl = bl[r], dr = br[r];
+			const yl = left[i] + dl, yr = right[i] + dr;
+			left[i] = yl;
+			right[i] = yr;
+			bl[w] = (cross ? yr : yl) * g;
+			br[w] = (cross ? yl : yr) * g;
+			w = (w + 1) % size;
+		}
+		this.echoAt = w;
+	}
+	/** something still echoing (the song stopped, the echo rings on) */
+	echoing() {
+		if (!this.song.echo || !this.echoL) return false;
+		for (let i = 0; i < this.echoL.length; i += 64) if (Math.abs(this.echoL[i]) > 1e-4 || Math.abs(this.echoR[i]) > 1e-4) return true;
+		return false;
 	}
 	filter(left, right, from, to) {
 		const f = this.led;
@@ -6393,6 +6464,7 @@ function writeMod(original) {
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
 	if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
+	if (song.echo) warnings.push("the echo isn't written (.bmed keeps it; an export keeps its sound)");
 	const w = new Writer();
 	const tracks = song.tracks;
 	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -6489,6 +6561,7 @@ function writeMed(original) {
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
 	if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
+	if (song.echo) warnings.push("the echo isn't written (.bmed keeps it; an export keeps its sound)");
 	const w = new Writer();
 	const T = song.tracks;
 	const insts = song.instruments.slice(0, 63);
@@ -6704,6 +6777,7 @@ function registerCommands(ib, engine, st) {
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
 			"med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
 			"med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
+			"med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
 			"med undo · med redo",
 			...SAMPLE_USAGE,
 			...SYNTH_USAGE,
@@ -6770,6 +6844,9 @@ function registerCommands(ib, engine, st) {
 			"chord",
 			"chords",
 			"reset",
+			"echo",
+			"normal",
+			"cross",
 			"block",
 			"seq",
 			"tracks",
@@ -6995,6 +7072,24 @@ function registerCommands(ib, engine, st) {
 						if (st.edit) engine.stop();
 						ctx.out(st.edit ? "edit mode: typing writes in the block\n" : "edit mode off: the keys only play\n");
 						return 0;
+					case "echo": {
+						const s = need();
+						const [type, msS, depthS] = rest;
+						if (type === "off") delete s.echo;
+						else if (type === "normal" || type === "cross") {
+							const e = cleanEcho({
+								type,
+								ms: msS ? parseInt(msS, 10) : s.echo?.ms ?? 250,
+								depth: depthS ? parseInt(depthS, 10) : s.echo?.depth ?? 2
+							});
+							if (!e || msS && !(parseInt(msS, 10) > 0) || depthS && !(parseInt(depthS, 10) >= 1 && parseInt(depthS, 10) <= 6)) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
+							s.echo = e;
+						} else if (type !== void 0) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
+						if (type !== void 0) st.editor.dirty = true;
+						const e = s.echo;
+						ctx.out(e ? `echo: ${e.type} · ${e.ms} ms · depth ${e.depth} (each repeat at 1/${2 ** e.depth})\n` : "echo: off\n");
+						return 0;
+					}
 					case "chord": {
 						const s = need();
 						const [lineS, trackS, chordS] = rest;
@@ -7138,6 +7233,7 @@ function registerCommands(ib, engine, st) {
 							`tempo       ${s.tempoMode.toUpperCase()} ${s.tempo} · speed ${s.speed} · lines a beat ${s.lpb}`,
 							`transpose   ${s.transpose} · master volume ${s.masterVolume}`,
 							`slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
+							`echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}`,
 							`length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
 							`instruments`,
 							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
@@ -7225,6 +7321,11 @@ var Engine = class {
 			this.onChange?.();
 		}
 	}
+	/** The deck silenced us (`audio stop`, the ♪): the song stops and nothing rings on. */
+	silence() {
+		this.stop();
+		this.r?.silence();
+	}
 	/** The line being heard now (null when stopped). */
 	current() {
 		const r = this.r;
@@ -7302,7 +7403,7 @@ function activate(ib) {
 	engine = new Engine(ib.audio);
 	const st = newState();
 	engine.onChange = () => ib.ui.redraw();
-	ib.audio.onStop?.(() => engine?.stop());
+	ib.audio.onStop?.(() => engine?.silence());
 	ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
 	registerCommands(ib, engine, st);
 	ib.apps.register({
@@ -7323,6 +7424,26 @@ function activate(ib) {
 		id: "breakermed.stop",
 		title: "breakerMED: stop",
 		run: () => void ib.shell.run("med stop")
+	});
+	ib.palette.register({
+		id: "breakermed.new",
+		title: "breakerMED: a new song",
+		run: () => void ib.shell.run("med new")
+	});
+	ib.palette.register({
+		id: "breakermed.demo",
+		title: "breakerMED: the demo song",
+		run: () => void ib.shell.run("med demo")
+	});
+	ib.palette.register({
+		id: "breakermed.save",
+		title: "breakerMED: save the song",
+		run: () => void ib.shell.run("med save")
+	});
+	ib.palette.register({
+		id: "breakermed.export",
+		title: "breakerMED: export (WAV, 24 bits) and the tracks apart",
+		run: () => void ib.shell.run("med export --stems")
 	});
 }
 function deactivate() {
@@ -7400,6 +7521,7 @@ var FR = {
 	"analog synth": "synthé analogique",
 	"FM synth": "synthé FM",
 	"chord": "accord",
+	"ECHO": "ÉCHO",
 	"two sine waves, one bending the other: pianos, bells, basses": "deux sinusoïdes, l'une tord l'autre : pianos, cloches, basses",
 	"ratio": "rapport",
 	"detune": "désaccord",

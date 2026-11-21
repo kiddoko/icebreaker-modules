@@ -9,7 +9,7 @@
  * the computer goes, one track alone for a stem).
  */
 import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
-import { MAX_CHORD_NOTES, type Song } from "./song";
+import { ECHO_MAX_MS, MAX_CHORD_NOTES, type Echo, type Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
 import { C3_RATE } from "./dsp/analog";
 import { DrumVoice, drumOf } from "./dsp/drums";
@@ -76,6 +76,17 @@ export class Renderer {
     this.stopAll();
   }
 
+  /** Everything quiet now: no song, no note ringing, no echo (the deck silenced us). */
+  silence(): void {
+    this.player = null;
+    this.voices = [];
+    this.tails = [];
+    this.chordVoices = [];
+    this.chordSteps = [];
+    this.previews = [];
+    this.echoL = this.echoR = null;
+  }
+
   private stopAll(): void {
     for (const v of this.voices) v?.stop();
     for (const list of this.chordVoices) for (const v of list ?? []) v.stop();
@@ -92,7 +103,7 @@ export class Renderer {
 
   /** something to hear: the song, or a key still ringing */
   get busy(): boolean {
-    return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on));
+    return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on)) || this.echoing();
   }
 
   /** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
@@ -123,10 +134,45 @@ export class Renderer {
         if (p.voice.on) p.voice.render(left, right, at, at + span);
       }
       if (this.song.flags.filter) this.filter(left, right, at, at + span);
+      if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
+      else if (this.echoL) this.echoL = this.echoR = null; // off: the next echo starts clean
       at += span;
       this.tickLeft -= span;
     }
     this.frame += n;
+  }
+
+  /** OctaMED's echo: a delay line a side, fed back softer each time (cross: from one side to the other) */
+  private echoL: Float32Array | null = null;
+  private echoR: Float32Array | null = null;
+  private echoAt = 0;
+  private echo(left: Float32Array, right: Float32Array, from: number, to: number, e: Echo): void {
+    const size = Math.ceil((ECHO_MAX_MS / 1000) * this.rate) + 1;
+    if (!this.echoL) (this.echoL = new Float32Array(size)), (this.echoR = new Float32Array(size));
+    const bl = this.echoL, br = this.echoR!;
+    const delay = Math.max(1, Math.min(size - 1, Math.round((e.ms / 1000) * this.rate)));
+    const g = 2 ** -e.depth;
+    const cross = e.type === "cross";
+    let w = this.echoAt;
+    for (let i = from; i < to; i++) {
+      const r = (w - delay + size) % size;
+      const dl = bl[r], dr = br[r];
+      const yl = left[i] + dl, yr = right[i] + dr;
+      left[i] = yl;
+      right[i] = yr;
+      // what comes back next time: this sound, softer (cross: the other side's)
+      bl[w] = (cross ? yr : yl) * g;
+      br[w] = (cross ? yl : yr) * g;
+      w = (w + 1) % size;
+    }
+    this.echoAt = w;
+  }
+
+  /** something still echoing (the song stopped, the echo rings on) */
+  private echoing(): boolean {
+    if (!this.song.echo || !this.echoL) return false;
+    for (let i = 0; i < this.echoL.length; i += 64) if (Math.abs(this.echoL[i]) > 1e-4 || Math.abs(this.echoR![i]) > 1e-4) return true;
+    return false;
   }
 
   private filter(left: Float32Array, right: Float32Array, from: number, to: number): void {

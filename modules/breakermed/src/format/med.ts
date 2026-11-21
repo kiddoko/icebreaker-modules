@@ -12,7 +12,7 @@
  * Not read yet: packed (ADPCM) samples, MIDI, several songs in one file (the
  * first is read), MMD2's play-sequence commands (stop / jump).
  */
-import { amigaPan, emptyInstrument, newBlock, NOTE_OFF, type Instrument, type Song, type TempoMode } from "../song";
+import { amigaPan, cleanEcho, emptyInstrument, newBlock, NOTE_OFF, type Echo, type Instrument, type Song, type TempoMode } from "../song";
 import { Reader, s16beToFloats, s8ToFloats, undelta8 } from "./bytes";
 
 export function isMed(b: Uint8Array): boolean {
@@ -67,6 +67,7 @@ export function readMed(bytes: Uint8Array): Song {
   let tracks = 4;
   let trackVolume: number[] = [];
   let trackPan: number[] | null = null;
+  let echo: Echo | undefined;
   if (h.version < 2) {
     r.seek(songArea);
     sequence = Array.from(r.bytes(256)).slice(0, Math.min(256, songLength));
@@ -80,6 +81,11 @@ export function readMed(bytes: Uint8Array): Song {
     const numPlaySeqs = r.u16();
     const trackPanOffset = r.u32();
     const flags3 = r.u32();
+    // the mix's echo (MMD2/3, mixing mode): its type, depth, length in ms
+    r.u16(); // volume adjust
+    r.u16(); // channels
+    const echoType = r.u8(), echoDepth = r.u8(), echoLen = r.u16();
+    if (!hardwareMix && (echoType === 1 || echoType === 2)) echo = cleanEcho({ type: echoType === 2 ? "cross" : "normal", ms: echoLen || 250, depth: echoDepth || 2 });
     if (numTracks < 1 || numTracks > 64) throw new Error(`not a valid OctaMED song (${numTracks} tracks)`);
     tracks = numTracks;
     if (trackVols && r.can(numTracks, trackVols)) trackVolume = Array.from(r.seek(trackVols).bytes(numTracks));
@@ -251,6 +257,7 @@ export function readMed(bytes: Uint8Array): Song {
   };
   if (!song.sequence.length) song.sequence = [0];
   if (!song.blocks.length) song.blocks.push(newBlock(tracks));
+  if (echo) song.echo = echo;
   return song;
 }
 

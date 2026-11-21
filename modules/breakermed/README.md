@@ -6,8 +6,8 @@ It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's co
 keyboard, the mouse and a gamepad.
 
 > Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog and FM
-> synths, the drum machine and chords are here (8 tracks by default, 16 at most, named); next come
-> MP3 / M4A / OGG export and the finishing touches.
+> synths, the drum machine, chords and OctaMED's echo are here (8 tracks by default, 16 at most,
+> named); MP3 / M4A / OGG export comes later (an encoder pack the deck downloads on request).
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -39,6 +39,8 @@ alt enter    insert a line (⇧: in every track)
 ⇧ + arrows   select (a drag with the mouse too) alt C / X / V   copy · cut · paste
 alt Q / A    transpose up / down a semitone (⇧: an octave)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps)
+alt I · alt B   the INSTRUMENT screen · the block again
+chord column    one digit, 1–F (when the song has chords: see Chords)
 mouse        click a cell, drag to select, the wheel scrolls, right-click: a menu (copy, paste,
              transpose, lines, play from here); a track's name mutes it; a position plays from it
 gamepad      the cross moves, A plays / stops
@@ -65,6 +67,10 @@ med note <line> <track> <C-3|^^^|---> [instrument] [command]   (line in hex, tra
 med block new [lines] · med block copy · med block lines <n>
 med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>
 med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>
+med chord <line> <track> <0–F> · med chords …   (see Chords)
+med echo off | normal|cross [ms] [depth]       (see The echo)
+med sample … · med bounce · med filter           (see The sampler)
+med synth … · med fm … · med drums …             (see the synths, the drum machine)
 med undo · med redo
 med effects                 every command, one line each
 med info                    the song's settings and instruments
@@ -193,6 +199,19 @@ med drums <n|.> show · bake <drum>    the settings · one drum as a sample
 
 `.bmed` keeps the kit. In a `.mod` / `.med`, each drum the song plays becomes a sample of its own
 in a free instrument slot, and its notes are rewritten to play it.
+
+## The echo
+
+OctaMED's echo on the whole mix: the sound comes back after a length you choose, softer each time
+(**depth** 1–6: each repeat at 1/2, 1/4… 1/64 of the last, so 1 rings long and 6 is a short slap);
+**cross** bounces it from one side to the other. It's read from OctaMED songs (MMD2 / MMD3 in
+mixing mode), kept in `.bmed`, heard in exports; the page's top line shows ECHO and its length.
+
+```
+med echo normal 250 2      every 250 ms, half as loud each time
+med echo cross 375 3       from side to side
+med echo off
+```
 
 ## How it plays
 
