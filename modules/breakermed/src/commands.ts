@@ -7,12 +7,14 @@ import type { Engine } from "./engine";
 import { readSong, SONG_EXTS } from "./format";
 import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
+import { templateSong } from "./template";
 import { checkFormat, describe, encode, encodeLossy, encoderProblem, extOf, formatOf, isLossy, renderSong, trackUsed } from "./export";
 import { bounce, sampleCommand, SAMPLE_USAGE } from "./commands-sample";
 import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
+import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
 import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
@@ -131,11 +133,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med open [file]            a .med / .mod of the vault (no file: choose one)",
       "med ls                     the songs in the vault",
       "med demo                   a little song of ours, to try it right away",
-      "med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
+      "med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
       "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
       "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
-      "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
+      "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
       "med play [song|block] [position] [line]",
       "med stop",
       "med pos <position> [line]  move the cursor (and where play starts)",
@@ -148,7 +150,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
       "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
       "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
-      "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
+      "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
+      "med swing <0–100>          every other line longer (0 straight, 100 triplets)",
       "med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
       "med undo · med redo",
       ...SAMPLE_USAGE,
@@ -158,7 +161,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "swing", "strum", "invert", "--empty", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail", "quality"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
@@ -264,9 +267,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             // 8 tracks (or what you say, up to 16), one empty block, the demo's four instruments to start with
             const n = rest[0] ? parseInt(rest[0], 10) : DEFAULT_TRACKS;
             if (!(n >= 1 && n <= MAX_TRACKS)) return ctx.err(`med new [tracks 1–${MAX_TRACKS}]\n`), 1;
-            const song = newSong(n);
-            song.instruments = readSong(demoMod()).instruments;
-            song.title = "untitled";
+            // the template (named tracks, drums, synths, a first bar) — or a blank page with the demo's samples
+            const song = flags.empty ? newSong(n) : templateSong(n);
+            if (flags.empty) (song.instruments = readSong(demoMod()).instruments), (song.title = "untitled");
             await adopt(ctx, song, "untitled.bmed");
             void ib.apps.open("breakermed");
             return 0;
@@ -275,12 +278,15 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const s = need();
             const tr = parseInt(rest[0] ?? "", 10) - 1;
             const [, what, ...value] = rest;
-            if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
+            if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100> | strum <0–${MAX_STRUM_MS} ms>\n`), 1;
             const v = value.join(" ");
             if (what === "name") st.editor!.setTrack(tr, { name: v });
             else if (what === "vol" && /^\d+$/.test(v)) st.editor!.setTrack(tr, { volume: +v });
             else if (what === "pan" && /^-?\d+$/.test(v)) st.editor!.setTrack(tr, { pan: Math.max(-100, Math.min(100, +v)) / 100 });
-            else return ctx.err(`med track <n> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
+            else if (what === "strum" && /^\d+$/.test(v) && +v <= MAX_STRUM_MS) {
+              st.editor!.setTrack(tr, { strum: +v });
+              ctx.out(+v ? `${trackName(s, tr)}: its chords strummed, ${v} ms a note\n` : `${trackName(s, tr)}: its chords all at once\n`);
+            } else return ctx.err(`med track <n> name <text> | vol <0–64> | pan <-100–100> | strum <0–${MAX_STRUM_MS} ms>\n`), 1;
             return 0;
           }
           case "demo":
@@ -387,6 +393,18 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (+${notes.join(" +")})\n`);
               return 0;
             }
+            if (op === "invert") {
+              // med chords invert <1–F> <1–3>: that line of the table, turned over (the third, then the fifth in the bass)
+              const n = parseInt(args[0] ?? "", 16), k = parseInt(args[1] ?? "1", 10);
+              const d = chordsOf(s)[n - 1];
+              if (!d || !(k >= 1 && k <= 3)) return ctx.err("med chords invert <1–F> [1|2|3] (once: the third in the bass, twice: the fifth…)\n"), 1;
+              const notes = invertChord(d.notes, k);
+              if (!notes.length || notes.some((x) => x < -24 || x > 24)) return ctx.err("med chords invert: that chord can't turn over\n"), 1;
+              const name = `${d.name.replace(/\/\d$/, "")}/${k}`.slice(0, 8);
+              st.editor!.chords(n, { name, notes });
+              ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (${notes.map((x) => (x > 0 ? `+${x}` : x)).join(" ")})\n`);
+              return 0;
+            }
             if (op === "reset") {
               st.editor!.chords(0, null);
               ctx.out("the chord table: back to the default\n");
@@ -478,6 +496,17 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             st.editor!.dirty = true;
             return 0;
           }
+          case "swing": {
+            // med swing <0–100>: every other line longer (100 = a triplet feel)
+            const s = need();
+            const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
+            if (!(n >= 0 && n <= 100)) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), rest[0] ? 1 : 0;
+            if (n) s.swing = n;
+            else delete s.swing;
+            st.editor!.dirty = true;
+            ctx.out(n ? `swing ${n}: every other line ${Math.round((swingFactor(n, 0) / swingFactor(n, 1)) * 100) / 100}× the next\n` : "swing off: straight\n");
+            return 0;
+          }
           case "undo":
           case "redo": {
             need();
@@ -499,7 +528,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
                 `tempo       ${s.tempoMode.toUpperCase()} ${s.tempo} · speed ${s.speed} · lines a beat ${s.lpb}`,
                 `transpose   ${s.transpose} · master volume ${s.masterVolume}`,
                 `slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
-                `echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}`,
+                `echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}${s.swing ? ` · swing ${s.swing}` : ""}`,
                 `length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
                 `instruments`,
                 ...s.instruments.map((i, n) => (i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`)).filter(Boolean),

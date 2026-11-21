@@ -240,15 +240,21 @@ export class Renderer {
       // the chord: the old one's notes let go (or ring on), the new one's start with the note
       for (const old of this.chordVoices[e.voice] ?? []) {
         if (!old.on || !old.rings) continue;
-        if (!(old instanceof DrumVoice)) old.stop();
+        if (!(old instanceof DrumVoice || (old instanceof Strummed && old.inner instanceof DrumVoice))) old.stop();
         if (old.on && this.tails.length < 32) this.tails.push(old);
       }
       const steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
       this.chordSteps[e.voice] = steps;
-      this.chordVoices[e.voice] = steps.map((st) => {
+      // strummed: each note of the chord a little after the one under it
+      const strum = Math.round(((this.song.trackStrum?.[e.voice] ?? 0) / 1000) * this.rate);
+      const order = steps.map((st, i) => ({ st, i })).sort((a, b) => a.st - b.st);
+      this.chordVoices[e.voice] = steps.map((st, i) => {
         const cv = voiceFor(instrument, this.rate, this.paula);
         cv.start({ instrument, rate: (e.rate ?? 8363) * 2 ** (st / 12), offset: e.offset ?? 0 });
-        return cv;
+        if (!strum) return cv;
+        // the notes under the written one come before it, the ones over it after
+        const rank = order.findIndex((o) => o.i === i), below = order.filter((o) => o.st < 0).length;
+        return rank < below ? cv : new Strummed(cv, (rank - below + 1) * strum);
       });
     }
     const v = this.voices[e.voice];
@@ -262,5 +268,38 @@ export class Renderer {
     const k = chord.length ? 1 / Math.sqrt(1 + chord.length) : 1;
     v.set(s.lastRate, s.lastVol * k, s.lastPan);
     chord.forEach((cv, i) => cv.set(s.lastRate! * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol! * k, s.lastPan!));
+  }
+}
+
+/** A chord's note that starts `wait` frames late (a strum): silent until then, the same voice after. */
+export class Strummed implements Voice {
+  constructor(
+    readonly inner: Voice,
+    private wait: number,
+  ) {}
+  /** let go before it was heard: it never will be */
+  private dead = false;
+  get on(): boolean {
+    return !this.dead && (this.wait > 0 || this.inner.on);
+  }
+  get rings(): boolean | undefined {
+    return this.inner.rings;
+  }
+  start(n: Parameters<Voice["start"]>[0]): void {
+    this.inner.start(n);
+  }
+  set(rate: number, volume: number, pan: number): void {
+    this.inner.set(rate, volume, pan);
+  }
+  stop(): void {
+    if (this.wait > 0) this.dead = true;
+    this.inner.stop();
+  }
+  render(left: Float32Array, right: Float32Array, from: number, to: number): void {
+    if (this.dead) return;
+    if (this.wait >= to - from) return void (this.wait -= to - from);
+    const start = from + this.wait;
+    this.wait = 0;
+    this.inner.render(left, right, start, to);
   }
 }

@@ -6,7 +6,7 @@
  * chord (one digit, 1–F of the song's table), then per command page 4 more:
  * the command's two digits, the parameter's two.
  */
-import { computed, DEFAULT_CHORDS, emptyCell, type ChordDef, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
+import { computed, DEFAULT_CHORDS, MAX_STRUM_MS, emptyCell, type ChordDef, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
 
 /** a song holds 63 instruments at most (OctaMED's limit) */
 export const MAX_INSTRUMENTS = 63;
@@ -104,7 +104,7 @@ export class Editor {
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
   private shape(label: string, fn: () => void): void {
-    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], insts: [...this.song.instruments], chords: this.song.chords });
+    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], strum: this.song.trackStrum ? [...this.song.trackStrum] : undefined, insts: [...this.song.instruments], chords: this.song.chords });
     const put = (s: ReturnType<typeof take>) => {
       this.song.blocks = s.blocks.map(cloneBlock);
       this.song.sequence = [...s.sequence];
@@ -112,6 +112,8 @@ export class Editor {
       this.song.trackVolume = [...s.vol];
       this.song.trackPan = [...s.pan];
       this.song.trackNames = [...s.names];
+      if (s.strum) this.song.trackStrum = [...s.strum];
+      else delete this.song.trackStrum;
       this.song.instruments = [...s.insts];
       if (s.chords) this.song.chords = s.chords;
       else delete this.song.chords;
@@ -282,18 +284,24 @@ export class Editor {
       s.trackVolume = Array.from({ length: tracks }, (_, i) => s.trackVolume[i] ?? 64);
       s.trackPan = Array.from({ length: tracks }, (_, i) => s.trackPan[i] ?? ((i & 3) === 0 || (i & 3) === 3 ? -0.6 : 0.6));
       s.trackNames = Array.from({ length: tracks }, (_, i) => s.trackNames[i] ?? "");
+      if (s.trackStrum) s.trackStrum = Array.from({ length: tracks }, (_, i) => s.trackStrum![i] ?? 0);
       s.tracks = tracks;
     });
   }
 
-  /** a track's name, volume (0–64) and pan (-1…1) */
-  setTrack(track: number, what: { name?: string; volume?: number; pan?: number }): void {
+  /** a track's name, volume (0–64), pan (-1…1) and chord strum (ms) */
+  setTrack(track: number, what: { name?: string; volume?: number; pan?: number; strum?: number }): void {
     if (track < 0 || track >= this.song.tracks) return;
     this.shape("track", () => {
       const s = this.song;
       if (what.name !== undefined) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
       if (what.volume !== undefined) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
       if (what.pan !== undefined) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
+      if (what.strum !== undefined) {
+        s.trackStrum ??= new Array(s.tracks).fill(0);
+        s.trackStrum[track] = Math.max(0, Math.min(MAX_STRUM_MS, Math.round(what.strum)));
+        if (s.trackStrum.every((x) => !x)) delete s.trackStrum;
+      }
     });
   }
 

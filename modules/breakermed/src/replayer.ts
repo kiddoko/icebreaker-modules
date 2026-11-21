@@ -21,7 +21,7 @@
  * Not yet: 08 hold/decay (the instrument's own hold/decay works), 0E synth jump,
  * 20 reverse, the synth instruments' programs, MIDI.
  */
-import { chordNotes, NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, type Instrument, type Song } from "./song";
+import { chordNotes, NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, swingFactor, type Instrument, type Song } from "./song";
 
 /** What a voice does on a tick: only what changed. */
 export interface VoiceEvent {
@@ -135,7 +135,7 @@ export class Player {
 
   get tickSeconds(): number {
     const f = this.song.flags;
-    return 2.5 / (this.bpmOverride ?? ptBpmOf(this.song.tempoMode, this.tempo, this.song.lpb, f.eightChannel, f.hardwareMix));
+    return (2.5 / (this.bpmOverride ?? ptBpmOf(this.song.tempoMode, this.tempo, this.song.lpb, f.eightChannel, f.hardwareMix))) * swingFactor(this.song.swing, this.line);
   }
 
   /** Silence everything (the events to send). */

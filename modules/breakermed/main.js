@@ -12,6 +12,34 @@ var NOTE_NAMES = [
 	"A#",
 	"B-"
 ];
+/** how long a line lasts with swing, as a factor (even lines longer, odd lines shorter; a pair stays the same) */
+var swingFactor = (swing, line) => {
+	const s = Math.max(0, Math.min(100, swing ?? 0)) / 300;
+	return line % 2 === 0 ? 1 + s : 1 - s;
+};
+/**
+* A chord turned over `k` times (1, 2, 3): its lowest note goes up an octave each time,
+* then the whole is moved so the written note is still one of them. maj (+4 +7) once:
+* -8 -5 (E G under the C: the third in the bass); twice: -5 +4 (G under, E over).
+*/
+function invertChord(notes, k) {
+	let all = [{
+		v: 0,
+		root: true
+	}, ...notes.map((v) => ({
+		v,
+		root: false
+	}))].sort((a, b) => a.v - b.v);
+	for (let i = 0; i < k; i++) {
+		const [low, ...rest] = all;
+		all = [...rest, {
+			...low,
+			v: low.v + 12
+		}];
+	}
+	const root = all.find((x) => x.root).v;
+	return all.filter((x) => !x.root).map((x) => x.v - root);
+}
 var ECHO_MAX_MS = 2e3;
 /** an echo checked and clamped (from a file, a command) */
 function cleanEcho(x) {
@@ -405,6 +433,7 @@ var Editor = class {
 			vol: [...this.song.trackVolume],
 			pan: [...this.song.trackPan],
 			names: [...this.song.trackNames],
+			strum: this.song.trackStrum ? [...this.song.trackStrum] : void 0,
 			insts: [...this.song.instruments],
 			chords: this.song.chords
 		});
@@ -415,6 +444,8 @@ var Editor = class {
 			this.song.trackVolume = [...s.vol];
 			this.song.trackPan = [...s.pan];
 			this.song.trackNames = [...s.names];
+			if (s.strum) this.song.trackStrum = [...s.strum];
+			else delete this.song.trackStrum;
 			this.song.instruments = [...s.insts];
 			if (s.chords) this.song.chords = s.chords;
 			else delete this.song.chords;
@@ -572,10 +603,11 @@ var Editor = class {
 			s.trackVolume = Array.from({ length: tracks }, (_, i) => s.trackVolume[i] ?? 64);
 			s.trackPan = Array.from({ length: tracks }, (_, i) => s.trackPan[i] ?? ((i & 3) === 0 || (i & 3) === 3 ? -.6 : .6));
 			s.trackNames = Array.from({ length: tracks }, (_, i) => s.trackNames[i] ?? "");
+			if (s.trackStrum) s.trackStrum = Array.from({ length: tracks }, (_, i) => s.trackStrum[i] ?? 0);
 			s.tracks = tracks;
 		});
 	}
-	/** a track's name, volume (0–64) and pan (-1…1) */
+	/** a track's name, volume (0–64), pan (-1…1) and chord strum (ms) */
 	setTrack(track, what) {
 		if (track < 0 || track >= this.song.tracks) return;
 		this.shape("track", () => {
@@ -583,6 +615,11 @@ var Editor = class {
 			if (what.name !== void 0) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
 			if (what.volume !== void 0) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
 			if (what.pan !== void 0) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
+			if (what.strum !== void 0) {
+				s.trackStrum ??= new Array(s.tracks).fill(0);
+				s.trackStrum[track] = Math.max(0, Math.min(200, Math.round(what.strum)));
+				if (s.trackStrum.every((x) => !x)) delete s.trackStrum;
+			}
 		});
 	}
 	/**
@@ -4305,12 +4342,14 @@ function writeBmed(song) {
 		tracks: Array.from({ length: song.tracks }, (_, t) => ({
 			name: song.trackNames[t] ?? "",
 			volume: song.trackVolume[t] ?? 64,
-			pan: song.trackPan[t] ?? 0
+			pan: song.trackPan[t] ?? 0,
+			...song.trackStrum?.[t] ? { strum: song.trackStrum[t] } : {}
 		})),
 		sequence: song.sequence,
 		...song.chords ? { chords: song.chords } : {},
 		...song.chordColumn ? { chordColumn: true } : {},
 		...song.echo ? { echo: song.echo } : {},
+		...song.swing ? { swing: song.swing } : {},
 		instruments,
 		blocks
 	};
@@ -4430,6 +4469,10 @@ async function readBmed(jsonText, readFile) {
 	if (j.chordColumn === true) song.chordColumn = true;
 	const echo = cleanEcho(j.echo);
 	if (echo) song.echo = echo;
+	const swing = num(j.swing, 0, 0, 100);
+	if (swing) song.swing = swing;
+	const strum = Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.strum, 0, 0, 200));
+	if (strum.some((x) => x)) song.trackStrum = strum;
 	if (Array.isArray(j.chords)) song.chords = DEFAULT_CHORDS.map((d, i) => {
 		const x = j.chords[i];
 		const notes = Array.isArray(x?.notes) ? x.notes.filter((n) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, 5) : [];
@@ -4442,6 +4485,96 @@ async function readBmed(jsonText, readFile) {
 		};
 	});
 	return song;
+}
+// src/template.ts
+/**
+* breakerMED — the "new song" template: 8 named tracks, a drum machine, an analog
+* bass, a lead, a pad and an FM e-piano for the chords, and a first bar written so
+* that ▶ plays something at once. Everything is computed (no sample to load).
+*/
+/** the template's tracks, in order (a 9th track and more stay unnamed) */
+var TEMPLATE_TRACKS = [
+	"kick",
+	"snare",
+	"hats",
+	"bass",
+	"lead",
+	"pad",
+	"chords",
+	"fx"
+];
+/** C-1 = 1: a note's number from its name in octave n ("C", 3) */
+var note = (name, octave) => 1 + (octave - 1) * 12 + [
+	"C",
+	"C#",
+	"D",
+	"D#",
+	"E",
+	"F",
+	"F#",
+	"G",
+	"G#",
+	"A",
+	"A#",
+	"B"
+].indexOf(name);
+function synth(kind, preset) {
+	const sk = SYNTHS.find((s) => s.kind === kind);
+	const i = {
+		...emptyInstrument(),
+		kind,
+		name: `${sk.cmd} ${preset}`
+	};
+	i[sk.field] = sk.preset(preset);
+	return i;
+}
+/** A new song ready to play: `tracks` tracks (8 by default), the template's instruments and a first bar. */
+function templateSong(tracks = TEMPLATE_TRACKS.length) {
+	const n = Math.max(1, Math.min(16, tracks));
+	const s = newSong(n);
+	s.title = "untitled";
+	s.chordColumn = true;
+	s.trackNames = Array.from({ length: n }, (_, t) => TEMPLATE_TRACKS[t] ?? "");
+	s.instruments = [
+		{
+			...emptyInstrument(),
+			kind: "drums",
+			name: "drums classic",
+			drums: drumKit("classic")
+		},
+		synth("analog", "bass"),
+		synth("analog", "lead"),
+		synth("analog", "pad"),
+		synth("fm", "epiano")
+	];
+	const b = s.blocks[0];
+	const put = (line, track, n, inst, chord) => {
+		if (track >= s.tracks) return;
+		for (let at = line; at < b.lines; at += 16) {
+			const c = b.cells[at][track];
+			c.note = n, c.inst = inst;
+			if (chord) c.chord = chord;
+		}
+	};
+	for (const l of [
+		0,
+		6,
+		8
+	]) put(l, 0, note("C", 3), 1);
+	for (const l of [4, 12]) put(l, 1, note("D", 3), 1);
+	for (let l = 0; l < 16; l += 2) put(l, 2, note("E", 3), 1);
+	put(10, 2, note("F#", 3), 1);
+	for (const [l, nm] of [
+		[0, "C"],
+		[3, "C"],
+		[6, "D#"],
+		[8, "F"],
+		[11, "G"],
+		[14, "D#"]
+	]) put(l, 3, note(nm, 2), 2);
+	put(0, 6, note("C", 3), 5, 2);
+	put(8, 6, note("G#", 2), 5, 1);
+	return s;
 }
 // src/format/aiff.ts
 /** an IEEE 754 80-bit extended number (AIFF's sample rate; whole rates below 2³² are exact) */
@@ -4879,7 +5012,7 @@ var Player = class {
 	}
 	get tickSeconds() {
 		const f = this.song.flags;
-		return 2.5 / (this.bpmOverride ?? ptBpmOf(this.song.tempoMode, this.tempo, this.song.lpb, f.eightChannel, f.hardwareMix));
+		return 2.5 / (this.bpmOverride ?? ptBpmOf(this.song.tempoMode, this.tempo, this.song.lpb, f.eightChannel, f.hardwareMix)) * swingFactor(this.song.swing, this.line);
 	}
 	/** Silence everything (the events to send). */
 	silence() {
@@ -5636,19 +5769,26 @@ var Renderer = class {
 			}
 			for (const old of this.chordVoices[e.voice] ?? []) {
 				if (!old.on || !old.rings) continue;
-				if (!(old instanceof DrumVoice)) old.stop();
+				if (!(old instanceof DrumVoice || old instanceof Strummed && old.inner instanceof DrumVoice)) old.stop();
 				if (old.on && this.tails.length < 32) this.tails.push(old);
 			}
 			const steps = (e.chord ?? []).slice(0, 5);
 			this.chordSteps[e.voice] = steps;
-			this.chordVoices[e.voice] = steps.map((st) => {
+			const strum = Math.round((this.song.trackStrum?.[e.voice] ?? 0) / 1e3 * this.rate);
+			const order = steps.map((st, i) => ({
+				st,
+				i
+			})).sort((a, b) => a.st - b.st);
+			this.chordVoices[e.voice] = steps.map((st, i) => {
 				const cv = voiceFor(instrument, this.rate, this.paula);
 				cv.start({
 					instrument,
 					rate: (e.rate ?? 8363) * 2 ** (st / 12),
 					offset: e.offset ?? 0
 				});
-				return cv;
+				if (!strum) return cv;
+				const rank = order.findIndex((o) => o.i === i), below = order.filter((o) => o.st < 0).length;
+				return rank < below ? cv : new Strummed(cv, (rank - below + 1) * strum);
 			});
 		}
 		const v = this.voices[e.voice];
@@ -5661,6 +5801,44 @@ var Renderer = class {
 		const k = chord.length ? 1 / Math.sqrt(1 + chord.length) : 1;
 		v.set(s.lastRate, s.lastVol * k, s.lastPan);
 		chord.forEach((cv, i) => cv.set(s.lastRate * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol * k, s.lastPan));
+	}
+};
+/** A chord's note that starts `wait` frames late (a strum): silent until then, the same voice after. */
+var Strummed = class {
+	constructor(inner, wait) {
+		_defineProperty(this, "inner", void 0);
+		_defineProperty(this, "wait", void 0);
+		_defineProperty(
+			this,
+			/** let go before it was heard: it never will be */
+			"dead",
+			false
+		);
+		this.inner = inner;
+		this.wait = wait;
+	}
+	get on() {
+		return !this.dead && (this.wait > 0 || this.inner.on);
+	}
+	get rings() {
+		return this.inner.rings;
+	}
+	start(n) {
+		this.inner.start(n);
+	}
+	set(rate, volume, pan) {
+		this.inner.set(rate, volume, pan);
+	}
+	stop() {
+		if (this.wait > 0) this.dead = true;
+		this.inner.stop();
+	}
+	render(left, right, from, to) {
+		if (this.dead) return;
+		if (this.wait >= to - from) return void (this.wait -= to - from);
+		const start = from + this.wait;
+		this.wait = 0;
+		this.inner.render(left, right, start, to);
 	}
 };
 // src/export.ts
@@ -6858,11 +7036,11 @@ function registerCommands(ib, engine, st) {
 			"med open [file]            a .med / .mod of the vault (no file: choose one)",
 			"med ls                     the songs in the vault",
 			"med demo                   a little song of ours, to try it right away",
-			"med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
+			"med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
 			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
 			"med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
-			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
+			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
 			"med play [song|block] [position] [line]",
 			"med stop",
 			"med pos <position> [line]  move the cursor (and where play starts)",
@@ -6875,7 +7053,8 @@ function registerCommands(ib, engine, st) {
 			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
 			"med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
-			"med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
+			"med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
+			"med swing <0–100>          every other line longer (0 straight, 100 triplets)",
 			"med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
 			"med undo · med redo",
 			...SAMPLE_USAGE,
@@ -6948,6 +7127,10 @@ function registerCommands(ib, engine, st) {
 			"echo",
 			"normal",
 			"cross",
+			"swing",
+			"strum",
+			"invert",
+			"--empty",
 			"block",
 			"seq",
 			"tracks",
@@ -7101,9 +7284,8 @@ function registerCommands(ib, engine, st) {
 					case "new": {
 						const n = rest[0] ? parseInt(rest[0], 10) : 8;
 						if (!(n >= 1 && n <= 16)) return ctx.err(`med new [tracks 1–16]\n`), 1;
-						const song = newSong(n);
-						song.instruments = readSong(demoMod()).instruments;
-						song.title = "untitled";
+						const song = flags.empty ? newSong(n) : templateSong(n);
+						if (flags.empty) song.instruments = readSong(demoMod()).instruments, song.title = "untitled";
 						await adopt(ctx, song, "untitled.bmed");
 						ib.apps.open("breakermed");
 						return 0;
@@ -7112,12 +7294,15 @@ function registerCommands(ib, engine, st) {
 						const s = need();
 						const tr = parseInt(rest[0] ?? "", 10) - 1;
 						const [, what, ...value] = rest;
-						if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
+						if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100> | strum <0–200 ms>\n`), 1;
 						const v = value.join(" ");
 						if (what === "name") st.editor.setTrack(tr, { name: v });
 						else if (what === "vol" && /^\d+$/.test(v)) st.editor.setTrack(tr, { volume: +v });
 						else if (what === "pan" && /^-?\d+$/.test(v)) st.editor.setTrack(tr, { pan: Math.max(-100, Math.min(100, +v)) / 100 });
-						else return ctx.err(`med track <n> name <text> | vol <0–64> | pan <-100–100>\n`), 1;
+						else if (what === "strum" && /^\d+$/.test(v) && +v <= 200) {
+							st.editor.setTrack(tr, { strum: +v });
+							ctx.out(+v ? `${trackName(s, tr)}: its chords strummed, ${v} ms a note\n` : `${trackName(s, tr)}: its chords all at once\n`);
+						} else return ctx.err(`med track <n> name <text> | vol <0–64> | pan <-100–100> | strum <0–200 ms>\n`), 1;
 						return 0;
 					}
 					case "demo":
@@ -7233,6 +7418,20 @@ function registerCommands(ib, engine, st) {
 							ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (+${notes.join(" +")})\n`);
 							return 0;
 						}
+						if (op === "invert") {
+							const n = parseInt(args[0] ?? "", 16), k = parseInt(args[1] ?? "1", 10);
+							const d = chordsOf(s)[n - 1];
+							if (!d || !(k >= 1 && k <= 3)) return ctx.err("med chords invert <1–F> [1|2|3] (once: the third in the bass, twice: the fifth…)\n"), 1;
+							const notes = invertChord(d.notes, k);
+							if (!notes.length || notes.some((x) => x < -24 || x > 24)) return ctx.err("med chords invert: that chord can't turn over\n"), 1;
+							const name = `${d.name.replace(/\/\d$/, "")}/${k}`.slice(0, 8);
+							st.editor.chords(n, {
+								name,
+								notes
+							});
+							ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (${notes.map((x) => x > 0 ? `+${x}` : x).join(" ")})\n`);
+							return 0;
+						}
 						if (op === "reset") {
 							st.editor.chords(0, null);
 							ctx.out("the chord table: back to the default\n");
@@ -7322,6 +7521,16 @@ function registerCommands(ib, engine, st) {
 						st.editor.dirty = true;
 						return 0;
 					}
+					case "swing": {
+						const s = need();
+						const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
+						if (!(n >= 0 && n <= 100)) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), rest[0] ? 1 : 0;
+						if (n) s.swing = n;
+						else delete s.swing;
+						st.editor.dirty = true;
+						ctx.out(n ? `swing ${n}: every other line ${Math.round(swingFactor(n, 0) / swingFactor(n, 1) * 100) / 100}× the next\n` : "swing off: straight\n");
+						return 0;
+					}
 					case "undo":
 					case "redo": {
 						need();
@@ -7342,7 +7551,7 @@ function registerCommands(ib, engine, st) {
 							`tempo       ${s.tempoMode.toUpperCase()} ${s.tempo} · speed ${s.speed} · lines a beat ${s.lpb}`,
 							`transpose   ${s.transpose} · master volume ${s.masterVolume}`,
 							`slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
-							`echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}`,
+							`echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}${s.swing ? ` · swing ${s.swing}` : ""}`,
 							`length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
 							`instruments`,
 							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)

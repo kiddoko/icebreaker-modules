@@ -10,7 +10,7 @@
  * Everything a .med / .mod can't hold (8–16 tracks, names, our synths' and kits' settings,
  * chords later) lives here; .med and .mod stay for sharing with other trackers.
  */
-import { cleanEcho, DEFAULT_CHORDS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
+import { cleanEcho, DEFAULT_CHORDS, MAX_STRUM_MS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
 import { sanitizeKit, type DrumKit } from "../dsp/drums";
@@ -122,11 +122,12 @@ export function writeBmed(song: Song): SongFile[] {
     masterVolume: song.masterVolume,
     restart: song.restart,
     flags: song.flags,
-    tracks: Array.from({ length: song.tracks }, (_, t) => ({ name: song.trackNames[t] ?? "", volume: song.trackVolume[t] ?? 64, pan: song.trackPan[t] ?? 0 })),
+    tracks: Array.from({ length: song.tracks }, (_, t) => ({ name: song.trackNames[t] ?? "", volume: song.trackVolume[t] ?? 64, pan: song.trackPan[t] ?? 0, ...(song.trackStrum?.[t] ? { strum: song.trackStrum[t] } : {}) })),
     sequence: song.sequence,
     ...(song.chords ? { chords: song.chords } : {}),
     ...(song.chordColumn ? { chordColumn: true } : {}),
     ...(song.echo ? { echo: song.echo } : {}),
+    ...(song.swing ? { swing: song.swing } : {}),
     instruments,
     blocks,
   };
@@ -230,6 +231,10 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
   if (j.chordColumn === true) song.chordColumn = true;
   const echo = cleanEcho(j.echo);
   if (echo) song.echo = echo;
+  const swing = num(j.swing, 0, 0, 100);
+  if (swing) song.swing = swing;
+  const strum = Array.from({ length: tracks }, (_, t) => num(j.tracks?.[t]?.strum, 0, 0, MAX_STRUM_MS));
+  if (strum.some((x) => x)) song.trackStrum = strum;
   if (Array.isArray(j.chords)) {
     // the song's own chord table: each line checked, a wrong one → the default's
     song.chords = DEFAULT_CHORDS.map((d, i) => {

@@ -59,6 +59,35 @@ export interface Song {
   chordColumn?: boolean;
   /** OctaMED's echo on the whole mix (none: off) */
   echo?: Echo;
+  /** swing 0–100: every other line longer, the next shorter (100 = a triplet feel, 2:1); none = straight */
+  swing?: number;
+  /** each track's chord strum, in ms between the chord's notes (none or 0: all at once) */
+  trackStrum?: number[];
+}
+
+/** the longest strum between two notes of a chord, in ms */
+export const MAX_STRUM_MS = 200;
+
+/** how long a line lasts with swing, as a factor (even lines longer, odd lines shorter; a pair stays the same) */
+export const swingFactor = (swing: number | undefined, line: number): number => {
+  const s = Math.max(0, Math.min(100, swing ?? 0)) / 300;
+  return line % 2 === 0 ? 1 + s : 1 - s;
+};
+
+/**
+ * A chord turned over `k` times (1, 2, 3): its lowest note goes up an octave each time,
+ * then the whole is moved so the written note is still one of them. maj (+4 +7) once:
+ * -8 -5 (E G under the C: the third in the bass); twice: -5 +4 (G under, E over).
+ */
+export function invertChord(notes: number[], k: number): number[] {
+  // the written note is the one marked `root`; it moves with the others
+  let all = [{ v: 0, root: true }, ...notes.map((v) => ({ v, root: false }))].sort((a, b) => a.v - b.v);
+  for (let i = 0; i < k; i++) {
+    const [low, ...rest] = all;
+    all = [...rest, { ...low, v: low.v + 12 }];
+  }
+  const root = all.find((x) => x.root)!.v;
+  return all.filter((x) => !x.root).map((x) => x.v - root);
 }
 
 /**
