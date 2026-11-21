@@ -3,6 +3,10 @@ import { Player } from "../src/replayer";
 import { periodOf } from "../src/song";
 import { chipSong, templateSong } from "../src/template";
 import { parseNote } from "../src/edit";
+import doc from "../SOUND_DESIGN.md?raw";
+import { PACK } from "../src/pack";
+import { GUIDE, EFFECTS } from "../src/guide";
+import { START } from "../src/start";
 
 /** the period the replayer gives a note written in the first cell of track 1 */
 function periodPlayed(s: ReturnType<typeof templateSong>, note: string, inst: number) {
@@ -22,5 +26,18 @@ describe("0.11.0: notes play in the octave they're written", () => {
     const s = chipSong();
     s.flags.hardwareMix = true;
     expect(periodPlayed(s, "E-5", 1)).toBeCloseTo(3546895 / periodOf(4 * 12 + 4), 0);
+  });
+});
+
+
+describe("0.11.0: the sound pack, the guide, START", () => {
+  it("SOUND_DESIGN.md lists exactly the pack's sounds", () => {
+    const inDoc = [...doc.matchAll(/^\| `([^`]+\.wav)`/gm)].map((m) => m[1]);
+    expect(inDoc).toEqual(PACK.map((p) => p.file));
+  });
+  it("the guide has the effects, START its six choices with a med command each", () => {
+    expect(GUIDE.some((p) => p.rows === EFFECTS)).toBe(true);
+    expect(START.map((s) => s.key)).toEqual(["N", "O", "D", "?", "C", "S"]);
+    expect(START.every((s) => s.cmd.startsWith("med "))).toBe(true);
   });
 });

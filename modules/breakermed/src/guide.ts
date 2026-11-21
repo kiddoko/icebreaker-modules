@@ -83,6 +83,7 @@ export const GUIDE: GuidePart[] = [
       ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n"],
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
+      ["med pack", "the starter sounds, recorded by people: which are there (med pack load <name>)"],
     ],
   },
   {

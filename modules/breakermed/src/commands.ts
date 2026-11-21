@@ -19,6 +19,7 @@ import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex,
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
+import { findPack, PACK, PACK_DIR } from "./pack";
 import { SCREENS, type Screen } from "./screens";
 
 
@@ -98,6 +99,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
   };
 
+  /** the pack's sounds that are in the vault (their files, under PACK_DIR) */
+  const packHave = async () => {
+    const out = new Set<string>();
+    for (const dir of new Set(PACK.map((p) => p.file.split("/")[0])))
+      for (const e of await ib.vault.list(`${PACK_DIR}/${dir}`).catch(() => [])) if (!e.isDir) out.add(`${dir}/${e.name}`);
+    return out;
+  };
+
   const need = (): Song => {
     if (!st.song) throw new Error("no song loaded (med open <file>)");
     return st.song;
@@ -130,6 +139,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
       "med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
       "med sampler [file]         load a sound into a free instrument (no file: choose one)",
+      "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
       "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
       "med block new [lines] · med block copy · med block lines <n>",
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
@@ -459,6 +469,24 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (rest[0] === "insert") st.editor!.insertLine(s.sequence[st.seq], st.line, tracks);
             else if (rest[0] === "delete") st.editor!.deleteLine(s.sequence[st.seq], st.line, tracks);
             else return ctx.err("med line insert|delete [--all]\n"), 1;
+            return 0;
+          }
+          case "pack": {
+            // the starter pack: which sounds a musician has made (in the vault), which are still placeholders
+            if (rest[0] === "load") {
+              const p = findPack(rest[1] ?? "");
+              if (!p) return ctx.err(`med pack load <name>: ${PACK.map((x) => x.file.split("/").pop()!.replace(/\.wav$/, "")).join(" · ")}\n`), 1;
+              if (!(await packHave()).has(p.file)) return ctx.err(`${p.file}: a placeholder — nobody has recorded it yet (SOUND_DESIGN.md)\n`), 1;
+              return ib.shell.run(`med sampler ${PACK_DIR}/${p.file}`);
+            }
+            let have = 0;
+            const found = await packHave();
+            for (const p of PACK) {
+              const there = found.has(p.file);
+              if (there) have++;
+              ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
+            }
+            ctx.out(`${have}/${PACK.length} in ${PACK_DIR}/ · the others are placeholders: sounds made by people, see the module's SOUND_DESIGN.md\n`);
             return 0;
           }
           case "sampler": {

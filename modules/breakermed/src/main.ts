@@ -57,6 +57,7 @@ export function deactivate(): void {
 }
 
 const FR: Record<string, string> = {
+  "the starter sounds, recorded by people: which are there (med pack load <name>)": "les sons de départ, enregistrés par des gens : lesquels sont là (med pack load <nom>)",
   "START": "COMMENCER",
   "new song": "nouveau morceau",
   "open…": "ouvrir…",
