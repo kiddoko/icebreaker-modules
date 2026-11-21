@@ -285,7 +285,7 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
   };
 
   /** what the last export did, shown under the button */
-  let last: { text: string; kind: "busy" | "ok" | "error" } | null = null;
+  let last: { text: string; kind: "busy" | "ok" | "error"; line: string } | null = null;
   const doExport = () => {
     const x = st.exp;
     if (last?.kind === "busy") return;
@@ -294,11 +294,11 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
       askEncoders();
     }
     const line = exportLine(x, q);
-    last = { text: t("exporting… (the LOG shows each file)"), kind: "busy" };
+    last = { text: t("exporting… (the LOG shows each file)"), kind: "busy", line };
     void ib.shell
       .run(line)
-      .then((code) => (last = code === 0 ? { text: `✓ ${t("exported")}: ${line.replace(/^med export /, "")}`, kind: "ok" } : { text: t("✗ the export failed: the LOG says why"), kind: "error" }))
-      .catch((e) => (last = { text: `✗ ${String(e?.message ?? e)}`, kind: "error" }))
+      .then((code) => (last = code === 0 ? { text: `✓ ${t("exported")}: ${line.replace(/^med export /, "")}`, kind: "ok", line } : { text: t("✗ the export failed: the LOG says why"), kind: "error", line }))
+      .catch((e) => (last = { text: `✗ ${String(e?.message ?? e)}`, kind: "error", line }))
       .finally(() => ib.ui.redraw());
   };
 
@@ -337,6 +337,8 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     const on = st.expRow === rows.length;
     ui.button(bx, y, ` ▶ ${t("EXPORT")} `, doExport, { cmd: exportLine(x, q), selected: on && focused, tip: exportLine(x, q) });
     y += 2;
+    // what the last export did, while the choices are still those (a new choice: a new export to come)
+    if (last && last.kind !== "busy" && last.line !== exportLine(x, q)) last = null;
     if (last && y < inner.y + inner.h) ui.text(inner.x + 1, y++, truncate(last.text, inner.w - 2), { fg: last.kind === "ok" ? c.success : last.kind === "error" ? c.error : c.accent });
     if (y < inner.y + inner.h) ui.text(inner.x + 1, y, truncate(exportLine(x, q), inner.w - 2), { fg: c.faint });
   };
