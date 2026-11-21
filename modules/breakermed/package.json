@@ -1,0 +1,17 @@
+{
+  "name": "breakermed",
+  "private": true,
+  "version": "0.10.0",
+  "description": "breakerMED, a tracker module for ICEBREAKER: its sources, tests and build (main.js is what ICEBREAKER loads)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit -p . && vitest run",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
