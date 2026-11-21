@@ -58,7 +58,7 @@ export function medToMod(song: Song, cmd: number, v: number): [number, number] |
 export function writeMod(original: Song): Written {
   const warnings: string[] = [];
   const { song, baked, drums, lost } = withSynthsBaked(original);
-  if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
+  if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
   const w = new Writer();
@@ -153,7 +153,7 @@ export function writeMod(original: Song): Written {
 export function writeMed(original: Song): Written {
   const warnings: string[] = [];
   const { song, baked, drums, lost } = withSynthsBaked(original);
-  if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
+  if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
   const w = new Writer();

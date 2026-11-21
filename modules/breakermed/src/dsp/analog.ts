@@ -9,6 +9,7 @@
  * vibrato and arpeggios work the same: C-3 is middle C (261.63 Hz).
  */
 import type { NoteStart, Voice } from "./voice";
+import { findIn, getIn, nudgeIn, sanitizeWith, setIn, showIn, type Param } from "./params";
 
 export type Wave = "saw" | "square" | "triangle" | "sine" | "noise";
 export type FilterType = "lp" | "hp" | "bp";
@@ -103,7 +104,7 @@ function osc(wave: Wave, phase: number, dt: number, pw: number, noise: () => num
 }
 
 /** an envelope's level after `t` seconds of the note (`releasedAt`: when the key went up, its level then) */
-function adsr(e: Adsr, t: number, released: { at: number; from: number } | null): number {
+export function adsr(e: Adsr, t: number, released: { at: number; from: number } | null): number {
   if (released) {
     const r = Math.max(0.001, e.r);
     return Math.max(0, released.from * (1 - (t - released.at) / r));
@@ -211,7 +212,7 @@ export class AnalogVoice implements Voice {
       if (p.filter.slope === 24) x = this.svf(this.s2, x, g, k, p.filter.type);
       const amp = adsr(p.amp, this.t, this.released);
       this.t += dtSec;
-      if (this.released && amp <= 0) {
+      if ((this.released && amp <= 0) || (!this.released && p.amp.s <= 0 && this.t > p.amp.a + p.amp.d)) {
         this.on = false;
         return;
       }
@@ -232,25 +233,12 @@ export class AnalogVoice implements Voice {
   }
 }
 
-// ── the settings, one by one (the commands, the INSTRUMENT screen and .bmed use this list) ──
+// ── the settings, one by one (params.ts: the commands, the INSTRUMENT screen and .bmed use this list) ──
 
-export interface AnalogParam {
-  /** where it lives: "filter.cutoff" */
-  key: string;
-  /** what the screen shows */
-  label: string;
-  /** a list of choices, or a range */
-  choices?: readonly string[];
-  min?: number;
-  max?: number;
-  /** a step for ←→ (a × step when `log`: frequencies and times) */
-  step?: number;
-  log?: boolean;
-  unit?: string;
-}
+export type AnalogParam = Param;
 
 const WAVES = ["saw", "square", "triangle", "sine", "noise"] as const;
-export const ANALOG_PARAMS: readonly AnalogParam[] = [
+export const ANALOG_PARAMS: readonly Param[] = [
   { key: "osc1.wave", label: "osc 1 wave", choices: WAVES },
   { key: "osc1.pw", label: "osc 1 width", min: 0.05, max: 0.95, step: 0.05 },
   { key: "osc1.level", label: "osc 1 level", min: 0, max: 1, step: 0.05 },
@@ -261,7 +249,7 @@ export const ANALOG_PARAMS: readonly AnalogParam[] = [
   { key: "osc2.detune", label: "osc 2 detune", min: -50, max: 50, step: 1, unit: "ct" },
   { key: "sub", label: "sub (octave down)", min: 0, max: 1, step: 0.05 },
   { key: "filter.type", label: "filter", choices: ["lp", "hp", "bp"] },
-  { key: "filter.slope", label: "filter slope", choices: ["12", "24"], unit: "dB" },
+  { key: "filter.slope", label: "filter slope", choices: ["12", "24"], numeric: true, unit: "dB" },
   { key: "filter.cutoff", label: "cutoff", min: 20, max: 20000, step: 1.12, log: true, unit: "Hz" },
   { key: "filter.reso", label: "resonance", min: 0, max: 1, step: 0.05 },
   { key: "filter.env", label: "filter env amount", min: -8, max: 8, step: 0.25, unit: "oct" },
@@ -282,77 +270,10 @@ export const ANALOG_PARAMS: readonly AnalogParam[] = [
   { key: "glide", label: "glide", min: 0, max: 2, step: 0.01, unit: "s" },
 ];
 
-/** a setting by its key, or its label's first word ("cutoff", "reso"…) */
-export function findParam(name: string): AnalogParam | undefined {
-  const n = name.toLowerCase();
-  return ANALOG_PARAMS.find((x) => x.key === n) ?? ANALOG_PARAMS.find((x) => x.key.endsWith("." + n) || x.label === n) ?? ANALOG_PARAMS.find((x) => x.key.split(".").pop()!.startsWith(n) && n.length >= 3);
-}
-
-export function getParam(p: AnalogParams, key: string): string | number {
-  const [a, b] = key.split(".");
-  const v = b ? (p as unknown as Record<string, Record<string, unknown>>)[a][b] : (p as unknown as Record<string, unknown>)[a];
-  return key === "filter.slope" ? String(v) : (v as string | number);
-}
-
-/** A setting from text ("saw", "800", "1.5k") — checked and clamped. Throws on a bad value. */
-export function setParam(p: AnalogParams, key: string, text: string): void {
-  const def = ANALOG_PARAMS.find((x) => x.key === key);
-  if (!def) throw new Error(`no setting "${key}"`);
-  let v: string | number;
-  if (def.choices) {
-    if (!def.choices.includes(text)) throw new Error(`${def.label}: ${def.choices.join(" | ")}`);
-    v = key === "filter.slope" ? +text : text;
-  } else {
-    const m = /^(-?[\d.]+)(k?)$/i.exec(text.trim());
-    const x = m ? parseFloat(m[1]) * (m[2] ? 1000 : 1) : NaN;
-    if (!Number.isFinite(x)) throw new Error(`${def.label}: a number, ${def.min}…${def.max}`);
-    v = Math.max(def.min!, Math.min(def.max!, x));
-  }
-  const [a, b] = key.split(".");
-  if (b) (p as unknown as Record<string, Record<string, unknown>>)[a][b] = v;
-  else (p as unknown as Record<string, unknown>)[a] = v;
-}
-
-/** One step up or down (←→ on the screen): the next choice, or the next value. */
-export function nudgeParam(p: AnalogParams, key: string, dir: 1 | -1, big = false): void {
-  const def = ANALOG_PARAMS.find((x) => x.key === key)!;
-  const cur = getParam(p, key);
-  if (def.choices) {
-    const i = def.choices.indexOf(String(cur));
-    setParam(p, key, def.choices[(i + dir + def.choices.length) % def.choices.length]);
-    return;
-  }
-  const x = Number(cur);
-  const times = big ? 4 : 1;
-  let next: number;
-  if (def.log) next = (x <= 0 ? (dir > 0 ? 0.001 : 0) : x * def.step! ** (dir * times));
-  else next = Math.round((x + dir * def.step! * times) / def.step!) * def.step!;
-  if (def.log && next < 0.001 && dir < 0) next = def.min!;
-  setParam(p, key, String(+next.toPrecision(4)));
-}
-
-/** a setting as the screen shows it */
-export function showParam(p: AnalogParams, def: AnalogParam): string {
-  const v = getParam(p, def.key);
-  if (typeof v === "string") return v + (def.unit ? ` ${def.unit}` : "");
-  const text = def.unit === "Hz" && v >= 1000 ? `${+(v / 1000).toFixed(2)}k` : def.unit === "s" && v < 1 ? `${Math.round(v * 1000)} ms` : String(+v.toFixed(2));
-  return text + (def.unit && !(def.unit === "s" && v < 1) ? ` ${def.unit}` : "");
-}
-
+export const findParam = (name: string) => findIn(ANALOG_PARAMS, name);
+export const getParam = (p: AnalogParams, key: string) => getIn(p, key);
+export const setParam = (p: AnalogParams, key: string, text: string) => setIn(ANALOG_PARAMS, p, key, text);
+export const nudgeParam = (p: AnalogParams, key: string, dir: 1 | -1, big = false) => nudgeIn(ANALOG_PARAMS, p, key, dir, big);
+export const showParam = (p: AnalogParams, def: Param) => showIn(p, def);
 /** Settings read from a file: every value checked, anything missing or wrong → the default. */
-export function sanitizeAnalog(j: unknown): AnalogParams {
-  const p = defaultAnalog();
-  if (!j || typeof j !== "object") return p;
-  for (const def of ANALOG_PARAMS) {
-    const [a, b] = def.key.split(".");
-    const o = j as Record<string, unknown>;
-    const raw = b ? (o[a] as Record<string, unknown> | undefined)?.[b] : o[a];
-    if (raw === undefined || raw === null) continue;
-    try {
-      setParam(p, def.key, String(raw));
-    } catch {
-      /* keep the default */
-    }
-  }
-  return p;
-}
+export const sanitizeAnalog = (j: unknown) => sanitizeWith(ANALOG_PARAMS, defaultAnalog(), j);

@@ -5,8 +5,8 @@ line a step, each cell a note, an instrument and hex commands; a play sequence m
 It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's colours, with the
 keyboard, the mouse and a gamepad.
 
-> Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog synth and
-> the drum machine are here (8 tracks by default, 16 at most, named); next come the FM synth, chords.
+> Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog and FM
+> synths and the drum machine are here (8 tracks by default, 16 at most, named); next come chords.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -124,6 +124,19 @@ med synth <n|.> bake             the synth as a sample of its C-3 (then the samp
 
 `.bmed` keeps the settings. `.mod` and `.med` hold samples only: a synth is written as a sample of
 its C-3 (`med save` says so).
+
+## The FM synth
+
+The basic kind of FM, the 80s' electric pianos, bells and basses: two sine waves, the
+**modulator** bending the **carrier**'s phase. **ratio** sets the modulator against the note
+(whole ratios sound in tune, others clang), **index** how far it bends (the brightness), its own
+envelope (mod attack, decay, sustain, release) moves that over the note, **feedback** makes it
+bend itself (from pure to noisy); an amp envelope and a vibrato. Presets: epiano, bell, bass,
+brass, organ, pluck, metal. The same screen and the same commands as the analog synth:
+
+```
+med fm <n|.> new [preset] · preset <name> · set <setting> <value> · show · settings · bake
+```
 
 ## The drum machine
 

@@ -7,6 +7,7 @@
 import type { Instrument } from "../song";
 import { AnalogVoice } from "./analog";
 import { DrumVoice } from "./drums";
+import { FmVoice } from "./fm";
 
 export interface NoteStart {
   instrument: Instrument;
@@ -102,6 +103,7 @@ export class SampleVoice implements Voice {
 /** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
 export function voiceFor(instrument: Instrument, outRate: number, paula: boolean): Voice {
   if (instrument.kind === "analog") return new AnalogVoice(outRate);
+  if (instrument.kind === "fm") return new FmVoice(outRate);
   if (instrument.kind === "drums") return new DrumVoice(outRate);
   const v = new SampleVoice(outRate);
   v.paula = paula;

@@ -11,7 +11,7 @@
 import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
 import type { Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
-import { AnalogVoice, C3_RATE } from "./dsp/analog";
+import { C3_RATE } from "./dsp/analog";
 import { DrumVoice, drumOf } from "./dsp/drums";
 
 export interface LineMark {
@@ -172,7 +172,7 @@ export class Renderer {
       } else {
         // what was playing on the track rings on (a synth's release, a drum's tail), then the new note
         if (old?.on && old.rings) {
-          if (old instanceof AnalogVoice) old.stop();
+          if (!(old instanceof DrumVoice)) old.stop(); // a synth releases; a drum rings out as it is
           if (old instanceof DrumVoice && instrument.kind === "drums" && old.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) old.kill();
           if (old.on && this.tails.length < 32) this.tails.push(old);
         }

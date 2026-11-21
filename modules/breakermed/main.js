@@ -13,7 +13,7 @@ var NOTE_NAMES = [
 	"B-"
 ];
 /** our own instruments: computed, no sound data */
-var computed = (i) => i?.kind === "analog" || i?.kind === "drums";
+var computed = (i) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums";
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
 var playable = (i) => !!i && (computed(i) || i.kind !== "empty" && i.data.length > 0);
 function emptyCell(pages = 1) {
@@ -480,6 +480,7 @@ var Editor = class {
 			const copy = { ...old };
 			if (old.synth) copy.synth = structuredClone(old.synth);
 			if (old.drums) copy.drums = structuredClone(old.drums);
+			if (old.fm) copy.fm = structuredClone(old.fm);
 			fn(copy);
 			if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
 			if (copy.loopLength <= 2) copy.loopStart = 0, copy.loopLength = 0;
@@ -600,6 +601,72 @@ var PIANO = {
 /** The semitone above the octave's C a key plays (0–31), or null for a key that isn't on the piano. */
 function pianoKey(code) {
 	return code in PIANO ? PIANO[code] : null;
+}
+// src/dsp/params.ts
+/** a setting by its key, or its label, or the last part of its key ("cutoff", "reso"…) */
+function findIn(table, name) {
+	const n = name.toLowerCase();
+	return table.find((x) => x.key === n) ?? table.find((x) => x.key.endsWith("." + n) || x.label === n) ?? table.find((x) => x.key.split(".").pop().startsWith(n) && n.length >= 3);
+}
+function getIn(p, key) {
+	const [a, b] = key.split(".");
+	const v = b ? p[a][b] : p[a];
+	return typeof v === "number" || typeof v === "string" ? v : String(v);
+}
+/** A setting from text ("saw", "800", "1.5k") — checked and clamped. Throws on a bad value. */
+function setIn(table, p, key, text) {
+	const def = table.find((x) => x.key === key);
+	if (!def) throw new Error(`no setting "${key}"`);
+	let v;
+	if (def.choices) {
+		if (!def.choices.includes(text)) throw new Error(`${def.label}: ${def.choices.join(" | ")}`);
+		v = def.numeric ? +text : text;
+	} else {
+		const m = /^(-?[\d.]+)(k?)$/i.exec(text.trim());
+		const x = m ? parseFloat(m[1]) * (m[2] ? 1e3 : 1) : NaN;
+		if (!Number.isFinite(x)) throw new Error(`${def.label}: a number, ${def.min}…${def.max}`);
+		v = Math.max(def.min, Math.min(def.max, x));
+	}
+	const [a, b] = key.split(".");
+	if (b) p[a][b] = v;
+	else p[a] = v;
+}
+/** One step up or down (←→ on the screen): the next choice, or the next value. */
+function nudgeIn(table, p, key, dir, big = false) {
+	const def = table.find((x) => x.key === key);
+	const cur = getIn(p, key);
+	if (def.choices) {
+		const i = def.choices.indexOf(String(cur));
+		setIn(table, p, key, def.choices[(i + dir + def.choices.length) % def.choices.length]);
+		return;
+	}
+	const x = Number(cur);
+	const times = big ? 4 : 1;
+	let next;
+	if (def.log) next = x <= 0 ? dir > 0 ? .001 : 0 : x * def.step ** (dir * times);
+	else next = Math.round((x + dir * def.step * times) / def.step) * def.step;
+	if (def.log && next < .001 && dir < 0) next = def.min;
+	setIn(table, p, key, String(+next.toPrecision(4)));
+}
+/** a setting as the screen shows it */
+function showIn(p, def) {
+	const v = getIn(p, def.key);
+	if (typeof v === "string") return v + (def.unit ? ` ${def.unit}` : "");
+	return (def.unit === "Hz" && v >= 1e3 ? `${+(v / 1e3).toFixed(2)}k` : def.unit === "s" && v < 1 ? `${Math.round(v * 1e3)} ms` : String(+v.toFixed(2))) + (def.unit && !(def.unit === "s" && v < 1) ? ` ${def.unit}` : "");
+}
+/** Settings read from a file onto `fresh` (the defaults): every value checked, anything wrong kept as it was. */
+function sanitizeWith(table, fresh, j) {
+	if (!j || typeof j !== "object") return fresh;
+	for (const def of table) {
+		const [a, b] = def.key.split(".");
+		const o = j;
+		const raw = b ? o[a]?.[b] : o[a];
+		if (raw === void 0 || raw === null) continue;
+		try {
+			setIn(table, fresh, def.key, String(raw));
+		} catch {}
+	}
+	return fresh;
 }
 // src/dsp/analog.ts
 /** what a rate means for a synth: the tracker's C-3 rate is middle C */
@@ -1017,7 +1084,7 @@ var AnalogVoice = class {
 			if (p.filter.slope === 24) x = this.svf(this.s2, x, g, k, p.filter.type);
 			const amp = adsr(p.amp, this.t, this.released);
 			this.t += dtSec;
-			if (this.released && amp <= 0) {
+			if (this.released && amp <= 0 || !this.released && p.amp.s <= 0 && this.t > p.amp.a + p.amp.d) {
 				this.on = false;
 				return;
 			}
@@ -1117,6 +1184,7 @@ var ANALOG_PARAMS = [
 		key: "filter.slope",
 		label: "filter slope",
 		choices: ["12", "24"],
+		numeric: true,
 		unit: "dB"
 	},
 	{
@@ -1270,72 +1338,400 @@ var ANALOG_PARAMS = [
 		unit: "s"
 	}
 ];
-/** a setting by its key, or its label's first word ("cutoff", "reso"…) */
-function findParam(name) {
-	const n = name.toLowerCase();
-	return ANALOG_PARAMS.find((x) => x.key === n) ?? ANALOG_PARAMS.find((x) => x.key.endsWith("." + n) || x.label === n) ?? ANALOG_PARAMS.find((x) => x.key.split(".").pop().startsWith(n) && n.length >= 3);
-}
-function getParam(p, key) {
-	const [a, b] = key.split(".");
-	const v = b ? p[a][b] : p[a];
-	return key === "filter.slope" ? String(v) : v;
-}
-/** A setting from text ("saw", "800", "1.5k") — checked and clamped. Throws on a bad value. */
-function setParam(p, key, text) {
-	const def = ANALOG_PARAMS.find((x) => x.key === key);
-	if (!def) throw new Error(`no setting "${key}"`);
-	let v;
-	if (def.choices) {
-		if (!def.choices.includes(text)) throw new Error(`${def.label}: ${def.choices.join(" | ")}`);
-		v = key === "filter.slope" ? +text : text;
-	} else {
-		const m = /^(-?[\d.]+)(k?)$/i.exec(text.trim());
-		const x = m ? parseFloat(m[1]) * (m[2] ? 1e3 : 1) : NaN;
-		if (!Number.isFinite(x)) throw new Error(`${def.label}: a number, ${def.min}…${def.max}`);
-		v = Math.max(def.min, Math.min(def.max, x));
-	}
-	const [a, b] = key.split(".");
-	if (b) p[a][b] = v;
-	else p[a] = v;
-}
-/** One step up or down (←→ on the screen): the next choice, or the next value. */
-function nudgeParam(p, key, dir, big = false) {
-	const def = ANALOG_PARAMS.find((x) => x.key === key);
-	const cur = getParam(p, key);
-	if (def.choices) {
-		const i = def.choices.indexOf(String(cur));
-		setParam(p, key, def.choices[(i + dir + def.choices.length) % def.choices.length]);
-		return;
-	}
-	const x = Number(cur);
-	const times = big ? 4 : 1;
-	let next;
-	if (def.log) next = x <= 0 ? dir > 0 ? .001 : 0 : x * def.step ** (dir * times);
-	else next = Math.round((x + dir * def.step * times) / def.step) * def.step;
-	if (def.log && next < .001 && dir < 0) next = def.min;
-	setParam(p, key, String(+next.toPrecision(4)));
-}
-/** a setting as the screen shows it */
-function showParam(p, def) {
-	const v = getParam(p, def.key);
-	if (typeof v === "string") return v + (def.unit ? ` ${def.unit}` : "");
-	return (def.unit === "Hz" && v >= 1e3 ? `${+(v / 1e3).toFixed(2)}k` : def.unit === "s" && v < 1 ? `${Math.round(v * 1e3)} ms` : String(+v.toFixed(2))) + (def.unit && !(def.unit === "s" && v < 1) ? ` ${def.unit}` : "");
-}
 /** Settings read from a file: every value checked, anything missing or wrong → the default. */
-function sanitizeAnalog(j) {
-	const p = defaultAnalog();
-	if (!j || typeof j !== "object") return p;
-	for (const def of ANALOG_PARAMS) {
-		const [a, b] = def.key.split(".");
-		const o = j;
-		const raw = b ? o[a]?.[b] : o[a];
-		if (raw === void 0 || raw === null) continue;
-		try {
-			setParam(p, def.key, String(raw));
-		} catch {}
-	}
-	return p;
+var sanitizeAnalog = (j) => sanitizeWith(ANALOG_PARAMS, defaultAnalog(), j);
+// src/dsp/fm.ts
+/**
+* breakerMED — the FM synth, the basic kind: two sine waves, one (the
+* modulator) bending the other's phase (the carrier), the way the 80s did
+* electric pianos, bells and slap basses. The modulator runs at `ratio` × the
+* note (whole ratios sound in tune, others clang), `index` says how far it bends
+* (the brightness), its own envelope moves that over the note, and it can feed
+* back on itself (from pure to noisy). Our own code.
+*
+* The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
+*/
+function defaultFm() {
+	return {
+		ratio: 1,
+		detune: 0,
+		index: 2,
+		feedback: 0,
+		menv: {
+			a: .002,
+			d: .6,
+			s: .3,
+			r: .3
+		},
+		amp: {
+			a: .003,
+			d: 1,
+			s: .6,
+			r: .3
+		},
+		lfo: {
+			rate: 5,
+			pitch: 0
+		}
+	};
 }
+/** our own starting points */
+var FM_PRESETS = {
+	epiano: (p) => Object.assign(p, {
+		ratio: 1,
+		index: 1.8,
+		detune: 3,
+		menv: {
+			a: .001,
+			d: .9,
+			s: .15,
+			r: .3
+		},
+		amp: {
+			a: .002,
+			d: 1.8,
+			s: .35,
+			r: .4
+		}
+	}),
+	bell: (p) => Object.assign(p, {
+		ratio: 3.5,
+		index: 3.5,
+		menv: {
+			a: .001,
+			d: 2,
+			s: .1,
+			r: 1.5
+		},
+		amp: {
+			a: .001,
+			d: 3,
+			s: 0,
+			r: 2
+		}
+	}),
+	bass: (p) => Object.assign(p, {
+		ratio: 1,
+		index: 3,
+		feedback: .25,
+		menv: {
+			a: .001,
+			d: .18,
+			s: .15,
+			r: .1
+		},
+		amp: {
+			a: .002,
+			d: .5,
+			s: .7,
+			r: .08
+		}
+	}),
+	brass: (p) => Object.assign(p, {
+		ratio: 1,
+		index: 2.6,
+		menv: {
+			a: .07,
+			d: .3,
+			s: .65,
+			r: .2
+		},
+		amp: {
+			a: .04,
+			d: .2,
+			s: .85,
+			r: .2
+		},
+		lfo: {
+			rate: 5.5,
+			pitch: .08
+		}
+	}),
+	organ: (p) => Object.assign(p, {
+		ratio: 2,
+		index: .9,
+		menv: {
+			a: .005,
+			d: .1,
+			s: 1,
+			r: .05
+		},
+		amp: {
+			a: .008,
+			d: .1,
+			s: 1,
+			r: .06
+		}
+	}),
+	pluck: (p) => Object.assign(p, {
+		ratio: 2,
+		index: 3,
+		menv: {
+			a: .001,
+			d: .12,
+			s: 0,
+			r: .1
+		},
+		amp: {
+			a: .001,
+			d: .6,
+			s: 0,
+			r: .2
+		}
+	}),
+	metal: (p) => Object.assign(p, {
+		ratio: 1.41,
+		index: 5,
+		feedback: .45,
+		menv: {
+			a: .001,
+			d: 1.2,
+			s: .3,
+			r: .8
+		},
+		amp: {
+			a: .001,
+			d: 2,
+			s: .2,
+			r: 1
+		}
+	})
+};
+function fmPreset(name) {
+	const p = defaultFm();
+	FM_PRESETS[name ?? ""]?.(p);
+	return structuredClone(p);
+}
+var FM_PARAMS = [
+	{
+		key: "ratio",
+		label: "ratio",
+		min: .25,
+		max: 16,
+		step: .25
+	},
+	{
+		key: "detune",
+		label: "detune",
+		min: -100,
+		max: 100,
+		step: 1,
+		unit: "ct"
+	},
+	{
+		key: "index",
+		label: "index (bright)",
+		min: 0,
+		max: 12,
+		step: .1
+	},
+	{
+		key: "feedback",
+		label: "feedback",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "menv.a",
+		label: "mod attack",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "menv.d",
+		label: "mod decay",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "menv.s",
+		label: "mod sustain",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "menv.r",
+		label: "mod release",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.a",
+		label: "attack",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.d",
+		label: "decay",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.s",
+		label: "sustain",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "amp.r",
+		label: "release",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "lfo.rate",
+		label: "lfo rate",
+		min: .05,
+		max: 40,
+		step: 1.15,
+		log: true,
+		unit: "Hz"
+	},
+	{
+		key: "lfo.pitch",
+		label: "lfo → pitch",
+		min: 0,
+		max: 12,
+		step: .05,
+		unit: "st"
+	}
+];
+var sanitizeFm = (j) => sanitizeWith(FM_PARAMS, defaultFm(), j);
+var TAU = 2 * Math.PI;
+var FmVoice = class {
+	constructor(sr) {
+		_defineProperty(this, "sr", void 0);
+		_defineProperty(this, "on", false);
+		_defineProperty(this, "rings", true);
+		_defineProperty(this, "p", defaultFm());
+		_defineProperty(this, "hz", C3_HZ);
+		_defineProperty(this, "pc", 0);
+		_defineProperty(this, "pm", 0);
+		_defineProperty(this, "lfoPh", 0);
+		_defineProperty(
+			this,
+			/** the modulator's last two outputs (feedback averages them: steadier) */
+			"m1",
+			0
+		);
+		_defineProperty(this, "m2", 0);
+		_defineProperty(this, "t", 0);
+		_defineProperty(this, "released", null);
+		_defineProperty(this, "gl", 0);
+		_defineProperty(this, "gr", 0);
+		this.sr = sr;
+	}
+	start(n) {
+		this.p = n.instrument.fm ?? defaultFm();
+		this.hz = n.rate / C3_RATE$2 * C3_HZ;
+		this.pc = this.pm = 0;
+		this.m1 = this.m2 = 0;
+		this.t = 0;
+		this.released = null;
+		this.on = true;
+	}
+	set(rate, volume, pan) {
+		this.hz = Math.max(1, rate) / C3_RATE$2 * C3_HZ;
+		const v = Math.max(0, Math.min(1, volume));
+		this.gl = v * Math.min(1, 1 - pan);
+		this.gr = v * Math.min(1, 1 + pan);
+	}
+	stop() {
+		if (!this.on || this.released) return;
+		this.released = {
+			at: this.t,
+			amp: adsr(this.p.amp, this.t, null),
+			mod: adsr(this.p.menv, this.t, null)
+		};
+	}
+	render(left, right, from, to) {
+		if (!this.on) return;
+		const p = this.p, dt = 1 / this.sr;
+		const modRatio = p.ratio * 2 ** (p.detune / 1200);
+		const fb = p.feedback * Math.PI;
+		for (let i = from; i < to; i++) {
+			this.lfoPh = (this.lfoPh + p.lfo.rate * dt) % 1;
+			const hz = p.lfo.pitch ? this.hz * 2 ** (Math.sin(TAU * this.lfoPh) * p.lfo.pitch / 12) : this.hz;
+			const r = this.released;
+			const amp = adsr(p.amp, this.t, r && {
+				at: r.at,
+				from: r.amp
+			});
+			const idx = p.index * adsr(p.menv, this.t, r && {
+				at: r.at,
+				from: r.mod
+			});
+			const m = Math.sin(TAU * this.pm + fb * (this.m1 + this.m2) * .5);
+			this.m2 = this.m1;
+			this.m1 = m;
+			const y = Math.sin(TAU * this.pc + idx * m) * amp;
+			this.pc = (this.pc + hz * dt) % 1;
+			this.pm = (this.pm + hz * modRatio * dt) % 1;
+			this.t += dt;
+			if (r && amp <= 0 || !r && p.amp.s <= 0 && this.t > p.amp.a + p.amp.d) {
+				this.on = false;
+				return;
+			}
+			left[i] += y * .5 * this.gl;
+			right[i] += y * .5 * this.gr;
+		}
+	}
+};
+// src/synths.ts
+/**
+* breakerMED — our synths, described once: the command that drives each, the
+* instrument kind, where its settings live, its list of settings and presets.
+* `med synth` / `med fm` and the INSTRUMENT screen work from this, so a new
+* synth is a voice (dsp/), a list of settings and one entry here.
+*/
+var SYNTHS = [{
+	cmd: "synth",
+	kind: "analog",
+	field: "synth",
+	what: "an analog synth",
+	example: "set cutoff 800",
+	params: ANALOG_PARAMS,
+	presets: Object.keys(ANALOG_PRESETS),
+	preset: analogPreset,
+	sanitize: sanitizeAnalog
+}, {
+	cmd: "fm",
+	kind: "fm",
+	field: "fm",
+	what: "an FM synth",
+	example: "set index 4",
+	params: FM_PARAMS,
+	presets: Object.keys(FM_PRESETS),
+	preset: fmPreset,
+	sanitize: sanitizeFm
+}];
+/** the synth an instrument is (or none) */
+var synthOf = (ins) => SYNTHS.find((s) => s.kind === ins?.kind);
+/** an instrument's synth settings (or undefined) */
+var settingsOf = (ins, sk) => ins[sk.field];
+var putSettings = (ins, sk, v) => ins[sk.field] = v;
 // src/dsp/drums.ts
 var DRUM_NAMES = [
 	"kick",
@@ -1909,23 +2305,41 @@ function makeApp(ib, engine, st) {
 			title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`,
 			focused
 		});
-		if (ins?.kind === "analog" && ins.synth) return drawSynth(ui, inner, focused);
+		const sk = synthOf(ins);
+		if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
 		if (ins?.kind === "drums" && ins.drums) return drawDrums(ui, inner, focused);
 		if (!ins || ins.kind === "empty" || !ins.data.length) {
 			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
-			let x = inner.x + 1;
-			x += ui.button(x, inner.y + 3, t("load…"), () => {}, {
-				cmd: `med sample ${n} load`,
-				tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault")
-			}) + 1;
-			x += ui.button(x, inner.y + 3, t("analog synth"), () => {}, {
-				cmd: `med synth ${n} new`,
-				tip: t("two oscillators, a filter, two envelopes, an LFO")
-			}) + 1;
-			ui.button(x, inner.y + 3, t("drum machine"), () => {}, {
-				cmd: `med drums ${n} new`,
-				tip: t("twelve drums, one a note: C kick, D snare, E hat…")
-			});
+			const choices = [
+				[
+					"load…",
+					`med sample ${n} load`,
+					"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault"
+				],
+				[
+					"analog synth",
+					`med synth ${n} new`,
+					"two oscillators, a filter, two envelopes, an LFO"
+				],
+				[
+					"FM synth",
+					`med fm ${n} new`,
+					"two sine waves, one bending the other: pianos, bells, basses"
+				],
+				[
+					"drum machine",
+					`med drums ${n} new`,
+					"twelve drums, one a note: C kick, D snare, E hat…"
+				]
+			];
+			let x = inner.x + 1, y = inner.y + 3;
+			for (const [label, cmd, tip] of choices) {
+				if (x + t(label).length + 2 > inner.x + inner.w - 1) x = inner.x + 1, y += 2;
+				x += ui.button(x, y, t(label), () => {}, {
+					cmd,
+					tip: t(tip)
+				}) + 1;
+			}
 			return;
 		}
 		const waveH = Math.max(3, Math.min(10, inner.h - 9));
@@ -2067,21 +2481,26 @@ function makeApp(ib, engine, st) {
 	};
 	/** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
 	const nudge = (row, dir, big = false) => {
-		const def = ANALOG_PARAMS[row];
-		if (def) ed()?.instrument(st.inst, def.label, (i) => i.synth && nudgeParam(i.synth, def.key, dir, big));
+		const sk = synthOf(st.song?.instruments[st.inst]);
+		const def = sk?.params[row];
+		if (sk && def) ed()?.instrument(st.inst, def.label, (i) => {
+			const p = settingsOf(i, sk);
+			if (p) nudgeIn(sk.params, p, def.key, dir, big);
+		});
 	};
-	/** The analog synth's settings: a row each (‹ value ›), the presets above. */
-	const drawSynth = (ui, inner, focused) => {
+	/** A synth's settings (analog or FM): a row each (‹ value ›), the presets above. */
+	const drawSynth = (ui, inner, focused, sk) => {
 		const c = ui.c;
 		const n = hex(st.inst + 1);
-		const p = st.song.instruments[st.inst].synth;
+		const p = settingsOf(st.song.instruments[st.inst], sk);
+		const PARAMS = sk.params;
 		let x = inner.x + 1;
 		ui.text(x, inner.y, t("preset"), { fg: c.muted });
 		x += t("preset").length + 1;
-		for (const name of Object.keys(ANALOG_PRESETS)) {
+		for (const name of sk.presets) {
 			if (x + name.length + 2 > inner.x + inner.w - 1) break;
 			x += ui.button(x, inner.y, name, () => {}, {
-				cmd: `med synth ${n} preset ${name}`,
+				cmd: `med ${sk.cmd} ${n} preset ${name}`,
 				quiet: true
 			}) + 1;
 		}
@@ -2089,17 +2508,17 @@ function makeApp(ib, engine, st) {
 		const h = Math.max(1, inner.h - 3);
 		const colW = 36;
 		const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
-		const perCol = Math.ceil(ANALOG_PARAMS.length / cols);
+		const perCol = Math.ceil(PARAMS.length / cols);
 		const scroll = perCol > h ? Math.max(0, Math.min(perCol - h, st.synthRow % perCol - Math.floor(h / 2))) : 0;
-		st.synthRow = Math.max(0, Math.min(ANALOG_PARAMS.length - 1, st.synthRow));
-		ANALOG_PARAMS.forEach((def, i) => {
+		st.synthRow = Math.max(0, Math.min(PARAMS.length - 1, st.synthRow));
+		PARAMS.forEach((def, i) => {
 			const col = Math.floor(i / perCol), row = i % perCol - scroll;
 			if (row < 0 || row >= h) return;
 			const x0 = inner.x + 1 + col * colW, y = top + row;
 			const on = i === st.synthRow;
 			ui.text(x0, y, t(def.label).padEnd(18).slice(0, 18), { fg: on ? c.fg : c.muted });
 			ui.button(x0 + 19, y, "‹", () => (st.synthRow = i, nudge(i, -1)), { quiet: !on });
-			ui.text(x0 + 23, y, showParam(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
+			ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
 			ui.button(x0 + 32, y, "›", () => (st.synthRow = i, nudge(i, 1)), { quiet: !on });
 			ui.hit({
 				x: x0,
@@ -2117,7 +2536,7 @@ function makeApp(ib, engine, st) {
 				h: 1
 			}, void 0, c.highlight);
 		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h"), { fg: c.subtle }, inner.w - 2);
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
 	};
 	/** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
 	const nudgeKit = (drum, col, dir, big = false) => {
@@ -2140,17 +2559,17 @@ function makeApp(ib, engine, st) {
 			cmd: `med drums ${n} kit ${name}`,
 			quiet: true
 		}) + 1;
+		let gy = inner.y;
 		x += 2;
-		if (x + 30 < inner.x + inner.w) {
-			ui.text(x, inner.y, t("grit"), { fg: c.muted });
-			x += t("grit").length + 1;
-			x += ui.button(x, inner.y, "‹", () => nudgeGrit("bits", -1), { quiet: true });
-			x = ui.text(x, inner.y, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
-			x += ui.button(x, inner.y, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
-			x += ui.button(x, inner.y, "‹", () => nudgeGrit("hold", -1), { quiet: true });
-			x = ui.text(x, inner.y, ` ×${kit.hold} `, { fg: kit.hold > 1 ? c.warning : c.fg });
-			ui.button(x, inner.y, "›", () => nudgeGrit("hold", 1), { quiet: true });
-		}
+		if (x + 30 >= inner.x + inner.w) x = inner.x + 1, gy = inner.y + 1;
+		ui.text(x, gy, t("grit"), { fg: c.muted });
+		x += t("grit").length + 1;
+		x += ui.button(x, gy, "‹", () => nudgeGrit("bits", -1), { quiet: true });
+		x = ui.text(x, gy, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
+		x += ui.button(x, gy, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
+		x += ui.button(x, gy, "‹", () => nudgeGrit("hold", -1), { quiet: true });
+		x = ui.text(x, gy, ` ×${kit.hold} `, { fg: kit.hold > 1 ? c.warning : c.fg });
+		ui.button(x, gy, "›", () => nudgeGrit("hold", 1), { quiet: true });
 		const wide = inner.w >= 66;
 		const cellW = wide ? 12 : 7;
 		const x0 = inner.x + 1, valX = x0 + 16;
@@ -2159,9 +2578,11 @@ function makeApp(ib, engine, st) {
 		DRUM_SETTINGS.forEach((s, k) => ui.text(valX + k * cellW + (wide ? 3 : 0), inner.y + 2, t(s.key), { fg: k === st.drumCol ? c.accent : c.subtle }));
 		st.drumRow = Math.max(0, Math.min(11, st.drumRow));
 		st.drumCol = Math.max(0, Math.min(3, st.drumCol));
+		const rows = Math.max(1, inner.h - 4);
+		const scroll = Math.max(0, Math.min(12 - rows, st.drumRow - rows + 1));
 		kit.drums.forEach((d, i) => {
-			const y = inner.y + 3 + i;
-			if (y >= inner.y + inner.h - 1) return;
+			const y = inner.y + 3 + i - scroll;
+			if (y < inner.y + 3 || y >= inner.y + inner.h - 1) return;
 			const on = i === st.drumRow;
 			ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
 			ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
@@ -2394,7 +2815,7 @@ function makeApp(ib, engine, st) {
 					name: ""
 				};
 				const empty = ins.kind === "empty";
-				const tag = ins.kind === "synth" || ins.kind === "analog" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+				const tag = ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
 				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
@@ -2597,9 +3018,10 @@ function makeApp(ib, engine, st) {
 				case "left": return k.shift ? nudgeKit(st.drumRow, st.drumCol, -1) : st.drumCol = Math.max(0, st.drumCol - 1), true;
 				case "right": return k.shift ? nudgeKit(st.drumRow, st.drumCol, 1) : st.drumCol = Math.min(3, st.drumCol + 1), true;
 			}
-			if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "analog" && !k.ctrl && !k.meta) switch (k.key) {
+			const sk = st.screen === "instrument" ? synthOf(s.instruments[st.inst]) : void 0;
+			if (sk && !k.ctrl && !k.meta) switch (k.key) {
 				case "up": return st.synthRow = Math.max(0, st.synthRow - 1), true;
-				case "down": return st.synthRow = Math.min(ANALOG_PARAMS.length - 1, st.synthRow + 1), true;
+				case "down": return st.synthRow = Math.min(sk.params.length - 1, st.synthRow + 1), true;
 				case "left": return nudge(st.synthRow, -1, k.shift), true;
 				case "right": return nudge(st.synthRow, 1, k.shift), true;
 			}
@@ -3668,6 +4090,7 @@ function writeBmed(song) {
 		if (ins.bits16) j.bits16 = true;
 		if (ins.kind === "analog") j.synth = ins.synth;
 		if (ins.kind === "drums") j.drums = ins.drums;
+		if (ins.kind === "fm") j.fm = ins.fm;
 		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
 		return j;
 	});
@@ -3736,6 +4159,7 @@ async function readBmed(jsonText, readFile) {
 			"synth",
 			"hybrid",
 			"analog",
+			"fm",
 			"drums",
 			"empty"
 		].includes(ij.kind) ? ij.kind : "empty";
@@ -3755,6 +4179,7 @@ async function readBmed(jsonText, readFile) {
 		if (Array.isArray(ij.volTable)) ins.volTable = ij.volTable, ins.waveTable = ij.waveTable ?? [], ins.volSpeed = ij.volSpeed, ins.waveSpeed = ij.waveSpeed;
 		if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
 		else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
+		else if (ins.kind === "fm") ins.fm = sanitizeFm(ij.fm);
 		else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
 		instruments.push(ins);
 	}
@@ -4721,6 +5146,7 @@ var SampleVoice = class {
 /** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
 function voiceFor(instrument, outRate, paula) {
 	if (instrument.kind === "analog") return new AnalogVoice(outRate);
+	if (instrument.kind === "fm") return new FmVoice(outRate);
 	if (instrument.kind === "drums") return new DrumVoice(outRate);
 	const v = new SampleVoice(outRate);
 	v.paula = paula;
@@ -4928,7 +5354,7 @@ var Renderer = class {
 			});
 			else {
 				if (old?.on && old.rings) {
-					if (old instanceof AnalogVoice) old.stop();
+					if (!(old instanceof DrumVoice)) old.stop();
 					if (old instanceof DrumVoice && instrument.kind === "drums" && old.chokedBy(drumOf(e.rate ?? 8363, 16574.27570093458))) old.kill();
 					if (old.on && this.tails.length < 32) this.tails.push(old);
 				}
@@ -5459,7 +5885,7 @@ var asSample = (from, name, data) => Object.assign(emptyInstrument(), {
 });
 /** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
 function bakeSynth(ins, hold = .8) {
-	const v = new AnalogVoice(HQ_RATE);
+	const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
 	v.start({
 		instrument: ins,
 		rate: C3_RATE$2,
@@ -5488,13 +5914,13 @@ function bakeDrum(ins, drum) {
 */
 function withSynthsBaked(song) {
 	let baked = 0, drums = 0, lost = 0;
-	if (!song.instruments.some((i) => i.kind === "analog" || i.kind === "drums")) return {
+	if (!song.instruments.some((i) => i.kind === "analog" || i.kind === "fm" || i.kind === "drums")) return {
 		song,
 		baked,
 		drums,
 		lost
 	};
-	const instruments = song.instruments.map((i) => i.kind === "analog" ? (baked++, bakeSynth(i)) : i);
+	const instruments = song.instruments.map((i) => i.kind === "analog" || i.kind === "fm" ? (baked++, bakeSynth(i)) : i);
 	const slot = /* @__PURE__ */ new Map();
 	const kitOf = (n) => song.instruments[n - 1]?.kind === "drums";
 	const blocks = song.blocks.map((b) => {
@@ -5543,48 +5969,54 @@ function withSynthsBaked(song) {
 // src/commands-synth.ts
 var SYNTH_USAGE = [
 	"med synth <n|.> new [preset]             the instrument becomes an analog synth (presets: med synth presets)",
-	"med synth <n|.> preset <name> · set <setting> <value> · up|down <setting> · show",
-	"med synth <n|.> bake                     the synth as a sample of its C-3 (for the sampler's tools)"
+	"med fm <n|.> new [preset]                the instrument becomes an FM synth (presets: med fm presets)",
+	"med synth|fm <n|.> preset <name> · set <setting> <value> · up|down <setting> · show · settings",
+	"med synth|fm <n|.> bake                  the synth as a sample of its C-3 (for the sampler's tools)"
 ];
-async function synthCommand(ib, st, ctx, rest) {
+/** `med synth …` (the analog synth) and `med fm …` (the FM synth): the same commands, each its own settings */
+async function synthCommand(ib, st, ctx, rest, sk) {
 	const { fmt } = ib.lib;
+	const c = `med ${sk.cmd}`;
 	if (rest[0] === "presets" || rest[0] === "settings") {
-		ctx.out(rest[0] === "presets" ? `${Object.keys(ANALOG_PRESETS).join(" · ")}\n` : ANALOG_PARAMS.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
+		ctx.out(rest[0] === "presets" ? `${sk.presets.join(" · ")}\n` : sk.params.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
 		return 0;
 	}
 	const song = st.song, e = st.editor;
 	if (!song || !e) return ctx.err("no song loaded (med open <file>)\n"), 1;
 	const [which, op = "show", ...args] = rest;
 	const n = which === "." || which === void 0 ? st.inst : parseInt(which, 16) - 1;
-	if (!(n >= 0 && n < 63)) return ctx.err("med synth <01–3F | .> new|preset|set|show … (med -h)\n"), 1;
+	if (!(n >= 0 && n < 63)) return ctx.err(`${c} <01–3F | .> new|preset|set|show … (med -h)\n`), 1;
 	while (song.instruments.length <= n) song.instruments.push(emptyInstrument());
 	const ins = song.instruments[n];
 	const id = hex(n + 1);
+	const own = (i) => settingsOf(i, sk);
 	const needSynth = () => {
-		if (ins.kind !== "analog" || !ins.synth) throw new Error(`instrument ${id} isn't a synth (med synth ${id} new)`);
+		if (ins.kind !== sk.kind || !settingsOf(ins, sk)) throw new Error(`instrument ${id} isn't ${sk.what} (${c} ${id} new)`);
 	};
+	const ours = new RegExp(`^${sk.cmd}( |$)`);
 	switch (op) {
 		case "new": {
 			const name = args[0] ?? "";
-			if (name && !ANALOG_PRESETS[name]) return ctx.err(`no preset "${name}": ${Object.keys(ANALOG_PRESETS).join(" · ")}\n`), 1;
-			e.instrument(n, `synth ${name || "new"}`, (i) => {
+			if (name && !sk.presets.includes(name)) return ctx.err(`no preset "${name}": ${sk.presets.join(" · ")}\n`), 1;
+			e.instrument(n, `${sk.cmd} ${name || "new"}`, (i) => {
+				const keep = i.kind === sk.kind && i.name ? i.name : `${sk.cmd} ${name}`.trim();
 				Object.assign(i, emptyInstrument(), {
-					kind: "analog",
-					name: i.name && i.kind === "analog" ? i.name : `synth ${name || ""}`.trim(),
-					synth: analogPreset(name || void 0)
+					kind: sk.kind,
+					name: keep
 				});
+				putSettings(i, sk, sk.preset(name || void 0));
 			});
 			st.inst = n;
-			ctx.out(`${fmt.green("✓")} ${id}: an analog synth${name ? ` (${name})` : ""} · play it, or med synth ${id} set cutoff 800\n`);
+			ctx.out(`${fmt.green("✓")} ${id}: ${sk.what}${name ? ` (${name})` : ""} · play it, or ${c} ${id} ${sk.example}\n`);
 			return 0;
 		}
 		case "preset": {
 			needSynth();
 			const name = args[0] ?? "";
-			if (!ANALOG_PRESETS[name]) return ctx.err(`presets: ${Object.keys(ANALOG_PRESETS).join(" · ")}\n`), 1;
+			if (!sk.presets.includes(name)) return ctx.err(`presets: ${sk.presets.join(" · ")}\n`), 1;
 			e.instrument(n, `preset ${name}`, (i) => {
-				i.synth = analogPreset(name);
-				if (/^synth( |$)/.test(i.name)) i.name = `synth ${name}`;
+				putSettings(i, sk, sk.preset(name));
+				if (ours.test(i.name)) i.name = `${sk.cmd} ${name}`;
 			});
 			ctx.out(`${fmt.green("✓")} ${id}: ${name}\n`);
 			return 0;
@@ -5593,12 +6025,12 @@ async function synthCommand(ib, st, ctx, rest) {
 		case "up":
 		case "down": {
 			needSynth();
-			const def = findParam(args[0] ?? "");
-			if (!def) return ctx.err(`med synth ${id} ${op} <setting>${op === "set" ? " <value>" : ""} · settings: med synth settings\n`), 1;
-			if (op === "set" && args[1] === void 0) return ctx.err(`med synth ${id} set ${def.key} <${def.choices ? def.choices.join("|") : `${def.min}…${def.max}`}>\n`), 1;
-			if (op === "set") setParam(structuredClone(ins.synth), def.key, args[1]);
-			e.instrument(n, def.label, (i) => op === "set" ? setParam(i.synth, def.key, args[1]) : nudgeParam(i.synth, def.key, op === "up" ? 1 : -1, args[1] === "big"));
-			if (op === "set") ctx.out(`${fmt.green("✓")} ${id} ${def.label}: ${showParam(song.instruments[n].synth, def)}\n`);
+			const def = findIn(sk.params, args[0] ?? "");
+			if (!def) return ctx.err(`${c} ${id} ${op} <setting>${op === "set" ? " <value>" : ""} · settings: ${c} settings\n`), 1;
+			if (op === "set" && args[1] === void 0) return ctx.err(`${c} ${id} set ${def.key} <${def.choices ? def.choices.join("|") : `${def.min}…${def.max}`}>\n`), 1;
+			if (op === "set") setIn(sk.params, structuredClone(own(ins)), def.key, args[1]);
+			e.instrument(n, def.label, (i) => op === "set" ? setIn(sk.params, own(i), def.key, args[1]) : nudgeIn(sk.params, own(i), def.key, op === "up" ? 1 : -1, args[1] === "big"));
+			if (op === "set") ctx.out(`${fmt.green("✓")} ${id} ${def.label}: ${showIn(own(song.instruments[n]), def)}\n`);
 			return 0;
 		}
 		case "bake": {
@@ -5616,9 +6048,9 @@ async function synthCommand(ib, st, ctx, rest) {
 		case "show":
 		case "info":
 			needSynth();
-			ctx.out(`${id} ${ins.name || "(no name)"} · analog synth\n` + ANALOG_PARAMS.map((d) => `  ${d.label.padEnd(18)} ${showParam(ins.synth, d)}`).join("\n") + "\n");
+			ctx.out(`${id} ${ins.name || "(no name)"} · ${sk.what.replace(/^an? /, "")}\n` + sk.params.map((d) => `  ${d.label.padEnd(18)} ${showIn(own(ins), d)}`).join("\n") + "\n");
 			return 0;
-		default: return ctx.err(`med synth: unknown "${op}"\n${SYNTH_USAGE.join("\n")}\n`), 1;
+		default: return ctx.err(`${c}: unknown "${op}"\n${SYNTH_USAGE.join("\n")}\n`), 1;
 	}
 }
 var DRUMS_USAGE = [
@@ -5686,10 +6118,11 @@ async function drumsCommand(ib, st, ctx, rest) {
 		case "bake": {
 			needKit();
 			const d = drumArg(args[0]);
-			const [k] = e.addInstruments([bakeDrum(ins, d)]);
+			const baked = bakeDrum(ins, d);
+			const [k] = e.addInstruments([baked]);
 			if (k === void 0) return ctx.err("no free instrument (63 at most)\n"), 1;
 			st.inst = k;
-			ctx.out(`${fmt.green("✓")} ${hex(k + 1)}: ${DRUM_NAMES[d]} as a sample\n`);
+			ctx.out(`${fmt.green("✓")} ${hex(k + 1)} ${baked.name}: ${id}'s ${DRUM_NAMES[d]} as a sample (${baked.data.length} frames)\n`);
 			return 0;
 		}
 		case "show":
@@ -5765,7 +6198,7 @@ function medToMod(song, cmd, v) {
 function writeMod(original) {
 	const warnings = [];
 	const { song, baked, drums, lost } = withSynthsBaked(original);
-	if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
+	if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
 	const w = new Writer();
@@ -5860,7 +6293,7 @@ function writeMod(original) {
 function writeMed(original) {
 	const warnings = [];
 	const { song, baked, drums, lost } = withSynthsBaked(original);
-	if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
+	if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
 	const w = new Writer();
@@ -6101,6 +6534,7 @@ function registerCommands(ib, engine, st) {
 			"sample",
 			"bounce",
 			"synth",
+			"fm",
 			"drums",
 			"kits",
 			"kit",
@@ -6177,8 +6611,9 @@ function registerCommands(ib, engine, st) {
 			} catch (err) {
 				return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
 			}
-			if (positional[0] === "synth" || positional[0] === "drums") try {
-				return await (positional[0] === "synth" ? synthCommand : drumsCommand)(ib, st, ctx, positional.slice(1));
+			const synth = SYNTHS.find((x) => x.cmd === positional[0]);
+			if (synth || positional[0] === "drums") try {
+				return await (synth ? synthCommand(ib, st, ctx, positional.slice(1), synth) : drumsCommand(ib, st, ctx, positional.slice(1)));
 			} catch (err) {
 				return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
 			}
@@ -6375,11 +6810,11 @@ function registerCommands(ib, engine, st) {
 						const note = noteS ? parseNote(noteS) : null;
 						const b = s.blocks[s.sequence[st.seq]];
 						if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || note === null) return ctx.err("med note <line (hex)> <track 1–n> <C-3|^^^|---> [instrument hex] [command 0C20]\n"), 1;
+						if (cmdS && !/^[0-9a-f]{4}$/i.test(cmdS)) return ctx.err(`med note: "${cmdS}" isn't a command (4 hex digits, like 0C20)\n`), 1;
 						const e = st.editor;
 						const bn = s.sequence[st.seq];
 						if (note) e.writeNote(bn, line, track, note, instS ? parseInt(instS, 16) || 0 : 0);
 						else e.clear(bn, line, track, 0);
-						if (cmdS && !/^[0-9a-f]{4}$/i.test(cmdS)) return ctx.err(`med note: "${cmdS}" isn't a command (4 hex digits, like 0C20)\n`), 1;
 						if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, 3 + i, parseInt(d, 16)));
 						const c = s.blocks[bn].cells[line][track];
 						ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${c.note ? noteName(c.note) : "---"} ${c.inst ? hex(c.inst) : ".."}${cmdS ? ` ${cmdS.toUpperCase()}` : ""}\n`);
@@ -6465,7 +6900,7 @@ function registerCommands(ib, engine, st) {
 							`slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
 							`length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
 							`instruments`,
-							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
+							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
 						].join("\n") + "\n");
 						return 0;
 					}
@@ -6723,6 +7158,16 @@ var FR = {
 	"empty — load a sound:": "vide — charge un son :",
 	"empty — load a sound, or make a synth:": "vide — charge un son, ou fais un synthé :",
 	"analog synth": "synthé analogique",
+	"FM synth": "synthé FM",
+	"two sine waves, one bending the other: pianos, bells, basses": "deux sinusoïdes, l'une tord l'autre : pianos, cloches, basses",
+	"ratio": "rapport",
+	"detune": "désaccord",
+	"index (bright)": "index (brillance)",
+	"feedback": "réinjection",
+	"mod attack": "mod attaque",
+	"mod decay": "mod déclin",
+	"mod sustain": "mod maintien",
+	"mod release": "mod relâche",
 	"drum machine": "boîte à rythmes",
 	"twelve drums, one a note: C kick, D snare, E hat…": "douze sons de batterie, un par note : C grosse caisse, D caisse claire, E charleston…",
 	"kit": "kit",
@@ -6747,7 +7192,7 @@ var FR = {
 	"keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it": "touches : un son par note · ↑↓ un son · ←→ un réglage · ⇧←→ le changer",
 	"two oscillators, a filter, two envelopes, an LFO": "deux oscillateurs, un filtre, deux enveloppes, un LFO",
 	"preset": "preset",
-	"the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h": "les touches le jouent · ↑↓ un réglage · ←→ le changer (⇧ plus vite) · med synth -h",
+	"the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h": "les touches le jouent · ↑↓ un réglage · ←→ le changer (⇧ plus vite) · med -h",
 	"osc 1 wave": "osc 1 onde",
 	"osc 1 width": "osc 1 largeur",
 	"osc 1 level": "osc 1 niveau",

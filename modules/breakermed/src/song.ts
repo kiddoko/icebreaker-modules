@@ -89,11 +89,11 @@ export interface Block {
   cells: Cell[][];
 }
 
-/** sample: a sound read at the note's speed · analog: our subtractive synth · drums: our drum machine · synth / hybrid: OctaMED's (read from .med) */
-export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog" | "drums";
+/** sample: a sound read at the note's speed · analog / fm: our synths · drums: our drum machine · synth / hybrid: OctaMED's (read from .med) */
+export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog" | "fm" | "drums";
 
 /** our own instruments: computed, no sound data */
-export const computed = (i: Instrument | undefined) => i?.kind === "analog" || i?.kind === "drums";
+export const computed = (i: Instrument | undefined) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums";
 
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
 export const playable = (i: Instrument | undefined) => !!i && (computed(i) || (i.kind !== "empty" && i.data.length > 0));
@@ -129,6 +129,8 @@ export interface Instrument {
   waveSpeed?: number;
   /** the analog synth's settings (kind "analog") */
   synth?: import("./dsp/analog").AnalogParams;
+  /** the FM synth's settings (kind "fm") */
+  fm?: import("./dsp/fm").FmParams;
   /** the drum machine's kit (kind "drums") */
   drums?: import("./dsp/drums").DrumKit;
 }

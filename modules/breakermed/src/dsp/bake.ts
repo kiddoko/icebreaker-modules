@@ -9,6 +9,7 @@ import { emptyInstrument, type Instrument, type Song } from "../song";
 import { HQ_RATE } from "../sampler";
 import { AnalogVoice, C3_RATE } from "./analog";
 import { DRUM_NAMES, DrumVoice } from "./drums";
+import { FmVoice } from "./fm";
 import type { Voice } from "./voice";
 
 /** a voice played into a new sample: held `hold` seconds, then let go, until silent (`max` seconds) */
@@ -30,7 +31,7 @@ const asSample = (from: Instrument, name: string, data: Float32Array): Instrumen
 
 /** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
 export function bakeSynth(ins: Instrument, hold = 0.8): Instrument {
-  const v = new AnalogVoice(HQ_RATE);
+  const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
   v.start({ instrument: ins, rate: C3_RATE, offset: 0 });
   v.set(C3_RATE, 1, 0);
   const out = asSample(ins, ins.name, record(v, hold, hold + 2));
@@ -53,8 +54,8 @@ export function bakeDrum(ins: Instrument, drum: number): Instrument {
  */
 export function withSynthsBaked(song: Song): { song: Song; baked: number; drums: number; lost: number } {
   let baked = 0, drums = 0, lost = 0;
-  if (!song.instruments.some((i) => i.kind === "analog" || i.kind === "drums")) return { song, baked, drums, lost };
-  const instruments = song.instruments.map((i) => (i.kind === "analog" ? (baked++, bakeSynth(i)) : i));
+  if (!song.instruments.some((i) => i.kind === "analog" || i.kind === "fm" || i.kind === "drums")) return { song, baked, drums, lost };
+  const instruments = song.instruments.map((i) => (i.kind === "analog" || i.kind === "fm" ? (baked++, bakeSynth(i)) : i));
   // the kits: (instrument, drum) → the new instrument's number (1-based)
   const slot = new Map<string, number>();
   const kitOf = (n: number) => song.instruments[n - 1]?.kind === "drums";

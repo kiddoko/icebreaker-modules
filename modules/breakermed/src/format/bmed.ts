@@ -14,6 +14,7 @@ import { emptyCell, emptyInstrument, hex, newBlock, NOTE_NAMES, NOTE_OFF, amigaP
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
 import { sanitizeKit, type DrumKit } from "../dsp/drums";
+import { sanitizeFm, type FmParams } from "../dsp/fm";
 
 export const BMED_VERSION = 1;
 
@@ -45,6 +46,8 @@ interface InstrumentJson {
   waveSpeed?: number;
   /** an analog synth's settings */
   synth?: AnalogParams;
+  /** an FM synth's settings */
+  fm?: FmParams;
   /** a drum machine's kit */
   drums?: DrumKit;
 }
@@ -90,6 +93,7 @@ export function writeBmed(song: Song): SongFile[] {
     if (ins.bits16) j.bits16 = true;
     if (ins.kind === "analog") j.synth = ins.synth;
     if (ins.kind === "drums") j.drums = ins.drums;
+    if (ins.kind === "fm") j.fm = ins.fm;
     if (ins.volTable) (j.volTable = ins.volTable), (j.waveTable = ins.waveTable), (j.volSpeed = ins.volSpeed), (j.waveSpeed = ins.waveSpeed);
     return j;
   });
@@ -147,7 +151,7 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
   for (const ij of (j.instruments ?? []).slice(0, 63)) {
     const ins = emptyInstrument();
     ins.name = String(ij.name ?? "").slice(0, 40);
-    ins.kind = ["sample", "synth", "hybrid", "analog", "drums", "empty"].includes(ij.kind) ? ij.kind : "empty";
+    ins.kind = ["sample", "synth", "hybrid", "analog", "fm", "drums", "empty"].includes(ij.kind) ? ij.kind : "empty";
     ins.data = await sample(ij.file);
     if (ij.right) ins.right = await sample(ij.right);
     if (Array.isArray(ij.waves)) ins.waves = await Promise.all(ij.waves.slice(0, 64).map((w: string) => sample(w)));
@@ -164,6 +168,7 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
     if (Array.isArray(ij.volTable)) (ins.volTable = ij.volTable), (ins.waveTable = ij.waveTable ?? []), (ins.volSpeed = ij.volSpeed), (ins.waveSpeed = ij.waveSpeed);
     if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
     else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
+    else if (ins.kind === "fm") ins.fm = sanitizeFm(ij.fm);
     else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
     instruments.push(ins);
   }
