@@ -5667,9 +5667,10 @@ var Renderer = class {
 /**
 * breakerMED — exports: the song computed again, here, at the rate you choose
 * (independent of the sound card), as fast as the computer goes, then written
-* as WAV (16 / 24 bits, 32-bit float), AIFF or FLAC. The master, or one track
-* alone (a stem): the same renderer as what you hear, so the file is what you
-* heard. MP3 / M4A / OGG come later (the deck's encoder pack).
+* as WAV (16 / 24 bits, 32-bit float), AIFF or FLAC — or, through the deck's
+* encoder pack (`encoders install`, then ib.audio.encode), MP3, M4A, OGG or Opus.
+* The master, or one track alone (a stem): the same renderer as what you hear,
+* so the file is what you heard.
 */
 var RATES = [
 	22050,
@@ -5679,11 +5680,83 @@ var RATES = [
 	88200,
 	96e3
 ];
-/** what a format can do */
-function checkFormat(format, bits, rate) {
+/** the formats the deck's encoder pack makes, their qualities (the first is the default) */
+var QUALITIES = {
+	mp3: [
+		"v0",
+		"v2",
+		"128",
+		"192",
+		"256",
+		"320"
+	],
+	m4a: [
+		"256",
+		"192",
+		"128"
+	],
+	ogg: [
+		"q6",
+		"q4",
+		"q8"
+	],
+	opus: [
+		"128",
+		"96",
+		"160"
+	]
+};
+var isLossy = (f) => f in QUALITIES;
+/** a file name's format: .wav .aif .aiff .flac .mp3 .m4a .ogg .opus (none: WAV) */
+function formatOf(path) {
+	const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
+	if (!ext) return "wav";
+	if (ext === "aif" || ext === "aiff") return "aiff";
+	return ext === "wav" || ext === "flac" || isLossy(ext) ? ext : null;
+}
+/** the extension a format's files get */
+var extOf = (f) => f === "aiff" ? "aif" : f;
+/** what a format can do (`quality`: only for MP3, M4A, OGG, Opus; "" = the default) */
+function checkFormat(format, bits, rate, quality = "") {
 	if (format === "flac" && bits === 32) return "FLAC goes up to 24 bits (32-bit float: WAV or AIFF)";
 	if (!RATES.includes(rate)) return `a rate among ${RATES.join(", ")}`;
+	if (isLossy(format)) {
+		if (rate > 48e3) return `${format.toUpperCase()} goes up to 48000 Hz`;
+		if (quality && !QUALITIES[format].includes(quality.toLowerCase())) return `${format.toUpperCase()} quality ${QUALITIES[format].join(", ")} (default ${QUALITIES[format][0]})`;
+	} else if (quality) return "--quality is for MP3, M4A, OGG and Opus (WAV, AIFF, FLAC: --bits)";
 	return null;
+}
+/** what an export in this format is, for the last line ("MP3 · v0 · 48000 Hz") */
+function describe(format, bits, rate, quality = "") {
+	if (!isLossy(format)) return `${format.toUpperCase()} · ${bits === 32 ? "32-bit float" : `${bits} bits`} · ${rate} Hz`;
+	const q = (quality || QUALITIES[format][0]).toLowerCase();
+	const shown = /^\d+$/.test(q) ? `${q} kbps` : format === "mp3" ? `VBR ${q.toUpperCase()}` : `quality ${q.slice(1)}`;
+	return `${format.toUpperCase()} · ${shown} · ${format === "opus" ? 48e3 : rate} Hz`;
+}
+/** left and right as one interleaved array (what the encoder pack reads) */
+function interleave(pcm) {
+	const [l, r = l] = pcm.channels;
+	const out = new Float32Array(l.length * 2);
+	for (let i = 0; i < l.length; i++) out[2 * i] = l[i], out[2 * i + 1] = r[i];
+	return out;
+}
+/** why a lossy export can't happen here (null: it can) */
+async function encoderProblem(audio, format) {
+	if (!audio.encode || !audio.encoders) return `${format.toUpperCase()} needs a newer ICEBREAKER (with the encoder pack) — WAV, AIFF and FLAC work here`;
+	const e = await audio.encoders();
+	if (!e.supported) return `there's no encoder pack for this computer yet — WAV, AIFF and FLAC work here`;
+	if (!e.installed) return `${format.toUpperCase()} needs the deck's encoder pack: run \`encoders install\` (once, ~3 MB), then export again`;
+	return null;
+}
+/** an MP3 / M4A / OGG / Opus file's bytes, through the deck's encoder pack */
+async function encodeLossy(audio, pcm, format, quality, title) {
+	return audio.encode(interleave(pcm), {
+		format,
+		quality: quality.toLowerCase(),
+		rate: pcm.rate,
+		channels: 2,
+		title
+	});
 }
 /** The song as sound: once through, plus its tail. `onProgress(0…1)`; it yields now and then. */
 async function renderSong(song, o, onProgress) {
@@ -6788,6 +6861,7 @@ function registerCommands(ib, engine, st) {
 			"med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
 			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
+			"med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
 			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
 			"med play [song|block] [position] [line]",
 			"med stop",
@@ -6813,6 +6887,7 @@ function registerCommands(ib, engine, st) {
 		examples: [
 			["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"],
 			["med export songs/x.flac --rate 44100", "FLAC, CD quality"],
+			["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"],
 			["med play", "play from the cursor"],
 			["med play block", "play this block again and again"],
 			"med mute 2",
@@ -6855,6 +6930,7 @@ function registerCommands(ib, engine, st) {
 			"pingpong",
 			"--rate",
 			"--bits",
+			"--quality",
 			"--stems",
 			"--only-stems",
 			"--tracks",
@@ -6904,7 +6980,8 @@ function registerCommands(ib, engine, st) {
 				"rate",
 				"bits",
 				"tracks",
-				"tail"
+				"tail",
+				"quality"
 			]);
 			if (positional[0] === "sample" || positional[0] === "smp") try {
 				return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
@@ -6955,18 +7032,23 @@ function registerCommands(ib, engine, st) {
 					case "export": {
 						const s = need();
 						const target = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath().replace(/\.bmed$/i, ".wav");
-						const ext = (/\.(wav|aiff?|flac)$/i.exec(target)?.[1] ?? "wav").toLowerCase();
-						const format = ext.startsWith("aif") ? "aiff" : ext;
-						const rate = flags.rate ? parseInt(String(flags.rate), 10) : 48e3;
+						const format = formatOf(target);
+						if (!format) return ctx.err("med export: .wav .aif .flac — or .mp3 .m4a .ogg .opus (the deck's encoder pack)\n"), 1;
+						const rate = format === "opus" ? 48e3 : flags.rate ? parseInt(String(flags.rate), 10) : 48e3;
 						const bits = flags.bits ? parseInt(String(flags.bits), 10) : format === "flac" ? 16 : 24;
 						if (![
 							16,
 							24,
 							32
 						].includes(bits)) return ctx.err("med export: --bits 16, 24 or 32\n"), 1;
-						const why = checkFormat(format, bits, rate);
+						const quality = typeof flags.quality === "string" ? flags.quality.toLowerCase() : "";
+						const why = checkFormat(format, bits, rate, quality);
 						if (why) return ctx.err(`med export: ${why}\n`), 1;
-						const base = /\.(wav|aiff?|flac)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
+						if (isLossy(format)) {
+							const problem = await encoderProblem(ib.audio, format);
+							if (problem) return ctx.err(`med export: ${problem}\n`), 1;
+						}
+						const base = /\.(wav|aiff?|flac|mp3|m4a|ogg|opus)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
 						const dir = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "";
 						const opts = {
 							rate,
@@ -6978,7 +7060,7 @@ function registerCommands(ib, engine, st) {
 						};
 						const jobs = [];
 						if (!flags["only-stems"]) jobs.push({
-							path: `${base}.${format === "aiff" ? "aif" : format}`,
+							path: `${base}.${extOf(format)}`,
 							label: "master"
 						});
 						if (flags.stems || flags["only-stems"] || flags.tracks) {
@@ -6986,7 +7068,7 @@ function registerCommands(ib, engine, st) {
 							for (const t of wanted) {
 								const name = trackName(s, t).replace(/[\\/:*?"<>|]/g, "-");
 								jobs.push({
-									path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${format === "aiff" ? "aif" : format}`,
+									path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${extOf(format)}`,
 									solo: [t],
 									label: name
 								});
@@ -6996,16 +7078,18 @@ function registerCommands(ib, engine, st) {
 						if (jobs.some((j) => j.solo)) await ib.vault.mkdir(`${base} stems`).catch(() => {});
 						for (const job of jobs) {
 							let shown = 0;
-							const bytes = encode(await renderSong(s, {
+							const pcm = await renderSong(s, {
 								...opts,
 								solo: job.solo
 							}, (p) => {
 								if (p - shown >= .25 && p < 1) shown = p, ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
-							}), format, bits);
+							});
+							const title = job.solo ? `${s.title || "untitled"} — ${job.label}` : s.title || "";
+							const bytes = isLossy(format) ? await encodeLossy(ib.audio, pcm, format, quality, title) : encode(pcm, format, bits);
 							await ib.vault.writeBytes(job.path, bytes);
 							ctx.out(`${fmt.green("✓")} ${job.path} ${fmt.dim(`(${(bytes.length / 1048576).toFixed(1)} MB)`)}\n`);
 						}
-						ctx.out(fmt.dim(`  ${format.toUpperCase()} · ${bits === 32 ? "32-bit float" : `${bits} bits`} · ${rate} Hz${opts.normalize ? " · normalized" : ""}\n`));
+						ctx.out(fmt.dim(`  ${describe(format, bits, rate, quality)}${opts.normalize ? " · normalized" : ""}\n`));
 						return 0;
 					}
 					case "save": {

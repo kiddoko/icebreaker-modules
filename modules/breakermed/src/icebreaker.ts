@@ -171,6 +171,10 @@ export interface IcebreakerAPI {
     /** the user silenced the module (`audio stop`, the ♪ in the status bar) */
     onStop(fn: () => void): () => void;
     decode(bytes: Uint8Array | ArrayBuffer): Promise<{ rate: number; channels: Float32Array[] }>;
+    /** interleaved floats → an MP3 / M4A / OGG / Opus file's bytes, through the deck's encoder pack (ICEBREAKER 0.5.5+) */
+    encode?(pcm: Float32Array, opts: { format: "mp3" | "m4a" | "ogg" | "opus"; quality?: string; rate: number; channels: 1 | 2; title?: string }): Promise<Uint8Array>;
+    /** is the encoder pack installed (`encoders install`), and what it makes */
+    encoders?(): Promise<{ installed: boolean; supported: boolean; formats: string[] }>;
   };
   lib: {
     BOLD: number;

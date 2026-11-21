@@ -7,7 +7,7 @@ keyboard, the mouse and a gamepad.
 
 > Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog and FM
 > synths, the drum machine, chords and OctaMED's echo are here (8 tracks by default, 16 at most,
-> named); MP3 / M4A / OGG export comes later (an encoder pack the deck downloads on request).
+> named), and exports to WAV, AIFF, FLAC — and MP3, M4A, OGG, Opus through the deck's encoder pack.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -16,8 +16,9 @@ keyboard, the mouse and a gamepad.
 - **`audio`**: it plays its sound through the deck's sampler (`ib.audio`).
 - **`vault:read`**: it reads your songs from the vault (`.bmed`, `.med`, `.mod`, `mod.xxx`).
 - **`vault:write`**: it saves your songs in the vault (`med save`).
-- Nothing online, no account, no AI. An ICEBREAKER with `ib.audio` and pages that play the keyboard: not
-  released yet (ICEBREAKER's branch `claude/breakermed-core`); on an older deck it says so and stays off.
+- Nothing online, no account, no AI. ICEBREAKER 0.5.4 or later (`ib.audio` and pages that play the
+  keyboard; on an older deck it says so and stays off); MP3 / M4A / OGG / Opus exports need 0.5.5 and
+  the encoder pack (below).
 
 ## The page
 
@@ -90,7 +91,23 @@ sound card's), and writes **WAV** (16 or 24 bits, or 32-bit float), **AIFF** (32
 AIFF-C) or **FLAC** (16 / 24 bits, lossless, our own encoder). `--stems` adds **each track on its
 own** (`<name> stems/01 lead.wav`…), `--only-stems` only those, `--tracks 1,3` the ones you say.
 Muted tracks stay muted; the end rings out for `--tail` seconds, then fades; 16 bits get a little
-dither. MP3 / M4A / OGG come later, through an encoder pack the deck downloads on request.
+dither.
+
+**MP3, M4A (AAC), OGG (Vorbis) and Opus** go through the deck's **encoder pack**: a small LGPL
+ffmpeg that ICEBREAKER downloads once when *you* ask (`encoders install`, ~3 MB; a module can't
+install it). Without it, `med export x.mp3` says so and nothing is written. Then:
+
+```
+med export songs/x.mp3                 MP3, VBR V0 (the best VBR), 48 kHz
+med export songs/x.m4a --rate 44100    AAC 256 kbps, CD rate
+med export songs/x.ogg --quality q8    Vorbis, quality 8
+med export songs/x.opus --stems        Opus 128 kbps (always 48 kHz), and each track apart
+```
+
+`--quality`: mp3 `v0` (default) `v2` `128` `192` `256` `320` · m4a `256` (default) `192` `128` ·
+ogg `q6` (default) `q4` `q8` · opus `128` (default) `96` `160`. These formats go up to 48 kHz. The
+song's title goes in the file (a stem's: "title — track"). It needs ICEBREAKER 0.5.5 or later
+(`ib.audio.encode`); an older deck exports WAV, AIFF and FLAC as before.
 
 ## Chords
 
@@ -250,3 +267,6 @@ the octave folding of the Amiga's voices, we checked our reader against
 read for reference, not copied. OctaMED's name, code, look and samples aren't used: breakerMED
 works *like* it and reads its files (interoperability), nothing more. The demo song (`med demo`,
 `src/demo.ts`) is ours: its samples are computed, its notes written here.
+The MP3 / M4A / OGG / Opus exports use the deck's encoder pack (FFmpeg and LAME under the LGPL,
+libogg / libvorbis / libopus under BSD-3-Clause, run by ICEBREAKER as a separate program — see
+ICEBREAKER's `docs/CREDITS.md`); breakerMED itself contains none of their code.

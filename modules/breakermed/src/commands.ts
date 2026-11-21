@@ -7,7 +7,7 @@ import type { Engine } from "./engine";
 import { readSong, SONG_EXTS } from "./format";
 import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
-import { checkFormat, encode, renderSong, trackUsed, type ExportFormat } from "./export";
+import { checkFormat, describe, encode, encodeLossy, encoderProblem, extOf, formatOf, isLossy, renderSong, trackUsed } from "./export";
 import { bounce, sampleCommand, SAMPLE_USAGE } from "./commands-sample";
 import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
@@ -134,6 +134,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med new [tracks]           a new song: 8 tracks (up to 16), the demo's instruments to start",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
       "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
+      "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
       "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>",
       "med play [song|block] [position] [line]",
       "med stop",
@@ -156,10 +157,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med effects                every command (00–2E) in one line each",
       "med info                   the song's settings",
     ].join("\n"),
-    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
-      const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
+      const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail", "quality"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
         try {
           return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
@@ -213,23 +214,29 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "export": {
             const s = need();
             const target = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath().replace(/\.bmed$/i, ".wav");
-            const ext = (/\.(wav|aiff?|flac)$/i.exec(target)?.[1] ?? "wav").toLowerCase();
-            const format: ExportFormat = ext.startsWith("aif") ? "aiff" : (ext as ExportFormat);
-            const rate = flags.rate ? parseInt(String(flags.rate), 10) : 48000;
+            const format = formatOf(target);
+            if (!format) return ctx.err("med export: .wav .aif .flac — or .mp3 .m4a .ogg .opus (the deck's encoder pack)\n"), 1;
+            // Opus is always 48 kHz
+            const rate = format === "opus" ? 48000 : flags.rate ? parseInt(String(flags.rate), 10) : 48000;
             const bits = (flags.bits ? parseInt(String(flags.bits), 10) : format === "flac" ? 16 : 24) as 16 | 24 | 32;
             if (![16, 24, 32].includes(bits)) return ctx.err("med export: --bits 16, 24 or 32\n"), 1;
-            const why = checkFormat(format, bits, rate);
+            const quality = typeof flags.quality === "string" ? flags.quality.toLowerCase() : "";
+            const why = checkFormat(format, bits, rate, quality);
             if (why) return ctx.err(`med export: ${why}\n`), 1;
-            const base = /\.(wav|aiff?|flac)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
+            if (isLossy(format)) {
+              const problem = await encoderProblem(ib.audio, format);
+              if (problem) return ctx.err(`med export: ${problem}\n`), 1;
+            }
+            const base = /\.(wav|aiff?|flac|mp3|m4a|ogg|opus)$/i.test(target) ? target.replace(/\.[^.]+$/, "") : target;
             const dir = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "";
             const opts = { rate, bits, paula: engine.paula, muted: engine.muted, normalize: !!flags.normalize, tail: flags.tail ? Math.max(0, Math.min(10, parseFloat(String(flags.tail)) || 0)) : 1.5 };
             const jobs: { path: string; solo?: number[]; label: string }[] = [];
-            if (!flags["only-stems"]) jobs.push({ path: `${base}.${format === "aiff" ? "aif" : format}`, label: "master" });
+            if (!flags["only-stems"]) jobs.push({ path: `${base}.${extOf(format)}`, label: "master" });
             if (flags.stems || flags["only-stems"] || flags.tracks) {
               const wanted = flags.tracks ? String(flags.tracks).split(",").map((x) => parseInt(x, 10) - 1).filter((t) => t >= 0 && t < s.tracks) : [...Array(s.tracks).keys()].filter((t) => trackUsed(s, t));
               for (const t of wanted) {
                 const name = trackName(s, t).replace(/[\\/:*?"<>|]/g, "-");
-                jobs.push({ path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${format === "aiff" ? "aif" : format}`, solo: [t], label: name });
+                jobs.push({ path: `${base} stems/${String(t + 1).padStart(2, "0")} ${name}.${extOf(format)}`, solo: [t], label: name });
               }
             }
             if (dir) await ib.vault.mkdir(dir).catch(() => {});
@@ -239,11 +246,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               const pcm = await renderSong(s, { ...opts, solo: job.solo }, (p) => {
                 if (p - shown >= 0.25 && p < 1) (shown = p), ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
               });
-              const bytes = encode(pcm, format, bits);
+              const title = job.solo ? `${s.title || "untitled"} — ${job.label}` : s.title || "";
+              const bytes = isLossy(format) ? await encodeLossy(ib.audio, pcm, format, quality, title) : encode(pcm, format, bits);
               await ib.vault.writeBytes(job.path, bytes);
               ctx.out(`${fmt.green("✓")} ${job.path} ${fmt.dim(`(${(bytes.length / 1048576).toFixed(1)} MB)`)}\n`);
             }
-            ctx.out(fmt.dim(`  ${format.toUpperCase()} · ${bits === 32 ? "32-bit float" : `${bits} bits`} · ${rate} Hz${opts.normalize ? " · normalized" : ""}\n`));
+            ctx.out(fmt.dim(`  ${describe(format, bits, rate, quality)}${opts.normalize ? " · normalized" : ""}\n`));
             return 0;
           }
           case "save": {

@@ -1,7 +1,7 @@
 {
   "id": "breakermed",
   "name": "breakerMED",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "A tracker like OctaMED and ProTracker: plays and edits .med and .mod songs (and its own .bmed), 8 to 16 tracks, in ASCII, keyboard, mouse and gamepad",
   "author": "icebreaker",
   "icon": "♫",
