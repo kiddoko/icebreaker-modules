@@ -19,11 +19,11 @@ import { cleanEcho, ECHO_MAX_MS, MAX_TRACKS, ptBpmOf, trackName, type Song } fro
 import type { State } from "./app";
 
 export type Screen = "block" | "instrument" | "song" | "export";
-export const SCREENS: { id: Screen; label: string; key: string }[] = [
-  { id: "block", label: "BLOCK", key: "B" },
-  { id: "instrument", label: "INSTRUMENT", key: "I" },
-  { id: "song", label: "SONG", key: "S" },
-  { id: "export", label: "EXPORT", key: "E" },
+export const SCREENS: { id: Screen; label: string; short: string; key: string }[] = [
+  { id: "block", label: "BLOCK", short: "BLK", key: "B" },
+  { id: "instrument", label: "INSTRUMENT", short: "INST", key: "I" },
+  { id: "song", label: "SONG", short: "SONG", key: "S" },
+  { id: "export", label: "EXPORT", short: "EXP", key: "E" },
 ];
 
 const FORMATS: ExportFormat[] = ["wav", "aiff", "flac", "mp3", "m4a", "ogg", "opus"];
@@ -95,7 +95,8 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     void a.encoders().then((e) => ((encoders = e.installed ? "ready" : e.supported ? "missing" : "none"), ib.ui.redraw())).catch(() => (encoders = "unknown"));
   };
 
-  const dirty = () => st.editor && (st.editor.dirty = true);
+  /** a setting of the song changed through the editor (undoable); `merge`: a nudge, one undo for a run of them */
+  const set = (label: string, fn: (s: Song) => void, merge = true) => st.editor?.settings(label, fn, merge);
   const rename = async (tr: number) => {
     const s = st.song!;
     const name = await ib.ui.prompt(t("track name"), { initial: s.trackNames[tr] ?? "", placeholder: `${t("track")} ${tr + 1}` });
@@ -108,43 +109,43 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     const f = s.flags;
     const echo = s.echo;
     return [
-      { label: t("title"), value: () => s.title || "—", activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && ((s.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60)), dirty(), ib.ui.redraw())) },
+      { label: t("title"), value: () => s.title || "—", activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (set("title", (x) => (x.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60)), false), ib.ui.redraw())) },
       {
         label: t("tempo"),
         value: () => `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix).toFixed(0)})`,
-        nudge: (d, big) => ((s.tempo = clamp(s.tempo + d * (big ? 10 : 1), 1, 255)), dirty()),
+        nudge: (d, big) => set("tempo", (x) => (x.tempo = clamp(x.tempo + d * (big ? 10 : 1), 1, 255))),
       },
-      { label: t("speed"), value: () => `${s.speed} ${t("ticks a line")}`, nudge: (d) => ((s.speed = clamp(s.speed + d, 1, 32)), dirty()) },
-      { label: t("lines a beat"), value: () => String(s.lpb), nudge: (d) => ((s.lpb = clamp(s.lpb + d, 1, 32)), dirty()) },
+      { label: t("speed"), value: () => `${s.speed} ${t("ticks a line")}`, nudge: (d) => set("speed", (x) => (x.speed = clamp(x.speed + d, 1, 32))) },
+      { label: t("lines a beat"), value: () => String(s.lpb), nudge: (d) => set("lines a beat", (x) => (x.lpb = clamp(x.lpb + d, 1, 32))) },
       {
         label: t("swing"),
         value: () => (s.swing ? `${s.swing}` : t("straight")),
-        nudge: (d, big) => {
-          const v = clamp((s.swing ?? 0) + d * (big ? 25 : 5), 0, 100);
-          if (v) s.swing = v;
-          else delete s.swing;
-          dirty();
-        },
+        nudge: (d, big) =>
+          set("swing", (x) => {
+            const v = clamp((x.swing ?? 0) + d * (big ? 25 : 5), 0, 100);
+            if (v) x.swing = v;
+            else delete x.swing;
+          }),
         tip: t("every other line longer: 50 a lazy shuffle, 100 triplets"),
       },
       { label: t("tracks"), value: () => `${s.tracks}`, nudge: (d) => s.tracks + d >= 1 && s.tracks + d <= MAX_TRACKS && run(`med tracks ${s.tracks + d}`) },
       {
         label: t("echo"),
         value: () => (echo ? t(echo.type) : t("off")),
-        nudge: (d) => {
-          const next = cycle(["off", "normal", "cross"], echo?.type ?? "off", d);
-          if (next === "off") delete s.echo;
-          else s.echo = cleanEcho({ type: next, ms: echo?.ms ?? 250, depth: echo?.depth ?? 2 })!;
-          dirty();
-        },
+        nudge: (d) =>
+          set("echo", (x) => {
+            const next = cycle(["off", "normal", "cross"], echo?.type ?? "off", d);
+            if (next === "off") delete x.echo;
+            else x.echo = cleanEcho({ type: next, ms: echo?.ms ?? 250, depth: echo?.depth ?? 2 })!;
+          }),
       },
       ...(echo
         ? [
-            { label: `  ${t("delay")}`, value: () => `${echo.ms} ms`, nudge: (d: 1 | -1, big: boolean) => ((echo.ms = clamp(echo.ms + d * (big ? 100 : 10), 1, ECHO_MAX_MS)), dirty()) },
-            { label: `  ${t("depth")}`, value: () => `${echo.depth} (${echo.depth <= 2 ? t("long") : echo.depth >= 5 ? t("short") : t("medium")})`, nudge: (d: 1 | -1) => ((echo.depth = clamp(echo.depth + d, 1, 6)), dirty()) },
+            { label: `  ${t("delay")}`, value: () => `${echo.ms} ms`, nudge: (d: 1 | -1, big: boolean) => set("echo delay", (x) => x.echo && (x.echo.ms = clamp(x.echo.ms + d * (big ? 100 : 10), 1, ECHO_MAX_MS))) },
+            { label: `  ${t("depth")}`, value: () => `${echo.depth} (${echo.depth <= 2 ? t("long") : echo.depth >= 5 ? t("short") : t("medium")})`, nudge: (d: 1 | -1) => set("echo depth", (x) => x.echo && (x.echo.depth = clamp(x.echo.depth + d, 1, 6))) },
           ]
         : []),
-      { label: t("LED filter"), value: () => (f.filter ? t("on") : t("off")), nudge: () => ((f.filter = !f.filter), dirty()), activate: () => ((f.filter = !f.filter), dirty()) },
+      { label: t("LED filter"), value: () => (f.filter ? t("on") : t("off")), nudge: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false), activate: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false) },
     ];
   };
 
@@ -153,9 +154,9 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
   const nudgeTrack = (tr: number, col: number, d: 1 | -1, big: boolean) => {
     const s = st.song!, e = st.editor!;
     const key = COLS[col];
-    if (key === "vol") e.setTrack(tr, { volume: (s.trackVolume[tr] ?? 64) + d * (big ? 8 : 1) });
-    else if (key === "pan") e.setTrack(tr, { pan: (s.trackPan[tr] ?? 0) + d * (big ? 0.25 : 0.05) });
-    else if (key === "strum") e.setTrack(tr, { strum: (s.trackStrum?.[tr] ?? 0) + d * (big ? 50 : 5) });
+    if (key === "vol") e.setTrack(tr, { volume: (s.trackVolume[tr] ?? 64) + d * (big ? 8 : 1) }, true);
+    else if (key === "pan") e.setTrack(tr, { pan: (s.trackPan[tr] ?? 0) + d * (big ? 0.25 : 0.05) }, true);
+    else if (key === "strum") e.setTrack(tr, { strum: (s.trackStrum?.[tr] ?? 0) + d * (big ? 50 : 5) }, true);
     else if (key === "mute" || key === "solo") run(`med ${key} ${tr + 1}`);
   };
   const activateTrack = (tr: number, col: number) => {
@@ -361,14 +362,18 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
   };
 
   /** the tabs over the right side: one line */
+  /**
+   * The tabs: wide, then tight, then short names when the side is narrow, so all four
+   * always show. No tooltip: it would cover the screen's first line (a kit's, the
+   * presets); the keys are written at the end when there's room.
+   */
   const drawTabs = (ui: UI, x: number, y: number, w: number) => {
     const c = ui.c;
+    const fit = (labels: string[]) => labels.reduce((n, l) => n + l.length + 2, 0) <= w;
+    const names = SCREENS.map((s) => t(s.label));
+    const labels = [names.map((l) => ` ${l} `), names, SCREENS.map((s) => t(s.short))].find(fit) ?? SCREENS.map((s) => s.key);
     let xx = x;
-    for (const s of SCREENS) {
-      const label = ` ${t(s.label)} `;
-      if (xx + label.length > x + w) break;
-      xx += ui.button(xx, y, label, () => (st.screen = s.id), { selected: st.screen === s.id, quiet: st.screen !== s.id, tip: `alt ${s.key}` });
-    }
+    SCREENS.forEach((s, i) => (xx += ui.button(xx, y, labels[i], () => (st.screen = s.id), { selected: st.screen === s.id, quiet: st.screen !== s.id })));
     if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E", { fg: c.faint });
   };
 

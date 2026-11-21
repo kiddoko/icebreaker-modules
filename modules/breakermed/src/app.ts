@@ -32,7 +32,7 @@ import type { Engine } from "./engine";
 import { pianoKey } from "./keys";
 import { nudgeIn, showIn } from "./dsp/params";
 import { settingsOf, synthOf, type SynthKind } from "./synths";
-import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, nudgeDrum } from "./dsp/drums";
+import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, drumKit, nudgeDrum } from "./dsp/drums";
 import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "./screens";
 import { chordsOf, hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
@@ -102,6 +102,11 @@ const colX = (col: number, chords: boolean) =>
 const colW = (col: number) => (col === 0 ? 3 : 1);
 const LEFT = 22;
 const HEX = "0123456789abcdef";
+
+/** the same settings (keys in any order): which preset or kit an instrument is right now */
+const stable = (v: unknown): string =>
+  v && typeof v === "object" ? (Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${k}:${stable((v as Record<string, unknown>)[k])}`).join(",")}}`) : JSON.stringify(v);
+export const sameSettings = (a: unknown, b: unknown) => stable(a) === stable(b);
 
 export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
@@ -295,7 +300,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (sk && def) ed()?.instrument(st.inst, def.label, (i) => {
       const p = settingsOf(i, sk);
       if (p) nudgeIn(sk.params, p, def.key, dir, big);
-    });
+    }, true);
   };
 
   /** A synth's settings (analog or FM): a row each (‹ value ›), the presets above. */
@@ -306,8 +311,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const PARAMS = sk.params;
     let x = inner.x + 1;
     ui.text(x, inner.y, t("preset"), { fg: c.muted });
-    x += t("preset").length + 1;
+    x += t("preset").length + 2; // room for the ▸ before the first
     const list = sk.presetsFor?.(p) ?? sk.presets;
+    // the preset these settings are (none once a setting moved): a mark before it, its name lit.
+    // Hovering lights any button; the mark is what says which one plays (after ⌘Z too)
+    const now = stable(p);
     for (const [k, name] of list.entries()) {
       // the last that fits leaves room for "…" when more follow
       const room = inner.x + inner.w - 1 - (k < list.length - 1 ? 4 : 0);
@@ -315,7 +323,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.button(x, inner.y, "…", () => {}, { cmd: `med ${sk.cmd} presets`, quiet: true, tip: `${list.slice(k).join(" · ")} · med ${sk.cmd} ${n} preset <name>` });
         break;
       }
-      x += ui.button(x, inner.y, name, () => {}, { cmd: `med ${sk.cmd} ${n} preset ${name}`, quiet: true }) + 1;
+      const on = stable(sk.preset(name)) === now;
+      if (on) ui.text(x - 1, inner.y, "▸", { fg: c.accent });
+      x += ui.button(x, inner.y, name, () => {}, { cmd: `med ${sk.cmd} ${n} preset ${name}`, quiet: !on }) + 1;
     }
     const top = inner.y + 2;
     const h = Math.max(1, inner.h - 3);
@@ -344,13 +354,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   /** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
   const nudgeKit = (drum: number, col: number, dir: 1 | -1, big = false) => {
     const key = DRUM_SETTINGS[col]?.key;
-    if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big));
+    if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big), true);
   };
   const nudgeGrit = (what: "bits" | "hold", dir: 1 | -1) =>
     ed()?.instrument(st.inst, "grit", (i) => {
       if (!i.drums) return;
       i.drums[what] = Math.max(1, Math.min(16, i.drums[what] + dir));
-    });
+    }, true);
 
   /** The drum machine: its kits above, then a row a drum (its note, its name, four settings). */
   const drawDrums = (ui: UI, inner: Rect, focused: boolean) => {
@@ -359,8 +369,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const kit = st.song!.instruments[st.inst].drums!;
     let x = inner.x + 1;
     ui.text(x, inner.y, t("kit"), { fg: c.muted });
-    x += t("kit").length + 1;
-    for (const name of Object.keys(DRUM_KITS)) x += ui.button(x, inner.y, name, () => {}, { cmd: `med drums ${n} kit ${name}`, quiet: true }) + 1;
+    x += t("kit").length + 2;
+    const now = stable(kit);
+    for (const name of Object.keys(DRUM_KITS)) {
+      const on = stable(drumKit(name)) === now;
+      if (on) ui.text(x - 1, inner.y, "▸", { fg: c.accent });
+      x += ui.button(x, inner.y, name, () => {}, { cmd: `med drums ${n} kit ${name}`, quiet: !on }) + 1;
+    }
     // the grit: after the kits, or on the line below when the page is narrow
     let gy = inner.y;
     x += 2;

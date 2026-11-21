@@ -54,7 +54,8 @@ delete       clear the column (or the selection)   ⌫ delete the line (⇧: in 
 alt enter    insert a line (⇧: in every track)
 ⇧ + arrows   select (a drag with the mouse too) alt C / X / V   copy · cut · paste
 alt Q / A    transpose up / down a semitone (⇧: an octave)
-⌘Z · ⌘⇧Z     undo · redo (500 steps)
+⌘Z · ⌘⇧Z     undo · redo (500 steps): notes, blocks, instruments, the song's settings
+             (tempo, swing, echo…), mutes; a setting nudged step by step is one undo
 alt B I S E  the screens: BLOCK · INSTRUMENT · SONG · EXPORT
 chord column    one digit, 1–F (when the song has chords: see Chords)
 mouse        click a cell, drag to select, the wheel scrolls, right-click: a menu (copy, paste,
@@ -190,6 +191,7 @@ new note lets the old one ring out.
 
 On the INSTRUMENT screen (alt I) an empty instrument has an **analog synth** button; a synth shows
 its presets above and a row a setting: ↑↓ choose, ←→ change (⇧ faster), or click ‹ ›, or the wheel.
+A ▸ marks the preset (or the drum kit) the instrument is right now; it goes once a setting moves.
 
 ```
 med synth <n|.> new [preset]     the instrument becomes a synth (bass acid lead pad pluck brass sine)

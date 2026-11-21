@@ -45,6 +45,29 @@ interface Step {
   label: string;
   undo: () => void;
   redo: () => void;
+  /** steps with the same key, close together, make one undo (a setting nudged step by step) */
+  merge?: string;
+  at?: number;
+  /** changes only how it plays here (mute, solo): not the song, so not "unsaved" */
+  view?: boolean;
+}
+
+/** nudges of one setting closer than this (ms) are one undo: ←→ held, the wheel, ‹ › clicked */
+export const MERGE_MS = 1000;
+
+/** the song's own settings (what the SONG screen and med tempo / echo / swing… change) */
+interface Settings {
+  title: string;
+  tempoMode: Song["tempoMode"];
+  tempo: number;
+  speed: number;
+  lpb: number;
+  transpose: number;
+  masterVolume: number;
+  flags: Song["flags"];
+  chordColumn?: boolean;
+  echo?: Song["echo"];
+  swing?: number;
 }
 
 const clone = (c: Cell): Cell => ({ note: c.note, inst: c.inst, ...(c.chord ? { chord: c.chord } : {}), cmd: [...c.cmd], val: [...c.val] });
@@ -57,6 +80,8 @@ export class Editor {
   /** something changed (the title shows ●, `med save` clears it) */
   dirty = false;
   onChange?: () => void;
+  /** the clock merging uses (tests set it) */
+  now: () => number = () => Date.now();
 
   constructor(public song: Song) {}
 
@@ -71,7 +96,7 @@ export class Editor {
     if (!s) return null;
     s.undo();
     this.undone.push(s);
-    this.changed();
+    this.changed(s);
     return s.label;
   }
 
@@ -79,14 +104,23 @@ export class Editor {
     const s = this.undone.pop();
     if (!s) return null;
     s.redo();
+    s.at = 0; // a redone step never merges with the next one
     this.done.push(s);
-    this.changed();
+    this.changed(s);
     return s.label;
   }
 
-  private changed(): void {
-    this.dirty = true;
+  private changed(s?: Step): void {
+    if (!s?.view) this.dirty = true;
     this.onChange?.();
+  }
+
+  /** a change as a snapshot of what it touches, before and after */
+  private snap<T>(label: string, take: () => T, put: (v: T) => void, fn: () => void, merge?: string): void {
+    const before = take();
+    fn();
+    const after = take();
+    this.record({ label, undo: () => put(before), redo: () => put(after), merge });
   }
 
   /** change some cells of a block, undoably */
@@ -103,7 +137,7 @@ export class Editor {
   }
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
-  private shape(label: string, fn: () => void): void {
+  private shape(label: string, fn: () => void, merge?: string): void {
     const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], strum: this.song.trackStrum ? [...this.song.trackStrum] : undefined, insts: [...this.song.instruments], chords: this.song.chords });
     const put = (s: ReturnType<typeof take>) => {
       this.song.blocks = s.blocks.map(cloneBlock);
@@ -118,17 +152,48 @@ export class Editor {
       if (s.chords) this.song.chords = s.chords;
       else delete this.song.chords;
     };
-    const before = take();
-    fn();
-    const after = take();
-    this.record({ label, undo: () => put(before), redo: () => put(after) });
+    this.snap(label, take, put, fn, merge);
   }
 
   private record(s: Step): void {
+    const last = this.done[this.done.length - 1];
+    const now = this.now();
+    // the same setting again, just after (and nothing undone since): the last step grows
+    if (s.merge && last?.merge === s.merge && !this.undone.length && now - (last.at ?? 0) <= MERGE_MS) {
+      last.redo = s.redo;
+      last.at = now;
+      return this.changed(s);
+    }
+    s.at = now;
     this.done.push(s);
     if (this.done.length > 500) this.done.shift();
     this.undone = [];
-    this.changed();
+    this.changed(s);
+  }
+
+  /**
+   * A change the editor can't snapshot itself (the engine's mutes): `apply` does it,
+   * `revert` takes it back. `view`: it changes only how the song plays here.
+   */
+  act(label: string, apply: () => void, revert: () => void, o: { view?: boolean } = {}): void {
+    apply();
+    this.record({ label, undo: revert, redo: apply, view: o.view });
+  }
+
+  /** the song's settings (tempo, speed, swing, echo, the LED filter, the title…), undoably; `merge`: a nudge */
+  settings(label: string, fn: (s: Song) => void, merge = false): void {
+    const s = this.song;
+    const take = (): Settings => ({
+      title: s.title, tempoMode: s.tempoMode, tempo: s.tempo, speed: s.speed, lpb: s.lpb, transpose: s.transpose, masterVolume: s.masterVolume,
+      flags: { ...s.flags }, chordColumn: s.chordColumn, echo: s.echo ? { ...s.echo } : undefined, swing: s.swing,
+    });
+    const put = (v: Settings) => {
+      Object.assign(s, { title: v.title, tempoMode: v.tempoMode, tempo: v.tempo, speed: v.speed, lpb: v.lpb, transpose: v.transpose, masterVolume: v.masterVolume, flags: { ...v.flags } });
+      for (const k of ["chordColumn", "swing"] as const) v[k] === undefined ? delete s[k] : ((s as unknown as Record<string, unknown>)[k] = v[k]);
+      if (v.echo) s.echo = { ...v.echo };
+      else delete s.echo;
+    };
+    this.snap(label, take, put, () => fn(s), merge ? `settings ${label}` : undefined);
   }
 
   // ── cells ───────────────────────────────────────────────────────────────
@@ -290,10 +355,19 @@ export class Editor {
   }
 
   /** a track's name, volume (0–64), pan (-1…1) and chord strum (ms) */
-  setTrack(track: number, what: { name?: string; volume?: number; pan?: number; strum?: number }): void {
+  setTrack(track: number, what: { name?: string; volume?: number; pan?: number; strum?: number }, merge = false): void {
     if (track < 0 || track >= this.song.tracks) return;
-    this.shape("track", () => {
-      const s = this.song;
+    const s = this.song;
+    // only the tracks' settings change: no need to keep the blocks
+    const take = () => ({ vol: [...s.trackVolume], pan: [...s.trackPan], names: [...s.trackNames], strum: s.trackStrum ? [...s.trackStrum] : undefined });
+    const put = (v: ReturnType<typeof take>) => {
+      s.trackVolume = [...v.vol];
+      s.trackPan = [...v.pan];
+      s.trackNames = [...v.names];
+      if (v.strum) s.trackStrum = [...v.strum];
+      else delete s.trackStrum;
+    };
+    this.snap("track", take, put, () => {
       if (what.name !== undefined) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
       if (what.volume !== undefined) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
       if (what.pan !== undefined) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
@@ -302,17 +376,20 @@ export class Editor {
         s.trackStrum[track] = Math.max(0, Math.min(MAX_STRUM_MS, Math.round(what.strum)));
         if (s.trackStrum.every((x) => !x)) delete s.trackStrum;
       }
-    });
+    }, merge ? `track ${track} ${Object.keys(what).join(",")}` : undefined);
   }
 
   /**
    * Change an instrument (its sound, its loop, its settings), undoably: `fn` gets a copy
    * (the sound arrays are replaced, never changed in place, so ⌘Z brings the old ones back).
    */
-  instrument(index: number, label: string, fn: (ins: Instrument) => void): void {
+  instrument(index: number, label: string, fn: (ins: Instrument) => void, merge = false): void {
     const old = this.song.instruments[index];
     if (!old) return;
-    this.shape(label, () => {
+    // only this slot changes: the snapshot is the instrument itself (a new object each change)
+    const take = () => this.song.instruments[index];
+    const put = (v: Instrument) => (this.song.instruments[index] = v);
+    this.snap(label, take, put, () => {
       const copy: Instrument = { ...old };
       if (old.synth) copy.synth = structuredClone(old.synth); // a synth's settings are changed in place
       if (old.drums) copy.drums = structuredClone(old.drums);
@@ -323,7 +400,7 @@ export class Editor {
       if (copy.loopLength <= 2) (copy.loopStart = 0), (copy.loopLength = 0);
       if (!computed(copy)) copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
       this.song.instruments[index] = copy;
-    });
+    }, merge ? `instrument ${index} ${label}` : undefined);
   }
 
   /** put instruments in the first free slots (or at `at`): their numbers (0-based), as many as fit */

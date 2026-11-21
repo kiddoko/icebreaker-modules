@@ -383,6 +383,12 @@ var Editor = class {
 			false
 		);
 		_defineProperty(this, "onChange", void 0);
+		_defineProperty(
+			this,
+			/** the clock merging uses (tests set it) */
+			"now",
+			() => Date.now()
+		);
 		this.song = song;
 	}
 	get canUndo() {
@@ -393,20 +399,33 @@ var Editor = class {
 		if (!s) return null;
 		s.undo();
 		this.undone.push(s);
-		this.changed();
+		this.changed(s);
 		return s.label;
 	}
 	redo() {
 		const s = this.undone.pop();
 		if (!s) return null;
 		s.redo();
+		s.at = 0;
 		this.done.push(s);
-		this.changed();
+		this.changed(s);
 		return s.label;
 	}
-	changed() {
-		this.dirty = true;
+	changed(s) {
+		if (!s?.view) this.dirty = true;
 		this.onChange?.();
+	}
+	/** a change as a snapshot of what it touches, before and after */
+	snap(label, take, put, fn, merge) {
+		const before = take();
+		fn();
+		const after = take();
+		this.record({
+			label,
+			undo: () => put(before),
+			redo: () => put(after),
+			merge
+		});
 	}
 	/** change some cells of a block, undoably */
 	cells(label, block, at, fn) {
@@ -425,7 +444,7 @@ var Editor = class {
 		});
 	}
 	/** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
-	shape(label, fn) {
+	shape(label, fn, merge) {
 		const take = () => ({
 			blocks: this.song.blocks.map(cloneBlock),
 			sequence: [...this.song.sequence],
@@ -450,20 +469,67 @@ var Editor = class {
 			if (s.chords) this.song.chords = s.chords;
 			else delete this.song.chords;
 		};
-		const before = take();
-		fn();
-		const after = take();
-		this.record({
-			label,
-			undo: () => put(before),
-			redo: () => put(after)
-		});
+		this.snap(label, take, put, fn, merge);
 	}
 	record(s) {
+		const last = this.done[this.done.length - 1];
+		const now = this.now();
+		if (s.merge && last?.merge === s.merge && !this.undone.length && now - (last.at ?? 0) <= 1e3) {
+			last.redo = s.redo;
+			last.at = now;
+			return this.changed(s);
+		}
+		s.at = now;
 		this.done.push(s);
 		if (this.done.length > 500) this.done.shift();
 		this.undone = [];
-		this.changed();
+		this.changed(s);
+	}
+	/**
+	* A change the editor can't snapshot itself (the engine's mutes): `apply` does it,
+	* `revert` takes it back. `view`: it changes only how the song plays here.
+	*/
+	act(label, apply, revert, o = {}) {
+		apply();
+		this.record({
+			label,
+			undo: revert,
+			redo: apply,
+			view: o.view
+		});
+	}
+	/** the song's settings (tempo, speed, swing, echo, the LED filter, the title…), undoably; `merge`: a nudge */
+	settings(label, fn, merge = false) {
+		const s = this.song;
+		const take = () => ({
+			title: s.title,
+			tempoMode: s.tempoMode,
+			tempo: s.tempo,
+			speed: s.speed,
+			lpb: s.lpb,
+			transpose: s.transpose,
+			masterVolume: s.masterVolume,
+			flags: { ...s.flags },
+			chordColumn: s.chordColumn,
+			echo: s.echo ? { ...s.echo } : void 0,
+			swing: s.swing
+		});
+		const put = (v) => {
+			Object.assign(s, {
+				title: v.title,
+				tempoMode: v.tempoMode,
+				tempo: v.tempo,
+				speed: v.speed,
+				lpb: v.lpb,
+				transpose: v.transpose,
+				masterVolume: v.masterVolume,
+				flags: { ...v.flags }
+			});
+			for (const k of ["chordColumn", "swing"]) v[k] === void 0 ? delete s[k] : s[k] = v[k];
+			if (v.echo) s.echo = { ...v.echo };
+			else delete s.echo;
+		};
+		this.snap(label, take, put, () => fn(s), merge ? `settings ${label}` : void 0);
 	}
 	/** a note (and the instrument, when one is given) */
 	writeNote(block, line, track, note, inst = 0) {
@@ -608,10 +674,23 @@ var Editor = class {
 		});
 	}
 	/** a track's name, volume (0–64), pan (-1…1) and chord strum (ms) */
-	setTrack(track, what) {
+	setTrack(track, what, merge = false) {
 		if (track < 0 || track >= this.song.tracks) return;
-		this.shape("track", () => {
-			const s = this.song;
+		const s = this.song;
+		const take = () => ({
+			vol: [...s.trackVolume],
+			pan: [...s.trackPan],
+			names: [...s.trackNames],
+			strum: s.trackStrum ? [...s.trackStrum] : void 0
+		});
+		const put = (v) => {
+			s.trackVolume = [...v.vol];
+			s.trackPan = [...v.pan];
+			s.trackNames = [...v.names];
+			if (v.strum) s.trackStrum = [...v.strum];
+			else delete s.trackStrum;
+		};
+		this.snap("track", take, put, () => {
 			if (what.name !== void 0) s.trackNames[track] = what.name.replace(/[\u0000-\u001f]/g, "").slice(0, 24);
 			if (what.volume !== void 0) s.trackVolume[track] = Math.max(0, Math.min(64, Math.round(what.volume)));
 			if (what.pan !== void 0) s.trackPan[track] = Math.max(-1, Math.min(1, what.pan));
@@ -620,16 +699,18 @@ var Editor = class {
 				s.trackStrum[track] = Math.max(0, Math.min(200, Math.round(what.strum)));
 				if (s.trackStrum.every((x) => !x)) delete s.trackStrum;
 			}
-		});
+		}, merge ? `track ${track} ${Object.keys(what).join(",")}` : void 0);
 	}
 	/**
 	* Change an instrument (its sound, its loop, its settings), undoably: `fn` gets a copy
 	* (the sound arrays are replaced, never changed in place, so ⌘Z brings the old ones back).
 	*/
-	instrument(index, label, fn) {
+	instrument(index, label, fn, merge = false) {
 		const old = this.song.instruments[index];
 		if (!old) return;
-		this.shape(label, () => {
+		const take = () => this.song.instruments[index];
+		const put = (v) => this.song.instruments[index] = v;
+		this.snap(label, take, put, () => {
 			const copy = { ...old };
 			if (old.synth) copy.synth = structuredClone(old.synth);
 			if (old.drums) copy.drums = structuredClone(old.drums);
@@ -640,7 +721,7 @@ var Editor = class {
 			if (copy.loopLength <= 2) copy.loopStart = 0, copy.loopLength = 0;
 			if (!computed(copy)) copy.kind = copy.data.length ? copy.kind === "empty" ? "sample" : copy.kind : "empty";
 			this.song.instruments[index] = copy;
-		});
+		}, merge ? `instrument ${index} ${label}` : void 0);
 	}
 	/** put instruments in the first free slots (or at `at`): their numbers (0-based), as many as fit */
 	addInstruments(list, at) {
@@ -5037,21 +5118,25 @@ var SCREENS = [
 	{
 		id: "block",
 		label: "BLOCK",
+		short: "BLK",
 		key: "B"
 	},
 	{
 		id: "instrument",
 		label: "INSTRUMENT",
+		short: "INST",
 		key: "I"
 	},
 	{
 		id: "song",
 		label: "SONG",
+		short: "SONG",
 		key: "S"
 	},
 	{
 		id: "export",
 		label: "EXPORT",
+		short: "EXP",
 		key: "E"
 	}
 ];
@@ -5118,7 +5203,8 @@ function makeScreens(ib, engine, st) {
 		if (!a.encoders || !a.encode) return void (encoders = "old");
 		a.encoders().then((e) => (encoders = e.installed ? "ready" : e.supported ? "missing" : "none", ib.ui.redraw())).catch(() => encoders = "unknown");
 	};
-	const dirty = () => st.editor && (st.editor.dirty = true);
+	/** a setting of the song changed through the editor (undoable); `merge`: a nudge, one undo for a run of them */
+	const set = (label, fn, merge = true) => st.editor?.settings(label, fn, merge);
 	const rename = async (tr) => {
 		const s = st.song;
 		const name = await ib.ui.prompt(t("track name"), {
@@ -5134,32 +5220,31 @@ function makeScreens(ib, engine, st) {
 			{
 				label: t("title"),
 				value: () => s.title || "—",
-				activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (s.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60), dirty(), ib.ui.redraw()))
+				activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (set("title", (x) => x.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60), false), ib.ui.redraw()))
 			},
 			{
 				label: t("tempo"),
 				value: () => `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix).toFixed(0)})`,
-				nudge: (d, big) => (s.tempo = clamp(s.tempo + d * (big ? 10 : 1), 1, 255), dirty())
+				nudge: (d, big) => set("tempo", (x) => x.tempo = clamp(x.tempo + d * (big ? 10 : 1), 1, 255))
 			},
 			{
 				label: t("speed"),
 				value: () => `${s.speed} ${t("ticks a line")}`,
-				nudge: (d) => (s.speed = clamp(s.speed + d, 1, 32), dirty())
+				nudge: (d) => set("speed", (x) => x.speed = clamp(x.speed + d, 1, 32))
 			},
 			{
 				label: t("lines a beat"),
 				value: () => String(s.lpb),
-				nudge: (d) => (s.lpb = clamp(s.lpb + d, 1, 32), dirty())
+				nudge: (d) => set("lines a beat", (x) => x.lpb = clamp(x.lpb + d, 1, 32))
 			},
 			{
 				label: t("swing"),
 				value: () => s.swing ? `${s.swing}` : t("straight"),
-				nudge: (d, big) => {
-					const v = clamp((s.swing ?? 0) + d * (big ? 25 : 5), 0, 100);
-					if (v) s.swing = v;
-					else delete s.swing;
-					dirty();
-				},
+				nudge: (d, big) => set("swing", (x) => {
+					const v = clamp((x.swing ?? 0) + d * (big ? 25 : 5), 0, 100);
+					if (v) x.swing = v;
+					else delete x.swing;
+				}),
 				tip: t("every other line longer: 50 a lazy shuffle, 100 triplets")
 			},
 			{
@@ -5170,35 +5255,34 @@ function makeScreens(ib, engine, st) {
 			{
 				label: t("echo"),
 				value: () => echo ? t(echo.type) : t("off"),
-				nudge: (d) => {
+				nudge: (d) => set("echo", (x) => {
 					const next = cycle([
 						"off",
 						"normal",
 						"cross"
 					], echo?.type ?? "off", d);
-					if (next === "off") delete s.echo;
-					else s.echo = cleanEcho({
+					if (next === "off") delete x.echo;
+					else x.echo = cleanEcho({
 						type: next,
 						ms: echo?.ms ?? 250,
 						depth: echo?.depth ?? 2
 					});
-					dirty();
-				}
+				})
 			},
 			...echo ? [{
 				label: `  ${t("delay")}`,
 				value: () => `${echo.ms} ms`,
-				nudge: (d, big) => (echo.ms = clamp(echo.ms + d * (big ? 100 : 10), 1, ECHO_MAX_MS), dirty())
+				nudge: (d, big) => set("echo delay", (x) => x.echo && (x.echo.ms = clamp(x.echo.ms + d * (big ? 100 : 10), 1, 2e3)))
 			}, {
 				label: `  ${t("depth")}`,
 				value: () => `${echo.depth} (${echo.depth <= 2 ? t("long") : echo.depth >= 5 ? t("short") : t("medium")})`,
-				nudge: (d) => (echo.depth = clamp(echo.depth + d, 1, 6), dirty())
+				nudge: (d) => set("echo depth", (x) => x.echo && (x.echo.depth = clamp(x.echo.depth + d, 1, 6)))
 			}] : [],
 			{
 				label: t("LED filter"),
 				value: () => f.filter ? t("on") : t("off"),
-				nudge: () => (f.filter = !f.filter, dirty()),
-				activate: () => (f.filter = !f.filter, dirty())
+				nudge: () => set("LED filter", (x) => x.flags.filter = !x.flags.filter, false),
+				activate: () => set("LED filter", (x) => x.flags.filter = !x.flags.filter, false)
 			}
 		];
 	};
@@ -5214,9 +5298,9 @@ function makeScreens(ib, engine, st) {
 	const nudgeTrack = (tr, col, d, big) => {
 		const s = st.song, e = st.editor;
 		const key = COLS[col];
-		if (key === "vol") e.setTrack(tr, { volume: (s.trackVolume[tr] ?? 64) + d * (big ? 8 : 1) });
-		else if (key === "pan") e.setTrack(tr, { pan: (s.trackPan[tr] ?? 0) + d * (big ? .25 : .05) });
-		else if (key === "strum") e.setTrack(tr, { strum: (s.trackStrum?.[tr] ?? 0) + d * (big ? 50 : 5) });
+		if (key === "vol") e.setTrack(tr, { volume: (s.trackVolume[tr] ?? 64) + d * (big ? 8 : 1) }, true);
+		else if (key === "pan") e.setTrack(tr, { pan: (s.trackPan[tr] ?? 0) + d * (big ? .25 : .05) }, true);
+		else if (key === "strum") e.setTrack(tr, { strum: (s.trackStrum?.[tr] ?? 0) + d * (big ? 50 : 5) }, true);
 		else if (key === "mute" || key === "solo") run(`med ${key} ${tr + 1}`);
 	};
 	const activateTrack = (tr, col) => {
@@ -5515,18 +5599,25 @@ function makeScreens(ib, engine, st) {
 		return false;
 	};
 	/** the tabs over the right side: one line */
+	/**
+	* The tabs: wide, then tight, then short names when the side is narrow, so all four
+	* always show. No tooltip: it would cover the screen's first line (a kit's, the
+	* presets); the keys are written at the end when there's room.
+	*/
 	const drawTabs = (ui, x, y, w) => {
 		const c = ui.c;
+		const fit = (labels) => labels.reduce((n, l) => n + l.length + 2, 0) <= w;
+		const names = SCREENS.map((s) => t(s.label));
+		const labels = [
+			names.map((l) => ` ${l} `),
+			names,
+			SCREENS.map((s) => t(s.short))
+		].find(fit) ?? SCREENS.map((s) => s.key);
 		let xx = x;
-		for (const s of SCREENS) {
-			const label = ` ${t(s.label)} `;
-			if (xx + label.length > x + w) break;
-			xx += ui.button(xx, y, label, () => st.screen = s.id, {
-				selected: st.screen === s.id,
-				quiet: st.screen !== s.id,
-				tip: `alt ${s.key}`
-			});
-		}
+		SCREENS.forEach((s, i) => xx += ui.button(xx, y, labels[i], () => st.screen = s.id, {
+			selected: st.screen === s.id,
+			quiet: st.screen !== s.id
+		}));
 		if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E", { fg: c.faint });
 	};
 	return {
@@ -5589,6 +5680,8 @@ var colX = (col, chords) => col === 0 ? 0 : col <= 2 ? 3 + col : col === 3 ? 7 :
 var colW = (col) => col === 0 ? 3 : 1;
 var LEFT = 22;
 var HEX = "0123456789abcdef";
+/** the same settings (keys in any order): which preset or kit an instrument is right now */
+var stable = (v) => v && typeof v === "object" ? Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${k}:${stable(v[k])}`).join(",")}}` : JSON.stringify(v);
 function makeApp(ib, engine, st) {
 	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
 	const run = (line) => void ib.shell.run(line);
@@ -5906,7 +5999,7 @@ function makeApp(ib, engine, st) {
 		if (sk && def) ed()?.instrument(st.inst, def.label, (i) => {
 			const p = settingsOf(i, sk);
 			if (p) nudgeIn(sk.params, p, def.key, dir, big);
-		});
+		}, true);
 	};
 	/** A synth's settings (analog or FM): a row each (‹ value ›), the presets above. */
 	const drawSynth = (ui, inner, focused, sk) => {
@@ -5916,8 +6009,9 @@ function makeApp(ib, engine, st) {
 		const PARAMS = sk.params;
 		let x = inner.x + 1;
 		ui.text(x, inner.y, t("preset"), { fg: c.muted });
-		x += t("preset").length + 1;
+		x += t("preset").length + 2;
 		const list = sk.presetsFor?.(p) ?? sk.presets;
+		const now = stable(p);
 		for (const [k, name] of list.entries()) {
 			const room = inner.x + inner.w - 1 - (k < list.length - 1 ? 4 : 0);
 			if (x + name.length + 2 > room) {
@@ -5928,9 +6022,11 @@ function makeApp(ib, engine, st) {
 				});
 				break;
 			}
+			const on = stable(sk.preset(name)) === now;
+			if (on) ui.text(x - 1, inner.y, "▸", { fg: c.accent });
 			x += ui.button(x, inner.y, name, () => {}, {
 				cmd: `med ${sk.cmd} ${n} preset ${name}`,
-				quiet: true
+				quiet: !on
 			}) + 1;
 		}
 		const top = inner.y + 2;
@@ -5979,12 +6075,12 @@ function makeApp(ib, engine, st) {
 	/** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
 	const nudgeKit = (drum, col, dir, big = false) => {
 		const key = DRUM_SETTINGS[col]?.key;
-		if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big));
+		if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big), true);
 	};
 	const nudgeGrit = (what, dir) => ed()?.instrument(st.inst, "grit", (i) => {
 		if (!i.drums) return;
 		i.drums[what] = Math.max(1, Math.min(16, i.drums[what] + dir));
-	});
+	}, true);
 	/** The drum machine: its kits above, then a row a drum (its note, its name, four settings). */
 	const drawDrums = (ui, inner, focused) => {
 		const c = ui.c;
@@ -5992,11 +6088,16 @@ function makeApp(ib, engine, st) {
 		const kit = st.song.instruments[st.inst].drums;
 		let x = inner.x + 1;
 		ui.text(x, inner.y, t("kit"), { fg: c.muted });
-		x += t("kit").length + 1;
-		for (const name of Object.keys(DRUM_KITS)) x += ui.button(x, inner.y, name, () => {}, {
-			cmd: `med drums ${n} kit ${name}`,
-			quiet: true
-		}) + 1;
+		x += t("kit").length + 2;
+		const now = stable(kit);
+		for (const name of Object.keys(DRUM_KITS)) {
+			const on = stable(drumKit(name)) === now;
+			if (on) ui.text(x - 1, inner.y, "▸", { fg: c.accent });
+			x += ui.button(x, inner.y, name, () => {}, {
+				cmd: `med drums ${n} kit ${name}`,
+				quiet: !on
+			}) + 1;
+		}
 		let gy = inner.y;
 		x += 2;
 		if (x + 30 >= inner.x + inner.w) x = inner.x + 1, gy = inner.y + 1;
@@ -9116,8 +9217,7 @@ function registerCommands(ib, engine, st) {
 					}
 					case "filter": {
 						const s = need();
-						s.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !s.flags.filter;
-						st.editor.dirty = true;
+						st.editor.settings("LED filter", (x) => x.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !x.flags.filter);
 						ctx.out(s.flags.filter ? "the A500's LED filter: on (a soft, warm top)\n" : "the A500's LED filter: off\n");
 						return 0;
 					}
@@ -9253,14 +9353,18 @@ function registerCommands(ib, engine, st) {
 						const s = need();
 						const tr = parseInt(rest[0] ?? "", 10) - 1;
 						if (!(tr >= 0 && tr < s.tracks)) return ctx.err(`med: a track is 1–${s.tracks}\n`), 1;
-						if (sub === "mute") engine.muted.has(tr) ? engine.muted.delete(tr) : engine.muted.add(tr);
+						const before = new Set(engine.muted);
+						const after = new Set(engine.muted);
+						if (sub === "mute") after.has(tr) ? after.delete(tr) : after.add(tr);
 						else {
-							const alone = engine.muted.size === s.tracks - 1 && !engine.muted.has(tr);
-							engine.muted.clear();
+							const alone = after.size === s.tracks - 1 && !after.has(tr);
+							after.clear();
 							if (!alone) {
-								for (let i = 0; i < s.tracks; i++) if (i !== tr) engine.muted.add(i);
+								for (let i = 0; i < s.tracks; i++) if (i !== tr) after.add(i);
 							}
 						}
+						const put = (m) => () => (engine.muted.clear(), m.forEach((x) => engine.muted.add(x)));
+						st.editor.act(sub, put(after), put(before), { view: true });
 						ctx.out(engine.muted.size ? `muted: ${[...engine.muted].map((x) => x + 1).sort((a, b) => a - b).join(" ")}\n` : "every track plays\n");
 						return 0;
 					}
@@ -9278,7 +9382,7 @@ function registerCommands(ib, engine, st) {
 					case "echo": {
 						const s = need();
 						const [type, msS, depthS] = rest;
-						if (type === "off") delete s.echo;
+						if (type === "off") st.editor.settings("echo", (x) => delete x.echo);
 						else if (type === "normal" || type === "cross") {
 							const e = cleanEcho({
 								type,
@@ -9286,9 +9390,8 @@ function registerCommands(ib, engine, st) {
 								depth: depthS ? parseInt(depthS, 10) : s.echo?.depth ?? 2
 							});
 							if (!e || msS && !(parseInt(msS, 10) > 0) || depthS && !(parseInt(depthS, 10) >= 1 && parseInt(depthS, 10) <= 6)) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
-							s.echo = e;
+							st.editor.settings("echo", (x) => x.echo = e);
 						} else if (type !== void 0) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
-						if (type !== void 0) st.editor.dirty = true;
 						const e = s.echo;
 						ctx.out(e ? `echo: ${e.type} · ${e.ms} ms · depth ${e.depth} (each repeat at 1/${2 ** e.depth})\n` : "echo: off\n");
 						return 0;
@@ -9310,8 +9413,7 @@ function registerCommands(ib, engine, st) {
 						const s = need();
 						const [op, ...args] = rest;
 						if (op === "on" || op === "off") {
-							s.chordColumn = op === "on";
-							st.editor.dirty = true;
+							st.editor.settings("chord column", (x) => x.chordColumn = op === "on");
 							ctx.out(`the chord column: ${op}\n`);
 							return 0;
 						}
@@ -9420,14 +9522,11 @@ function registerCommands(ib, engine, st) {
 					case "tempo":
 					case "speed":
 					case "lpb": {
-						const s = need();
+						need();
 						const n = parseInt(rest[0] ?? "", 10);
 						const [lo, hi] = sub === "tempo" ? [1, 255] : sub === "speed" ? [1, 32] : [1, 32];
 						if (!(n >= lo && n <= hi)) return ctx.err(`med ${sub} ${lo}–${hi}\n`), 1;
-						if (sub === "tempo") s.tempo = n;
-						else if (sub === "speed") s.speed = n;
-						else s.lpb = n;
-						st.editor.dirty = true;
+						st.editor.settings(sub, (x) => sub === "tempo" ? x.tempo = n : sub === "speed" ? x.speed = n : x.lpb = n);
 						return 0;
 					}
 					case "swing": {
@@ -9435,9 +9534,7 @@ function registerCommands(ib, engine, st) {
 						const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
 						if (rest[0] === void 0) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), 0;
 						if (!(n >= 0 && n <= 100)) return ctx.err("med swing <0–100> | off (0 straight, 50 a lazy shuffle, 100 triplets)\n"), 1;
-						if (n) s.swing = n;
-						else delete s.swing;
-						st.editor.dirty = true;
+						st.editor.settings("swing", (x) => n ? x.swing = n : delete x.swing);
 						ctx.out(n ? `swing ${n}: every other line ${Math.round(swingFactor(n, 0) / swingFactor(n, 1) * 100) / 100}× the next\n` : "swing off: straight\n");
 						return 0;
 					}
@@ -9692,6 +9789,10 @@ var FR = {
 	INSTRUMENTS: "INSTRUMENTS",
 	"(no name)": "(sans nom)",
 	BLOCK: "BLOC",
+	BLK: "BLOC",
+	"echo delay": "délai de l'écho",
+	"echo depth": "profondeur de l'écho",
+	"chord column": "colonne d'accords",
 	line: "ligne",
 	track: "piste",
 	"mute / unmute this track": "couper / rétablir cette piste",
