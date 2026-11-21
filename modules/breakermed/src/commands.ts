@@ -210,8 +210,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           }
           case "filter": {
             const s = need();
-            s.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !s.flags.filter;
-            st.editor!.dirty = true;
+            st.editor!.settings("LED filter", (x) => (x.flags.filter = rest[0] === "on" ? true : rest[0] === "off" ? false : !x.flags.filter));
             ctx.out(s.flags.filter ? "the A500's LED filter: on (a soft, warm top)\n" : "the A500's LED filter: off\n");
             return 0;
           }
@@ -323,12 +322,17 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const s = need();
             const tr = parseInt(rest[0] ?? "", 10) - 1;
             if (!(tr >= 0 && tr < s.tracks)) return ctx.err(`med: a track is 1–${s.tracks}\n`), 1;
-            if (sub === "mute") engine.muted.has(tr) ? engine.muted.delete(tr) : engine.muted.add(tr);
+            // undoable (⌘Z), but not a change to the song: the file doesn't keep mutes
+            const before = new Set(engine.muted);
+            const after = new Set(engine.muted);
+            if (sub === "mute") after.has(tr) ? after.delete(tr) : after.add(tr);
             else {
-              const alone = engine.muted.size === s.tracks - 1 && !engine.muted.has(tr);
-              engine.muted.clear();
-              if (!alone) for (let i = 0; i < s.tracks; i++) if (i !== tr) engine.muted.add(i);
+              const alone = after.size === s.tracks - 1 && !after.has(tr);
+              after.clear();
+              if (!alone) for (let i = 0; i < s.tracks; i++) if (i !== tr) after.add(i);
             }
+            const put = (m: Set<number>) => () => (engine.muted.clear(), m.forEach((x) => engine.muted.add(x)));
+            st.editor!.act(sub, put(after), put(before), { view: true });
             ctx.out(engine.muted.size ? `muted: ${[...engine.muted].map((x) => x + 1).sort((a, b) => a - b).join(" ")}\n` : "every track plays\n");
             return 0;
           }
@@ -349,13 +353,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             // med echo off | normal|cross [ms] [depth 1–6]: OctaMED's echo on the whole mix
             const s = need();
             const [type, msS, depthS] = rest;
-            if (type === "off") delete s.echo;
+            if (type === "off") st.editor!.settings("echo", (x) => delete x.echo);
             else if (type === "normal" || type === "cross") {
               const e = cleanEcho({ type, ms: msS ? parseInt(msS, 10) : s.echo?.ms ?? 250, depth: depthS ? parseInt(depthS, 10) : s.echo?.depth ?? 2 });
               if (!e || (msS && !(parseInt(msS, 10) > 0)) || (depthS && !(parseInt(depthS, 10) >= 1 && parseInt(depthS, 10) <= 6))) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
-              s.echo = e;
+              st.editor!.settings("echo", (x) => (x.echo = e));
             } else if (type !== undefined) return ctx.err(`med echo off | normal|cross [ms 1–${ECHO_MAX_MS}] [depth 1–6: 1 long, 6 short]\n`), 1;
-            if (type !== undefined) st.editor!.dirty = true;
             const e = s.echo;
             ctx.out(e ? `echo: ${e.type} · ${e.ms} ms · depth ${e.depth} (each repeat at 1/${2 ** e.depth})\n` : "echo: off\n");
             return 0;
@@ -378,8 +381,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const s = need();
             const [op, ...args] = rest;
             if (op === "on" || op === "off") {
-              s.chordColumn = op === "on";
-              st.editor!.dirty = true;
+              st.editor!.settings("chord column", (x) => (x.chordColumn = op === "on"));
               ctx.out(`the chord column: ${op}\n`);
               return 0;
             }
@@ -487,14 +489,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "tempo":
           case "speed":
           case "lpb": {
-            const s = need();
+            need();
             const n = parseInt(rest[0] ?? "", 10);
             const [lo, hi] = sub === "tempo" ? [1, 255] : sub === "speed" ? [1, 32] : [1, 32];
             if (!(n >= lo && n <= hi)) return ctx.err(`med ${sub} ${lo}–${hi}\n`), 1;
-            if (sub === "tempo") s.tempo = n;
-            else if (sub === "speed") s.speed = n;
-            else s.lpb = n;
-            st.editor!.dirty = true;
+            st.editor!.settings(sub, (x) => (sub === "tempo" ? (x.tempo = n) : sub === "speed" ? (x.speed = n) : (x.lpb = n)));
             return 0;
           }
           case "swing": {
@@ -503,9 +502,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
             if (rest[0] === undefined) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), 0;
             if (!(n >= 0 && n <= 100)) return ctx.err("med swing <0–100> | off (0 straight, 50 a lazy shuffle, 100 triplets)\n"), 1;
-            if (n) s.swing = n;
-            else delete s.swing;
-            st.editor!.dirty = true;
+            st.editor!.settings("swing", (x) => (n ? (x.swing = n) : delete x.swing));
             ctx.out(n ? `swing ${n}: every other line ${Math.round((swingFactor(n, 0) / swingFactor(n, 1)) * 100) / 100}× the next\n` : "swing off: straight\n");
             return 0;
           }

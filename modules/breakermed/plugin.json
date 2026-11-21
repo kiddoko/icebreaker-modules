@@ -1,7 +1,7 @@
 {
   "id": "breakermed",
   "name": "BreakerMED (beta)",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "A tracker like OctaMED and ProTracker: .med and .mod songs (and its own .bmed), 8 to 16 tracks, a sampler, analog, FM and chip synths (NES, Game Boy, C64-style…), a drum machine, chords, exports to WAV, FLAC, MP3… — in ASCII, keyboard, mouse and gamepad",
   "author": "icebreaker",
   "icon": "♫",
