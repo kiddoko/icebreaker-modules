@@ -100,6 +100,14 @@ med effects                 every command, one line each
 med info                    the song's settings and instruments
 ```
 
+## Autosave
+
+A copy of the song **1.5 s after each change** (a run of keys makes one copy; at most every 30 s
+while it plays), in `songs/.recovery/`: never over your song. The top line says
+"✓ autosaved 21:14". Opening the song again offers the unsaved changes back; so do START (**R**)
+and `med recover`. Closing the page with changes asks: save, don't save, or cancel. `med save`
+makes the copy useless, so it's forgotten. `med autosave on|off`, `med autosave every <10–300 s>`.
+
 ## Its own format: .bmed
 
 A song is a folder you can read: `song.json` holds the settings, the tracks (names, volume, pan),

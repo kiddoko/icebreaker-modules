@@ -6050,6 +6050,8 @@ var GUIDE = [
 			["med open", "open a .med, .mod or .bmed of the vault"],
 			["med demo", "the demo song"],
 			["med save", "save (a new song becomes a .bmed in songs/)"],
+			["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
+			["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
 			["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
 			["space", "stop · when stopped: EDIT MODE on / off"]
 		]
@@ -6256,6 +6258,9 @@ function makeStart(ib) {
 	/** when the logo started building (the first time the page is drawn) */
 	let since = 0;
 	let row = 0;
+	/** the newest autosaved copy never saved (R: back on the page) */
+	let rescue = null;
+	const setRescue = (r) => rescue = r;
 	const draw = (ui, r, error) => {
 		const c = ui.c;
 		const now = performance.now();
@@ -6312,10 +6317,25 @@ function makeStart(ib) {
 			});
 		});
 		ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
-		if (error) ui.textCenter(r, box.y + box.h + 1, error, { fg: c.error });
+		let below = box.y + box.h + 1;
+		if (rescue && below < r.y + r.h) {
+			const label = `R  ${t("recover")} “${rescue.title}” · ${t("autosaved")} ${new Date(rescue.at).toLocaleString([], {
+				weekday: "short",
+				hour: "2-digit",
+				minute: "2-digit"
+			})}`;
+			const w = Math.min(r.w - 2, label.length + 2);
+			ui.button(r.x + Math.floor((r.w - w) / 2), below, label, () => run("med recover"), {
+				cmd: "med recover",
+				tip: t("changes that were never saved, kept by the autosave")
+			});
+			below += 2;
+		}
+		if (error) ui.textCenter(r, below, error, { fg: c.error });
 	};
 	const key = (k) => {
 		const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
+		if (letter === "R" && rescue && !k.alt && !k.ctrl && !k.meta) return run("med recover"), true;
 		const hit = START.find((ch) => ch.key === letter);
 		if (hit && !k.alt && !k.ctrl && !k.meta) return run(hit.cmd), true;
 		switch (k.key) {
@@ -6329,7 +6349,8 @@ function makeStart(ib) {
 	};
 	return {
 		draw,
-		key
+		key,
+		setRescue
 	};
 }
 // src/app.ts
@@ -6368,6 +6389,7 @@ function newState() {
 		error: "",
 		screen: "block",
 		back: "block",
+		autosave: null,
 		songRow: 0,
 		songCol: 0,
 		exp: newExportChoices(),
@@ -6417,6 +6439,15 @@ function makeApp(ib, engine, st) {
 	const screens = makeScreens(ib, engine, st);
 	const guide = makeGuide(ib);
 	const start = makeStart(ib);
+	let rescueAt = 0;
+	const lookRescue = () => {
+		if (performance.now() - rescueAt < 3e3 || !st.autosave) return;
+		rescueAt = performance.now();
+		st.autosave.list().then((l) => (start.setRescue(l[0] ? {
+			title: l[0].title,
+			at: l[0].at
+		} : null), ib.ui.redraw()));
+	};
 	/** ? : the guide, and back to where you were */
 	const toggleGuide = () => {
 		if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
@@ -7059,6 +7090,31 @@ function makeApp(ib, engine, st) {
 		rawKeys: true,
 		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED",
 		dirty: () => !!st.editor?.dirty,
+		/**
+		* Closing the page with changes: the autosave's copy first, then save / don't save /
+		* cancel. A deck that waits for the answer keeps the page on "cancel"; one that
+		* doesn't has closed it already, so "cancel" opens it again (the song is still here).
+		*/
+		async close() {
+			const e = st.editor, a = st.autosave;
+			if (!st.song || !e?.dirty) return true;
+			await a?.flush();
+			const name = st.song.title || st.path.split("/").pop() || "untitled";
+			const pick = await ib.ui.choose(`BreakerMED: save the changes to “${name}”?`, [
+				{ label: t("save") },
+				{ label: t("don't save") },
+				{ label: t("cancel: back to the song") }
+			]);
+			if (pick === 0) return await ib.shell.run("med save") === 0;
+			if (pick === 1) {
+				await a?.forget(st.path);
+				engine.stop();
+				st.song = st.editor = null;
+				return true;
+			}
+			ib.apps.open("breakermed");
+			return false;
+		},
 		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : `N ${t("new song")} · O ${t("open…")} · D ${t("demo")} · ? ${t("guide")}`,
 		render(ui, r, focused) {
 			const c = ui.c;
@@ -7086,7 +7142,11 @@ function makeApp(ib, engine, st) {
 					[4, `${t("step")} ${st.step}`],
 					[6, s.format],
 					[5, engine.paula ? "PAULA" : "SMOOTH"],
-					...s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`]] : []
+					...s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`]] : [],
+					...st.editor?.dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate ? [[2, `✓ ${t("autosaved")} ${new Date(st.autosave.lastAt).toLocaleTimeString([], {
+						hour: "2-digit",
+						minute: "2-digit"
+					})}`]] : st.autosave?.error ? [[2, t("autosave off")]] : []
 				];
 				const space = r.w - 2 - (x - r.x) - state.length - 6;
 				let shown = parts;
@@ -7108,6 +7168,7 @@ function makeApp(ib, engine, st) {
 					w: r.w,
 					h: r.h - 1
 				};
+				if (st.screen !== "guide") lookRescue();
 				return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
 			}
 			clampCursor();
@@ -8401,12 +8462,15 @@ function parseNoteText(s) {
 	}[m[1]];
 	return (+m[3] - 1) * 12 + base + (m[2] === "#" ? 1 : 0) + 1;
 }
-/** The files of a song saved as .bmed (paths relative to its folder). */
-function writeBmed(song) {
+/**
+* The files of a song saved as .bmed (paths relative to its folder). `written`: a
+* sound already in the folder as it is (the autosave) — named, not written again.
+*/
+function writeBmed(song, written) {
 	const files = [];
 	const sampleRate = 8363;
 	const wav = (path, data) => {
-		files.push({
+		if (!written?.(path, data)) files.push({
 			path,
 			data: writeWav({
 				rate: sampleRate,
@@ -9918,6 +9982,166 @@ var findPack = (name) => {
 	const n = name.toLowerCase().replace(/\.wav$/, "");
 	return PACK.find((p) => p.file.replace(/\.wav$/, "") === n || p.file.split("/").pop().replace(/\.wav$/, "") === n);
 };
+// src/autosave.ts
+/**
+* BreakerMED — the autosave: a copy of the song after each change, so quitting,
+* a crash or a closed tab never loses work. Never over the real song: the copy
+* goes in songs/.recovery/ (a .bmed of its own, songs/ is the module's folder),
+* and an index says whose copy it is and when. Opening the song again (or START,
+* or `med recover`) offers it back; `med save` makes it useless, so it's forgotten.
+*
+* When: 1.5 s after a change (a run of keys makes one copy), at most every
+* `every` seconds while the song plays or the changes keep coming.
+*/
+var RECOVERY_DIR = "songs/.recovery";
+/** after a change, the copy waits this long for the next one (ms) */
+var QUIET_MS = 1500;
+/** the copy's folder for a song: its path made a file name */
+var recoveryFile = (path) => `${RECOVERY_DIR}/${(path.replace(/\.(bmed|med|mod|mmd\d)$/i, "").replace(/[^\w.-]+/g, "_") || "untitled").slice(-80)}.bmed`;
+var Autosave = class {
+	constructor(io, current) {
+		_defineProperty(this, "io", void 0);
+		_defineProperty(this, "current", void 0);
+		_defineProperty(this, "on", true);
+		_defineProperty(
+			this,
+			/** seconds between copies at most, while the song plays or the changes keep coming */
+			"every",
+			30
+		);
+		_defineProperty(
+			this,
+			/** when the last copy was written (0: none yet), and why the autosave stopped */
+			"lastAt",
+			0
+		);
+		_defineProperty(this, "error", "");
+		_defineProperty(
+			this,
+			/** told once when a copy can't be written (no permission, the vault is gone…) */
+			"onError",
+			void 0
+		);
+		_defineProperty(this, "changes", 0);
+		_defineProperty(this, "copied", 0);
+		_defineProperty(this, "firstPending", 0);
+		_defineProperty(this, "timer", null);
+		_defineProperty(this, "writing", null);
+		_defineProperty(
+			this,
+			/** sounds already in the copy's folder (no need to write them again) */
+			"sounds",
+			/* @__PURE__ */ new Map()
+		);
+		_defineProperty(this, "soundsIn", "");
+		this.io = io;
+		this.current = current;
+	}
+	async load() {
+		const o = await this.io.storage.get("autosave", {
+			on: true,
+			every: 30
+		});
+		this.on = o.on !== false;
+		this.every = clampEvery(o.every);
+	}
+	async configure(o) {
+		if (o.on !== void 0) this.on = o.on, this.error = "";
+		if (o.every !== void 0) this.every = clampEvery(o.every);
+		await this.io.storage.set("autosave", {
+			on: this.on,
+			every: this.every
+		});
+		if (this.on && this.changes !== this.copied) this.schedule();
+	}
+	/** the song changed (a step of the history ended): a copy soon */
+	changed() {
+		this.changes++;
+		if (!this.firstPending) this.firstPending = this.io.now();
+		if (this.on) this.schedule();
+	}
+	/** the copy is up to date with the song */
+	get upToDate() {
+		return this.changes === this.copied;
+	}
+	schedule() {
+		if (this.timer !== null) this.io.cancel(this.timer);
+		const now = this.io.now();
+		const most = this.every * 1e3;
+		let wait = QUIET_MS;
+		if (this.current().playing) wait = Math.max(QUIET_MS, this.lastAt + most - now);
+		if (this.firstPending && now - this.firstPending >= most) wait = 0;
+		this.timer = this.io.later(() => (this.timer = null, void this.flush()), wait);
+	}
+	/** write the copy now, if the song has changes the copy hasn't */
+	async flush() {
+		if (this.writing) await this.writing;
+		const { song, editor, path } = this.current();
+		if (!this.on || !song || !editor?.dirty || this.changes === this.copied) return;
+		const at = this.changes;
+		this.writing = this.write(song, path).then(() => {
+			this.copied = at;
+			this.firstPending = 0;
+			this.lastAt = this.io.now();
+		}, (e) => {
+			this.on = false;
+			this.error = e instanceof Error ? e.message : String(e);
+			this.onError?.(this.error);
+		});
+		await this.writing;
+		this.writing = null;
+	}
+	async write(song, path) {
+		const file = recoveryFile(path);
+		if (this.soundsIn !== file) this.sounds = /* @__PURE__ */ new Map(), this.soundsIn = file;
+		await this.io.vault.mkdir(`${file}/samples`).catch(() => {});
+		const files = writeBmed(song, (p, data) => this.sounds.get(p) === data);
+		for (const f of files) if (typeof f.data === "string") await this.io.vault.write(`${file}/${f.path}`, f.data);
+		else await this.io.vault.writeBytes(`${file}/${f.path}`, f.data);
+		song.instruments.forEach((ins, i) => {
+			const n = String(i + 1).padStart(2, "0");
+			if (ins.data.length) this.sounds.set(`samples/${n}.wav`, ins.data);
+			if (ins.right?.length) this.sounds.set(`samples/${n}-right.wav`, ins.right);
+			ins.waves?.forEach((w, k) => this.sounds.set(`samples/${n}-wave${k}.wav`, w));
+		});
+		const list = await this.index();
+		list[path] = {
+			path,
+			file,
+			title: song.title || path.split("/").pop() || "untitled",
+			at: this.io.now()
+		};
+		await this.io.storage.set("recovery", list);
+	}
+	index() {
+		return this.io.storage.get("recovery", {});
+	}
+	/** the copies not saved yet, newest first */
+	async list() {
+		return Object.values(await this.index()).sort((a, b) => b.at - a.at);
+	}
+	async find(path) {
+		return (await this.index())[path];
+	}
+	/** a copy, as a song */
+	read(r) {
+		return this.io.vault.read(`${r.file}/song.json`).then((json) => readBmed(json, (f) => this.io.vault.readBytes(`${r.file}/${f}`)));
+	}
+	/** the song was saved (or its changes thrown away): its copy is no use any more */
+	async forget(path) {
+		const list = await this.index();
+		if (!(path in list)) return;
+		delete list[path];
+		await this.io.storage.set("recovery", list);
+	}
+	/** a new song on the page: nothing to copy yet */
+	reset() {
+		if (this.timer !== null) this.io.cancel(this.timer);
+		this.timer = null;
+		this.changes = this.copied = this.firstPending = 0;
+	}
+};
+var clampEvery = (v) => typeof v === "number" && Number.isFinite(v) ? Math.max(10, Math.min(300, Math.round(v))) : 30;
 // src/commands.ts
 function registerCommands(ib, engine, st) {
 	const { fmt, parseFlags } = ib.lib;
@@ -9931,6 +10155,18 @@ function registerCommands(ib, engine, st) {
 	};
 	const open = async (ctx, path, given) => {
 		const p = path.replace(/\/+$/, "").replace(/\/song\.json$/i, "");
+		const rec = given ? void 0 : await st.autosave?.find(p);
+		if (rec) {
+			const when = new Date(rec.at).toLocaleString();
+			const pick = await ib.ui.choose(`BreakerMED: ${p} has changes that were never saved (autosaved ${when})`, [
+				{ label: "recover them (the autosaved version)" },
+				{ label: "open the saved file, keep the autosaved copy for later" },
+				{ label: "open the saved file, throw the changes away" }
+			]);
+			if (pick === null) return;
+			if (pick === 0) return recover(ctx, rec);
+			if (pick === 2) await st.autosave?.forget(p);
+		}
 		if (!given && /\.bmed$/i.test(p)) {
 			const song = await readBmed(await ib.vault.read(`${p}/song.json`), (f) => ib.vault.readBytes(`${p}/${f}`));
 			await adopt(ctx, song, p);
@@ -9949,8 +10185,11 @@ function registerCommands(ib, engine, st) {
 			await ib.vault.mkdir(`${dir}/samples`).catch(() => {});
 			for (const f of writeBmed(s)) if (typeof f.data === "string") await ib.vault.write(`${dir}/${f.path}`, f.data);
 			else await ib.vault.writeBytes(`${dir}/${f.path}`, f.data);
+			const was = st.path;
 			st.path = dir;
 			st.editor.dirty = false;
+			await st.autosave?.forget(was);
+			await st.autosave?.forget(dir);
 			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
 			return;
 		}
@@ -9973,7 +10212,8 @@ function registerCommands(ib, engine, st) {
 	const adopt = async (ctx, song, path) => {
 		st.song = song;
 		st.editor = new Editor(song);
-		st.editor.onChange = () => ib.ui.redraw();
+		st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
+		st.autosave?.reset();
 		st.sel = null;
 		st.col = 0;
 		st.path = path;
@@ -9983,6 +10223,13 @@ function registerCommands(ib, engine, st) {
 		await engine.load(song);
 		const len = songLength(song);
 		ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+	};
+	/** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */
+	const recover = async (ctx, rec) => {
+		const song = await st.autosave.read(rec);
+		await adopt(ctx, song, rec.path);
+		st.editor.dirty = true;
+		ctx.out(`${fmt.green("↺")} recovered the autosaved ${rec.title} (${new Date(rec.at).toLocaleString()}) · med save keeps it\n`);
 	};
 	/** the pack's sounds that are in the vault (their files, under PACK_DIR) */
 	const packHave = async () => {
@@ -10021,6 +10268,8 @@ function registerCommands(ib, engine, st) {
 			"med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
 			"med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
 			"med sampler [file]         load a sound into a free instrument (no file: choose one)",
+			"med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)",
+			"med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
 			"med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
 			"med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
 			"med block new [lines] · med block copy · med block lines <n>",
@@ -10483,6 +10732,43 @@ function registerCommands(ib, engine, st) {
 						else return ctx.err("med line insert|delete [--all]\n"), 1;
 						return 0;
 					}
+					case "autosave": {
+						const a = st.autosave;
+						const [what, value] = rest;
+						if (what === "on" || what === "off") await a.configure({ on: what === "on" });
+						else if (what === "every") {
+							const n = parseInt(value ?? "", 10);
+							if (!(n >= 10 && n <= 300)) return ctx.err("med autosave every <10–300 seconds>\n"), 1;
+							await a.configure({ every: n });
+						} else if (what !== void 0) return ctx.err("med autosave [on|off] [every <10–300 s>]\n"), 1;
+						const last = a.lastAt ? ` · last copy ${new Date(a.lastAt).toLocaleTimeString()}` : "";
+						ctx.out(a.on ? `${fmt.green("● autosave on")} · 1.5 s after a change, every ${a.every} s at most while playing${last} · ${RECOVERY_DIR}/\n` : `${fmt.dim("○ autosave off")}${a.error ? ` (${a.error})` : ""} · med autosave on\n`);
+						return 0;
+					}
+					case "recover": {
+						const a = st.autosave;
+						const list = await a.list();
+						const [what, n] = rest;
+						const pickN = (x) => list[parseInt(x ?? "", 10) - 1];
+						if (what === "forget") {
+							const r = pickN(n);
+							if (!r) return ctx.err(`med recover forget <1–${list.length}>\n`), 1;
+							await a.forget(r.path);
+							ctx.out(`forgot the autosaved ${r.title} (its folder stays in ${RECOVERY_DIR}/ until the next copy)\n`);
+							return 0;
+						}
+						if (!list.length) return ctx.out("nothing to recover: every change was saved\n"), 0;
+						if (what === "list" || what === void 0 && list.length > 1) {
+							list.forEach((r, i) => ctx.out(`${i + 1}  ${r.title.padEnd(24)} ${fmt.dim(`${new Date(r.at).toLocaleString()} · ${r.path}`)}\n`));
+							ctx.out(fmt.dim("med recover <n>: back on the page · med recover forget <n>\n"));
+							return 0;
+						}
+						const r = what === void 0 ? list[0] : pickN(what);
+						if (!r) return ctx.err(`med recover <1–${list.length}>\n`), 1;
+						await recover(ctx, r);
+						ib.apps.open("breakermed");
+						return 0;
+					}
 					case "pack": {
 						if (rest[0] === "load") {
 							const p = findPack(rest[1] ?? "");
@@ -10791,6 +11077,20 @@ function activate(ib) {
 	ib.lib.addTranslations("fr", FR);
 	engine = new Engine(ib.audio);
 	const st = newState();
+	st.autosave = new Autosave({
+		vault: ib.vault,
+		storage: ib.storage,
+		now: () => Date.now(),
+		later: (fn, ms) => setTimeout(fn, ms),
+		cancel: (h) => clearTimeout(h)
+	}, () => ({
+		song: st.song,
+		editor: st.editor,
+		path: st.path,
+		playing: !!engine?.playing
+	}));
+	st.autosave.onError = (m) => ib.ui.notify(`BreakerMED: autosave off — ${m} (med autosave on to try again)`, "warning");
+	st.autosave.load().then(() => ib.ui.redraw());
 	engine.onChange = () => ib.ui.redraw();
 	ib.audio.onStop?.(() => engine?.silence());
 	ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
@@ -10840,6 +11140,14 @@ function deactivate() {
 	engine = null;
 }
 var FR = {
+	"on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)": "actif par défaut : une copie 1,5 s après chaque changement, dans songs/.recovery/ (jamais par-dessus le morceau)",
+	"changes never saved (a quit, a crash): back on the page · START offers them too (R)": "des changements jamais enregistrés (quitter, un plantage) : de retour sur la page · START les propose aussi (R)",
+	recover: "reprendre",
+	autosaved: "sauvegardé",
+	"autosave off": "autosave coupé",
+	"don't save": "ne pas enregistrer",
+	"cancel: back to the song": "annuler : revenir au morceau",
+	"changes that were never saved, kept by the autosave": "des changements jamais enregistrés, gardés par l'autosave",
 	"the starter sounds, recorded by people: which are there (med pack load <name>)": "les sons de départ, enregistrés par des gens : lesquels sont là (med pack load <nom>)",
 	"START": "COMMENCER",
 	"new song": "nouveau morceau",

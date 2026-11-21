@@ -20,6 +20,7 @@ import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
 import { findPack, PACK, PACK_DIR } from "./pack";
+import { RECOVERY_DIR, type Recovery } from "./autosave";
 import { SCREENS, type Screen } from "./screens";
 
 
@@ -39,6 +40,19 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
 
   const open = async (ctx: ShellContext, path: string, given?: Uint8Array) => {
     const p = path.replace(/\/+$/, "").replace(/\/song\.json$/i, "");
+    // the autosave kept changes that were never saved: offer them back
+    const rec = given ? undefined : await st.autosave?.find(p);
+    if (rec) {
+      const when = new Date(rec.at).toLocaleString();
+      const pick = await ib.ui.choose(`BreakerMED: ${p} has changes that were never saved (autosaved ${when})`, [
+        { label: "recover them (the autosaved version)" },
+        { label: "open the saved file, keep the autosaved copy for later" },
+        { label: "open the saved file, throw the changes away" },
+      ]);
+      if (pick === null) return;
+      if (pick === 0) return recover(ctx, rec);
+      if (pick === 2) await st.autosave?.forget(p);
+    }
     if (!given && /\.bmed$/i.test(p)) {
       // our own format: a folder, its song.json and its samples
       const song = await readBmed(await ib.vault.read(`${p}/song.json`), (f) => ib.vault.readBytes(`${p}/${f}`));
@@ -61,8 +75,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
         if (typeof f.data === "string") await ib.vault.write(`${dir}/${f.path}`, f.data);
         else await ib.vault.writeBytes(`${dir}/${f.path}`, f.data);
       }
+      const was = st.path;
       st.path = dir;
       st.editor!.dirty = false;
+      // saved: the autosave's copies of it are no use now
+      await st.autosave?.forget(was);
+      await st.autosave?.forget(dir);
       ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
       return;
     }
@@ -87,7 +105,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
   const adopt = async (ctx: ShellContext, song: Song, path: string) => {
     st.song = song;
     st.editor = new Editor(song);
-    st.editor.onChange = () => ib.ui.redraw();
+    // each step of the history: the page again, and a copy soon (the autosave)
+    st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
+    st.autosave?.reset();
     st.sel = null;
     st.col = 0;
     st.path = path;
@@ -97,6 +117,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     await engine.load(song);
     const len = songLength(song);
     ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+  };
+
+  /** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */
+  const recover = async (ctx: ShellContext, rec: Recovery) => {
+    const song = await st.autosave!.read(rec);
+    await adopt(ctx, song, rec.path);
+    st.editor!.dirty = true;
+    ctx.out(`${fmt.green("↺")} recovered the autosaved ${rec.title} (${new Date(rec.at).toLocaleString()}) · med save keeps it\n`);
   };
 
   /** the pack's sounds that are in the vault (their files, under PACK_DIR) */
@@ -139,6 +167,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
       "med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
       "med sampler [file]         load a sound into a free instrument (no file: choose one)",
+      "med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)",
+      "med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
       "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
       "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
       "med block new [lines] · med block copy · med block lines <n>",
@@ -469,6 +499,43 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (rest[0] === "insert") st.editor!.insertLine(s.sequence[st.seq], st.line, tracks);
             else if (rest[0] === "delete") st.editor!.deleteLine(s.sequence[st.seq], st.line, tracks);
             else return ctx.err("med line insert|delete [--all]\n"), 1;
+            return 0;
+          }
+          case "autosave": {
+            const a = st.autosave!;
+            const [what, value] = rest;
+            if (what === "on" || what === "off") await a.configure({ on: what === "on" });
+            else if (what === "every") {
+              const n = parseInt(value ?? "", 10);
+              if (!(n >= 10 && n <= 300)) return ctx.err("med autosave every <10–300 seconds>\n"), 1;
+              await a.configure({ every: n });
+            } else if (what !== undefined) return ctx.err("med autosave [on|off] [every <10–300 s>]\n"), 1;
+            const last = a.lastAt ? ` · last copy ${new Date(a.lastAt).toLocaleTimeString()}` : "";
+            ctx.out(a.on ? `${fmt.green("● autosave on")} · 1.5 s after a change, every ${a.every} s at most while playing${last} · ${RECOVERY_DIR}/\n` : `${fmt.dim("○ autosave off")}${a.error ? ` (${a.error})` : ""} · med autosave on\n`);
+            return 0;
+          }
+          case "recover": {
+            const a = st.autosave!;
+            const list = await a.list();
+            const [what, n] = rest;
+            const pickN = (x: string | undefined) => list[parseInt(x ?? "", 10) - 1];
+            if (what === "forget") {
+              const r = pickN(n);
+              if (!r) return ctx.err(`med recover forget <1–${list.length}>\n`), 1;
+              await a.forget(r.path);
+              ctx.out(`forgot the autosaved ${r.title} (its folder stays in ${RECOVERY_DIR}/ until the next copy)\n`);
+              return 0;
+            }
+            if (!list.length) return ctx.out("nothing to recover: every change was saved\n"), 0;
+            if (what === "list" || (what === undefined && list.length > 1)) {
+              list.forEach((r, i) => ctx.out(`${i + 1}  ${r.title.padEnd(24)} ${fmt.dim(`${new Date(r.at).toLocaleString()} · ${r.path}`)}\n`));
+              ctx.out(fmt.dim("med recover <n>: back on the page · med recover forget <n>\n"));
+              return 0;
+            }
+            const r = what === undefined ? list[0] : pickN(what);
+            if (!r) return ctx.err(`med recover <1–${list.length}>\n`), 1;
+            await recover(ctx, r);
+            void ib.apps.open("breakermed");
             return 0;
           }
           case "pack": {

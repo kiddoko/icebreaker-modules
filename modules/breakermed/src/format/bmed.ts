@@ -72,12 +72,15 @@ function parseNoteText(s: string): number {
   return (+m[3] - 1) * 12 + base + (m[2] === "#" ? 1 : 0) + 1;
 }
 
-/** The files of a song saved as .bmed (paths relative to its folder). */
-export function writeBmed(song: Song): SongFile[] {
+/**
+ * The files of a song saved as .bmed (paths relative to its folder). `written`: a
+ * sound already in the folder as it is (the autosave) — named, not written again.
+ */
+export function writeBmed(song: Song, written?: (path: string, data: Float32Array) => boolean): SongFile[] {
   const files: SongFile[] = [];
   const sampleRate = 8363; // a sample has no rate of its own in a tracker: its notes give the pitch
   const wav = (path: string, data: Float32Array) => {
-    files.push({ path, data: writeWav({ rate: sampleRate, channels: [data] }, 16) });
+    if (!written?.(path, data)) files.push({ path, data: writeWav({ rate: sampleRate, channels: [data] }, 16) });
     return path;
   };
   const instruments: InstrumentJson[] = song.instruments.map((ins, i) => {
