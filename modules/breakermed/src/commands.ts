@@ -501,7 +501,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             // med swing <0–100>: every other line longer (100 = a triplet feel)
             const s = need();
             const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
-            if (!(n >= 0 && n <= 100)) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), rest[0] ? 1 : 0;
+            if (rest[0] === undefined) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), 0;
+            if (!(n >= 0 && n <= 100)) return ctx.err("med swing <0–100> | off (0 straight, 50 a lazy shuffle, 100 triplets)\n"), 1;
             if (n) s.swing = n;
             else delete s.swing;
             st.editor!.dirty = true;

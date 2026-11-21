@@ -5420,17 +5420,21 @@ function makeScreens(ib, engine, st) {
 		const line = exportLine(x, q);
 		last = {
 			text: t("exporting… (the LOG shows each file)"),
-			kind: "busy"
+			kind: "busy",
+			line
 		};
 		ib.shell.run(line).then((code) => last = code === 0 ? {
 			text: `✓ ${t("exported")}: ${line.replace(/^med export /, "")}`,
-			kind: "ok"
+			kind: "ok",
+			line
 		} : {
 			text: t("✗ the export failed: the LOG says why"),
-			kind: "error"
+			kind: "error",
+			line
 		}).catch((e) => last = {
 			text: `✗ ${String(e?.message ?? e)}`,
-			kind: "error"
+			kind: "error",
+			line
 		}).finally(() => ib.ui.redraw());
 	};
 	const drawExport = (ui, r, focused) => {
@@ -5490,6 +5494,7 @@ function makeScreens(ib, engine, st) {
 			tip: exportLine(x, q)
 		});
 		y += 2;
+		if (last && last.kind !== "busy" && last.line !== exportLine(x, q)) last = null;
 		if (last && y < inner.y + inner.h) ui.text(inner.x + 1, y++, truncate(last.text, inner.w - 2), { fg: last.kind === "ok" ? c.success : last.kind === "error" ? c.error : c.accent });
 		if (y < inner.y + inner.h) ui.text(inner.x + 1, y, truncate(exportLine(x, q), inner.w - 2), { fg: c.faint });
 	};
@@ -5912,8 +5917,17 @@ function makeApp(ib, engine, st) {
 		let x = inner.x + 1;
 		ui.text(x, inner.y, t("preset"), { fg: c.muted });
 		x += t("preset").length + 1;
-		for (const name of sk.presetsFor?.(p) ?? sk.presets) {
-			if (x + name.length + 2 > inner.x + inner.w - 1) break;
+		const list = sk.presetsFor?.(p) ?? sk.presets;
+		for (const [k, name] of list.entries()) {
+			const room = inner.x + inner.w - 1 - (k < list.length - 1 ? 4 : 0);
+			if (x + name.length + 2 > room) {
+				ui.button(x, inner.y, "…", () => {}, {
+					cmd: `med ${sk.cmd} presets`,
+					quiet: true,
+					tip: `${list.slice(k).join(" · ")} · med ${sk.cmd} ${n} preset <name>`
+				});
+				break;
+			}
 			x += ui.button(x, inner.y, name, () => {}, {
 				cmd: `med ${sk.cmd} ${n} preset ${name}`,
 				quiet: true
@@ -6256,7 +6270,7 @@ function makeApp(ib, engine, st) {
 				title: t("INSTRUMENTS"),
 				focused: false
 			});
-			instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
+			instList.items = Array.from({ length: Math.min(63, Math.max(s.instruments.length + 1, st.inst + 1)) }, (_, i) => i);
 			if (instList.selected !== st.inst) instList.select(st.inst);
 			instList.render(ui, instBox, false, (i, row, sel) => {
 				const ins = s.instruments[i] ?? {
@@ -6265,7 +6279,8 @@ function makeApp(ib, engine, st) {
 				};
 				const empty = ins.kind === "empty";
 				const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
+				const label = ins.name || (empty ? i >= s.instruments.length ? `· ${t("free")}` : "·" : t("(no name)"));
+				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
 				}, row.w);
@@ -6328,6 +6343,38 @@ function makeApp(ib, engine, st) {
 							cmd: `med solo ${tr + 1}`
 						}
 					]
+				});
+			}
+			if (firstTrack > 0) {
+				ui.text(inner.x, inner.y, `‹${firstTrack}`, {
+					fg: c.accent,
+					attrs: BOLD
+				});
+				ui.hit({
+					x: inner.x,
+					y: inner.y,
+					w: 3,
+					h: 1
+				}, {
+					onClick: () => st.track = firstTrack - 1,
+					tip: t("more tracks to the left")
+				});
+			}
+			const after = s.tracks - (firstTrack + fits);
+			if (after > 0) {
+				const label = `${after}›`;
+				ui.textRight(inner.x + inner.w, inner.y, label, {
+					fg: c.accent,
+					attrs: BOLD
+				});
+				ui.hit({
+					x: inner.x + inner.w - label.length,
+					y: inner.y,
+					w: label.length,
+					h: 1
+				}, {
+					onClick: () => st.track = firstTrack + fits,
+					tip: t("more tracks to the right")
 				});
 			}
 			const rows = inner.h - 1;
@@ -9386,7 +9433,8 @@ function registerCommands(ib, engine, st) {
 					case "swing": {
 						const s = need();
 						const n = rest[0] === "off" ? 0 : parseInt(rest[0] ?? "", 10);
-						if (!(n >= 0 && n <= 100)) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), rest[0] ? 1 : 0;
+						if (rest[0] === void 0) return ctx.out(`swing: ${s.swing ?? 0} · med swing <0–100> (0 straight, 50 a lazy shuffle, 100 triplets)\n`), 0;
+						if (!(n >= 0 && n <= 100)) return ctx.err("med swing <0–100> | off (0 straight, 50 a lazy shuffle, 100 triplets)\n"), 1;
 						if (n) s.swing = n;
 						else delete s.swing;
 						st.editor.dirty = true;
@@ -9849,6 +9897,9 @@ var FR = {
 	"needs a newer ICEBREAKER (0.5.5+): WAV, AIFF and FLAC work here": "il faut un ICEBREAKER plus récent (0.5.5+) : WAV, AIFF et FLAC marchent ici",
 	"no encoder pack for this computer yet": "pas encore de pack d'encodeurs pour cet ordinateur",
 	"export…": "exporter…",
+	free: "libre",
+	"more tracks to the left": "d'autres pistes à gauche",
+	"more tracks to the right": "d'autres pistes à droite",
 	"chip synth": "synthé chip",
 	"old consoles' sound chips, for chiptune: NES, Game Boy, C64, AY, SN76489, PC Engine-style": "les puces son des vieilles consoles, pour la chiptune : façon NES, Game Boy, C64, AY, SN76489, PC Engine",
 	"chip": "puce",
