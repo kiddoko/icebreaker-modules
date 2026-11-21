@@ -2667,6 +2667,15 @@ function makeApp(ib, engine, st) {
 				onClick: () => st.synthRow = i,
 				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
 			});
+			ui.hit({
+				x: x0 + 22,
+				y,
+				w: 10,
+				h: 1
+			}, {
+				onClick: () => st.synthRow = i,
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+			});
 			if (on && focused) ui.tint({
 				x: x0,
 				y,
@@ -2892,18 +2901,18 @@ function makeApp(ib, engine, st) {
 				fg: c.accent,
 				attrs: BOLD
 			});
-			if (s) x = ui.text(x + 2, r.y, truncate(name, Math.max(4, r.w - 70)), { fg: c.fg }, r.w - 70);
 			if (s) {
 				const f = s.flags;
 				const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
 				const rest = `  ${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})  ${t("speed")} ${hex(s.speed)}  ${t("oct")} ${st.octave + 1}  ${t("step")} ${st.step}  ${s.format}  ${engine.paula ? "PAULA" : "SMOOTH"}${s.echo ? `  ${t("ECHO")} ${s.echo.ms}` : ""}`;
 				const rx = ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted });
 				const state = engine.playing ? engine.mode === "block" ? "▶ BLOCK" : "▶ SONG" : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
-				ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
+				const room = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
 					fg: c.bg,
 					bg: c.error,
 					attrs: BOLD
-				} : { fg: engine.playing ? c.success : c.muted });
+				} : { fg: engine.playing ? c.success : c.muted }) - (x + 2) - 1;
+				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
 			}
 			if (!s) {
 				ui.textCenter(r, r.y + Math.floor(r.h / 2) - 1, t("no song loaded"), { fg: c.muted });
@@ -3203,8 +3212,11 @@ function makeApp(ib, engine, st) {
 					if (k.kind === "chord") {
 						if (HEX.indexOf(d)) s.chordColumn = true;
 						advance();
-					} else if (k.kind !== "note" && k.digit === 0) st.col++;
-					else st.col--, advance();
+					} else if (k.kind === "inst") {
+						if (k.digit === 0) st.col++;
+						else st.col--, advance();
+					} else if (k.kind === "cmd" || k.kind === "val" && k.digit === 0) st.col++;
+					else st.col -= 3, advance();
 					return true;
 				}
 			}

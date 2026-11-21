@@ -319,6 +319,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
       ui.button(x0 + 32, y, "›", () => ((st.synthRow = i), nudge(i, 1)), { quiet: !on });
       ui.hit({ x: x0, y, w: 18, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1) });
+      ui.hit({ x: x0 + 22, y, w: 10, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1) });
       if (on && focused) ui.tint({ x: x0, y, w: 18, h: 1 }, undefined, c.highlight);
     });
     ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
@@ -466,7 +467,6 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       // ── the top line ──
       const name = s ? s.title || st.path.split("/").pop() || "" : "";
       let x = ui.text(r.x + 1, r.y, "breakerMED", { fg: c.accent, attrs: BOLD });
-      if (s) x = ui.text(x + 2, r.y, truncate(name, Math.max(4, r.w - 70)), { fg: c.fg }, r.w - 70);
       if (s) {
         const f = s.flags;
         const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
@@ -474,7 +474,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const rx = ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted });
         // the state: playing, stopped, or stopped in edit mode (red: typing writes in the block)
         const state = engine.playing ? (engine.mode === "block" ? "▶ BLOCK" : "▶ SONG") : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
-        ui.textRight(rx, r.y, state, st.edit && !engine.playing ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: engine.playing ? c.success : c.muted });
+        const sx = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: engine.playing ? c.success : c.muted });
+        // the song's name in what's left between, a space each side
+        const room = sx - (x + 2) - 1;
+        if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
       }
       if (!s) {
         ui.textCenter(r, r.y + Math.floor(r.h / 2) - 1, t("no song loaded"), { fg: c.muted });
@@ -676,13 +679,16 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const d = /^Digit(\d)$/.exec(k.code)?.[1] ?? (k.key.length === 1 && HEX.includes(k.key.toLowerCase()) ? k.key.toLowerCase() : null);
         if (d !== null) {
           e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
-          // a two-digit field: the first digit moves right, the second goes back to the first and down
+          // the instrument: two digits; a command: four (0C20); after the last, back to the first and down
           const k = colKind(st.col);
           if (k.kind === "chord") {
             if (HEX.indexOf(d)) s.chordColumn = true;
             advance(); // one digit: down to the next line
-          } else if (k.kind !== "note" && k.digit === 0) st.col++;
-          else (st.col--, advance());
+          } else if (k.kind === "inst") {
+            if (k.digit === 0) st.col++;
+            else (st.col--, advance()); // two digits: back to the first, and down
+          } else if (k.kind === "cmd" || (k.kind === "val" && k.digit === 0)) st.col++; // the command's 4 digits, left to right
+          else (st.col -= 3, advance()); // the last one: back to the command's first digit, and down
           return true;
         }
       }
