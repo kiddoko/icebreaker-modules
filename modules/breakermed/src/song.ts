@@ -89,11 +89,14 @@ export interface Block {
   cells: Cell[][];
 }
 
-/** sample: a sound read at the note's speed · analog: our subtractive synth · synth / hybrid: OctaMED's (read from .med) */
-export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog";
+/** sample: a sound read at the note's speed · analog: our subtractive synth · drums: our drum machine · synth / hybrid: OctaMED's (read from .med) */
+export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog" | "drums";
+
+/** our own instruments: computed, no sound data */
+export const computed = (i: Instrument | undefined) => i?.kind === "analog" || i?.kind === "drums";
 
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
-export const playable = (i: Instrument | undefined) => !!i && (i.kind === "analog" || (i.kind !== "empty" && i.data.length > 0));
+export const playable = (i: Instrument | undefined) => !!i && (computed(i) || (i.kind !== "empty" && i.data.length > 0));
 
 export interface Instrument {
   name: string;
@@ -126,6 +129,8 @@ export interface Instrument {
   waveSpeed?: number;
   /** the analog synth's settings (kind "analog") */
   synth?: import("./dsp/analog").AnalogParams;
+  /** the drum machine's kit (kind "drums") */
+  drums?: import("./dsp/drums").DrumKit;
 }
 
 export function emptyCell(pages = 1): Cell {

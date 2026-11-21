@@ -5,7 +5,7 @@
  * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), then per
  * command page 4 more: the command's two digits, the parameter's two.
  */
-import { emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
+import { computed, emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
 
 /** a song holds 63 instruments at most (OctaMED's limit) */
 export const MAX_INSTRUMENTS = 63;
@@ -296,10 +296,11 @@ export class Editor {
     this.shape(label, () => {
       const copy: Instrument = { ...old };
       if (old.synth) copy.synth = structuredClone(old.synth); // a synth's settings are changed in place
+      if (old.drums) copy.drums = structuredClone(old.drums);
       fn(copy);
       if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
       if (copy.loopLength <= 2) (copy.loopStart = 0), (copy.loopLength = 0);
-      if (copy.kind !== "analog") copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
+      if (!computed(copy)) copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
       this.song.instruments[index] = copy;
     });
   }

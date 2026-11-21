@@ -117,6 +117,7 @@ function adsr(e: Adsr, t: number, released: { at: number; from: number } | null)
 
 export class AnalogVoice implements Voice {
   on = false;
+  readonly rings = true;
   private p: AnalogParams = defaultAnalog();
   private hz = C3_HZ;
   private targetHz = C3_HZ;

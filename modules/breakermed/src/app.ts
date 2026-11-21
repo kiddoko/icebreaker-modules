@@ -25,6 +25,7 @@ import { colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
 import type { Engine } from "./engine";
 import { pianoKey } from "./keys";
 import { ANALOG_PARAMS, ANALOG_PRESETS, nudgeParam, showParam } from "./dsp/analog";
+import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, nudgeDrum } from "./dsp/drums";
 import { hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
@@ -51,6 +52,9 @@ export interface State {
   screen: "block" | "instrument";
   /** the synth setting the INSTRUMENT screen's cursor is on */
   synthRow: number;
+  /** the drum machine's cursor: a drum (0–11), a setting (0–3) */
+  drumRow: number;
+  drumCol: number;
 }
 
 /**
@@ -72,7 +76,7 @@ export function undoRedo(st: State, redo: boolean): string | null {
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", synthRow: 0 };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", synthRow: 0, drumRow: 0, drumCol: 0 };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -113,6 +117,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const s = st.song;
     const ins = s?.instruments[inst];
     if (!s || !ins || ins.kind === "empty") return;
+    if (ins.kind === "drums") st.drumRow = (((semi + ins.transpose + s.transpose) % 12) + 12) % 12; // the screen follows the drum played
     const rate = PAULA_CLOCK / periodOf(semi + ins.transpose + s.transpose, ins.finetune);
     void engine.preview(inst, rate).catch((e) => ib.ui.notify(String(e?.message ?? e), "error"));
   };
@@ -179,11 +184,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const n = hex(st.inst + 1);
     const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
     if (ins?.kind === "analog" && ins.synth) return drawSynth(ui, inner, focused);
+    if (ins?.kind === "drums" && ins.drums) return drawDrums(ui, inner, focused);
     if (!ins || ins.kind === "empty" || !ins.data.length) {
       ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
       let x = inner.x + 1;
       x += ui.button(x, inner.y + 3, t("load…"), () => {}, { cmd: `med sample ${n} load`, tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault") }) + 1;
-      ui.button(x, inner.y + 3, t("analog synth"), () => {}, { cmd: `med synth ${n} new`, tip: t("two oscillators, a filter, two envelopes, an LFO") });
+      x += ui.button(x, inner.y + 3, t("analog synth"), () => {}, { cmd: `med synth ${n} new`, tip: t("two oscillators, a filter, two envelopes, an LFO") }) + 1;
+      ui.button(x, inner.y + 3, t("drum machine"), () => {}, { cmd: `med drums ${n} new`, tip: t("twelve drums, one a note: C kick, D snare, E hat…") });
       return;
     }
     // the wave: each cell is 2 × 4 dots; each dot column the min…max of its part of the sound
@@ -285,6 +292,69 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (on && focused) ui.tint({ x: x0, y, w: 18, h: 1 }, undefined, c.highlight);
     });
     ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h"), { fg: c.subtle }, inner.w - 2);
+  };
+
+  /** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
+  const nudgeKit = (drum: number, col: number, dir: 1 | -1, big = false) => {
+    const key = DRUM_SETTINGS[col]?.key;
+    if (key) ed()?.instrument(st.inst, `${DRUM_NAMES[drum]} ${key}`, (i) => i.drums && nudgeDrum(i.drums, drum, key, dir, big));
+  };
+  const nudgeGrit = (what: "bits" | "hold", dir: 1 | -1) =>
+    ed()?.instrument(st.inst, "grit", (i) => {
+      if (!i.drums) return;
+      i.drums[what] = Math.max(1, Math.min(16, i.drums[what] + dir));
+    });
+
+  /** The drum machine: its kits above, then a row a drum (its note, its name, four settings). */
+  const drawDrums = (ui: UI, inner: Rect, focused: boolean) => {
+    const c = ui.c;
+    const n = hex(st.inst + 1);
+    const kit = st.song!.instruments[st.inst].drums!;
+    let x = inner.x + 1;
+    ui.text(x, inner.y, t("kit"), { fg: c.muted });
+    x += t("kit").length + 1;
+    for (const name of Object.keys(DRUM_KITS)) x += ui.button(x, inner.y, name, () => {}, { cmd: `med drums ${n} kit ${name}`, quiet: true }) + 1;
+    x += 2;
+    if (x + 30 < inner.x + inner.w) {
+      ui.text(x, inner.y, t("grit"), { fg: c.muted });
+      x += t("grit").length + 1;
+      x += ui.button(x, inner.y, "‹", () => nudgeGrit("bits", -1), { quiet: true });
+      x = ui.text(x, inner.y, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
+      x += ui.button(x, inner.y, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
+      x += ui.button(x, inner.y, "‹", () => nudgeGrit("hold", -1), { quiet: true });
+      x = ui.text(x, inner.y, ` ×${kit.hold} `, { fg: kit.hold > 1 ? c.warning : c.fg });
+      ui.button(x, inner.y, "›", () => nudgeGrit("hold", 1), { quiet: true });
+    }
+    const wide = inner.w >= 66;
+    const cellW = wide ? 12 : 7;
+    const x0 = inner.x + 1, valX = x0 + 16;
+    ui.text(x0, inner.y + 2, "♪", { fg: c.subtle });
+    ui.text(x0 + 4, inner.y + 2, t("drum"), { fg: c.subtle });
+    DRUM_SETTINGS.forEach((s, k) => ui.text(valX + k * cellW + (wide ? 3 : 0), inner.y + 2, t(s.key), { fg: k === st.drumCol ? c.accent : c.subtle }));
+    st.drumRow = Math.max(0, Math.min(11, st.drumRow));
+    st.drumCol = Math.max(0, Math.min(3, st.drumCol));
+    kit.drums.forEach((d, i) => {
+      const y = inner.y + 3 + i;
+      if (y >= inner.y + inner.h - 1) return;
+      const on = i === st.drumRow;
+      ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
+      ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
+      if (on && focused) ui.tint({ x: x0, y, w: 15, h: 1 }, undefined, c.highlight);
+      DRUM_SETTINGS.forEach((s, k) => {
+        const v = d[s.key];
+        const text = s.key === "tune" ? `${v > 0 ? "+" : ""}${v}` : s.key === "decay" ? v.toFixed(1) : v.toFixed(2);
+        const cx = valX + k * cellW;
+        const sel = on && k === st.drumCol;
+        if (wide) {
+          ui.button(cx, y, "‹", () => ((st.drumRow = i), (st.drumCol = k), nudgeKit(i, k, -1)), { quiet: !sel });
+          ui.text(cx + 3, y, text.padStart(5), { fg: sel ? c.accent : c.fg });
+          ui.button(cx + 8, y, "›", () => ((st.drumRow = i), (st.drumCol = k), nudgeKit(i, k, 1)), { quiet: !sel });
+        } else ui.text(cx, y, text.padStart(5), { fg: sel ? c.accent : c.fg, bg: sel ? c.highlight : undefined });
+        ui.hit({ x: cx + (wide ? 3 : 0), y, w: 5, h: 1 }, { onClick: () => ((st.drumRow = i), (st.drumCol = k)), onWheel: (dl: number) => nudgeKit(i, k, dl < 0 ? 1 : -1) });
+      });
+      ui.hit({ x: x0, y, w: 15, h: 1 }, { onClick: () => (st.drumRow = i) });
+    });
+    ui.text(inner.x + 1, inner.y + inner.h - 1, t("keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it"), { fg: c.subtle }, inner.w - 2);
   };
 
   /** a track's new name, asked in a window (the command does it) */
@@ -395,7 +465,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       instList.render(ui, instBox, false, (i, row, sel) => {
         const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
-        const tag = ins.kind === "synth" || ins.kind === "analog" ? "∿" : ins.kind === "hybrid" ? "≈" : "";
+        const tag = ins.kind === "synth" || ins.kind === "analog" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
@@ -516,6 +586,15 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
         }
         return false;
+      }
+      // the drum machine: ↑↓ a drum, ←→ a setting, ⇧←→ its value
+      if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "drums" && !k.ctrl && !k.meta) {
+        switch (k.key) {
+          case "up": return (st.drumRow = Math.max(0, st.drumRow - 1)), true;
+          case "down": return (st.drumRow = Math.min(11, st.drumRow + 1)), true;
+          case "left": return k.shift ? nudgeKit(st.drumRow, st.drumCol, -1) : (st.drumCol = Math.max(0, st.drumCol - 1)), true;
+          case "right": return k.shift ? nudgeKit(st.drumRow, st.drumCol, 1) : (st.drumCol = Math.min(3, st.drumCol + 1)), true;
+        }
       }
       // the synth's settings: the arrows walk them (the piano keys still play)
       if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "analog" && !k.ctrl && !k.meta) {

@@ -5,8 +5,8 @@ line a step, each cell a note, an instrument and hex commands; a play sequence m
 It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's colours, with the
 keyboard, the mouse and a gamepad.
 
-> Work in progress: reading, playing, editing, saving, exporting, the sampler and the analog synth
-> are here (8 tracks by default, 16 at most, named); next come the drum machine, the FM synth, chords.
+> Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog synth and
+> the drum machine are here (8 tracks by default, 16 at most, named); next come the FM synth, chords.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -124,6 +124,35 @@ med synth <n|.> bake             the synth as a sample of its C-3 (then the samp
 
 `.bmed` keeps the settings. `.mod` and `.med` hold samples only: a synth is written as a sample of
 its C-3 (`med save` says so).
+
+## The drum machine
+
+An instrument can be a **kit of twelve drums**, computed as they play (no samples), one a note
+of the octave, whatever the octave:
+
+```
+C  kick      C# rim     D  snare     D# clap      E  closed hat   F  low tom
+F# open hat  G  mid tom G# cowbell   A  high tom  A# crash        B  ride
+```
+
+Each drum has a **tune**, a **decay**, a **level** and a **tone** (the kick's click, the snare's
+snap, the hats' brightness…); the kit can have **grit** (fewer bits, a lower rate). A drum rings
+on when its track plays the next note, and a closed hat cuts an open one, like on the machines; a
+note off (`^^^`) fades it out quickly.
+
+The INSTRUMENT screen (alt I) shows the kits above and a row a drum: ↑↓ a drum, ←→ a setting,
+⇧←→ change it (or ‹ ›, or the wheel); playing a key moves to its drum.
+
+```
+med drums <n|.> new [kit]        the instrument becomes a kit (classic punch tight lofi)
+med drums <n|.> kit <name>       another kit
+med drums <n|.> set <drum> tune|decay|level|tone <value>    e.g. set snare tune 3 · set C# decay 2
+med drums <n|.> grit <bits> [hold]    16 = clean · 6 3 = an old sampler
+med drums <n|.> show · bake <drum>    the settings · one drum as a sample
+```
+
+`.bmed` keeps the kit. In a `.mod` / `.med`, each drum the song plays becomes a sample of its own
+in a free instrument slot, and its notes are rewritten to play it.
 
 ## How it plays
 

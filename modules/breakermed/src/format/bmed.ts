@@ -7,12 +7,13 @@
  *                        "C-3 01 0C20 | --- .. .... | E-3 04 0000"
  *     samples/01.wav …   each instrument's sound (16-bit WAV; a synth's waveforms too)
  *
- * Everything a .med / .mod can't hold (8–16 tracks, names, our synths' settings,
+ * Everything a .med / .mod can't hold (8–16 tracks, names, our synths' and kits' settings,
  * chords later) lives here; .med and .mod stay for sharing with other trackers.
  */
 import { emptyCell, emptyInstrument, hex, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
+import { sanitizeKit, type DrumKit } from "../dsp/drums";
 
 export const BMED_VERSION = 1;
 
@@ -44,6 +45,8 @@ interface InstrumentJson {
   waveSpeed?: number;
   /** an analog synth's settings */
   synth?: AnalogParams;
+  /** a drum machine's kit */
+  drums?: DrumKit;
 }
 
 /** a note as text: "C-3", "^^^" (off), "---" (none); past octave 9, "N7F" (hex) */
@@ -86,6 +89,7 @@ export function writeBmed(song: Song): SongFile[] {
     if (ins.decay) j.decay = ins.decay;
     if (ins.bits16) j.bits16 = true;
     if (ins.kind === "analog") j.synth = ins.synth;
+    if (ins.kind === "drums") j.drums = ins.drums;
     if (ins.volTable) (j.volTable = ins.volTable), (j.waveTable = ins.waveTable), (j.volSpeed = ins.volSpeed), (j.waveSpeed = ins.waveSpeed);
     return j;
   });
@@ -143,7 +147,7 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
   for (const ij of (j.instruments ?? []).slice(0, 63)) {
     const ins = emptyInstrument();
     ins.name = String(ij.name ?? "").slice(0, 40);
-    ins.kind = ["sample", "synth", "hybrid", "analog", "empty"].includes(ij.kind) ? ij.kind : "empty";
+    ins.kind = ["sample", "synth", "hybrid", "analog", "drums", "empty"].includes(ij.kind) ? ij.kind : "empty";
     ins.data = await sample(ij.file);
     if (ij.right) ins.right = await sample(ij.right);
     if (Array.isArray(ij.waves)) ins.waves = await Promise.all(ij.waves.slice(0, 64).map((w: string) => sample(w)));
@@ -159,6 +163,7 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
     ins.bits16 = !!ij.bits16;
     if (Array.isArray(ij.volTable)) (ins.volTable = ij.volTable), (ins.waveTable = ij.waveTable ?? []), (ins.volSpeed = ij.volSpeed), (ins.waveSpeed = ij.waveSpeed);
     if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
+    else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);
     else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
     instruments.push(ins);
   }

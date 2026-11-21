@@ -11,7 +11,8 @@
 import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
 import type { Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
-import { AnalogVoice } from "./dsp/analog";
+import { AnalogVoice, C3_RATE } from "./dsp/analog";
+import { DrumVoice, drumOf } from "./dsp/drums";
 
 export interface LineMark {
   /** the frame (since this renderer started) the line begins on */
@@ -90,6 +91,7 @@ export class Renderer {
   preview(inst: number, rate: number, seconds = 0.6): void {
     const instrument = this.song.instruments[inst];
     if (!instrument || instrument.kind === "empty") return;
+    if (instrument.kind === "drums") seconds = 10; // a drum isn't held: it rings out on its own
     const slot = this.nextPreview++ % PREVIEWS;
     const voice = voiceFor(instrument, this.rate, this.paula);
     voice.start({ instrument, rate, offset: 0 });
@@ -168,10 +170,11 @@ export class Renderer {
       if (old?.on && instrument.kind === "analog" && old.instrument === instrument && (instrument.synth?.glide ?? 0) > 0) {
         old.start({ instrument, rate: e.rate ?? 8363, offset: 0 });
       } else {
-        // what was playing on the track releases (a synth's tail), then the new note
-        if (old?.on && old instanceof AnalogVoice) {
-          old!.stop();
-          if (old!.on && this.tails.length < 32) this.tails.push(old!);
+        // what was playing on the track rings on (a synth's release, a drum's tail), then the new note
+        if (old?.on && old.rings) {
+          if (old instanceof AnalogVoice) old.stop();
+          if (old instanceof DrumVoice && instrument.kind === "drums" && old.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) old.kill();
+          if (old.on && this.tails.length < 32) this.tails.push(old);
         }
         const v = voiceFor(instrument, this.rate, this.paula) as Voice & { instrument?: unknown };
         v.instrument = instrument;

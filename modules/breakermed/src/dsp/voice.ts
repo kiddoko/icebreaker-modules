@@ -6,6 +6,7 @@
  */
 import type { Instrument } from "../song";
 import { AnalogVoice } from "./analog";
+import { DrumVoice } from "./drums";
 
 export interface NoteStart {
   instrument: Instrument;
@@ -21,6 +22,8 @@ export interface Voice {
   /** the pitch (rate), the loudness 0…1, the place -1…1 */
   set(rate: number, volume: number, pan: number): void;
   stop(): void;
+  /** it rings on when its track plays the next note (a synth's release, a drum's tail), instead of being cut */
+  readonly rings?: boolean;
   /** add this voice into left / right, frames [from, to) */
   render(left: Float32Array, right: Float32Array, from: number, to: number): void;
 }
@@ -99,6 +102,7 @@ export class SampleVoice implements Voice {
 /** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
 export function voiceFor(instrument: Instrument, outRate: number, paula: boolean): Voice {
   if (instrument.kind === "analog") return new AnalogVoice(outRate);
+  if (instrument.kind === "drums") return new DrumVoice(outRate);
   const v = new SampleVoice(outRate);
   v.paula = paula;
   return v;
