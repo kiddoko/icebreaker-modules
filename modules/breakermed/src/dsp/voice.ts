@@ -5,6 +5,7 @@
  * instrument plugs in without touching the rest.
  */
 import type { Instrument } from "../song";
+import { AnalogVoice } from "./analog";
 
 export interface NoteStart {
   instrument: Instrument;
@@ -95,8 +96,9 @@ export class SampleVoice implements Voice {
   }
 }
 
-/** The voice an instrument plays with. Synths and drums come with their own (steps 6–8). */
-export function voiceFor(_instrument: Instrument, outRate: number, paula: boolean): Voice {
+/** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
+export function voiceFor(instrument: Instrument, outRate: number, paula: boolean): Voice {
+  if (instrument.kind === "analog") return new AnalogVoice(outRate);
   const v = new SampleVoice(outRate);
   v.paula = paula;
   return v;

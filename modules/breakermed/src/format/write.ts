@@ -5,6 +5,7 @@
  * (`warnings`): more tracks than ProTracker reads, blocks that aren't 64 lines,
  * commands a .mod hasn't got, synths…
  */
+import { withSynthsBaked } from "../dsp/bake";
 import { NOTE_OFF, periodOf, ptBpmOf, type Song } from "../song";
 import { floatsToS16be, floatsToS8, Writer } from "./bytes";
 
@@ -54,8 +55,10 @@ export function medToMod(song: Song, cmd: number, v: number): [number, number] |
   }
 }
 
-export function writeMod(song: Song): Written {
+export function writeMod(original: Song): Written {
   const warnings: string[] = [];
+  const { song, baked } = withSynthsBaked(original);
+  if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
   const w = new Writer();
   const tracks = song.tracks;
   if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -145,8 +148,10 @@ export function writeMod(song: Song): Written {
 
 // ── .med (MMD1) ────────────────────────────────────────────────────────────
 
-export function writeMed(song: Song): Written {
+export function writeMed(original: Song): Written {
   const warnings: string[] = [];
+  const { song, baked } = withSynthsBaked(original);
+  if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
   const w = new Writer();
   const T = song.tracks;
   const insts = song.instruments.slice(0, 63);

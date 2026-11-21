@@ -5,8 +5,8 @@ line a step, each cell a note, an instrument and hex commands; a play sequence m
 It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's colours, with the
 keyboard, the mouse and a gamepad.
 
-> Work in progress: reading, playing, editing and saving are here (8 tracks by default, 16 at
-> most, named); next come the exports, the sampler's tools, the synths, the drum machine, chords.
+> Work in progress: reading, playing, editing, saving, exporting, the sampler and the analog synth
+> are here (8 tracks by default, 16 at most, named); next come the drum machine, the FM synth, chords.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -84,6 +84,46 @@ AIFF-C) or **FLAC** (16 / 24 bits, lossless, our own encoder). `--stems` adds **
 own** (`<name> stems/01 lead.wav`…), `--only-stems` only those, `--tracks 1,3` the ones you say.
 Muted tracks stay muted; the end rings out for `--tail` seconds, then fades; 16 bits get a little
 dither. MP3 / M4A / OGG come later, through an encoder pack the deck downloads on request.
+
+## The sampler
+
+alt I shows the instrument (alt B the block again): its sound in braille dots, and a button a
+tool. Each runs a `med sample` command (the LOG shows it, ⌘Z undoes it):
+
+```
+med sample <n|.> load [file] [--amiga]   a sound of the vault (wav, aif, iff/8svx, mp3, m4a, ogg…)
+med sample <n|.> chop <slices> | chop onsets    slices become new instruments
+med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)
+med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse
+med sample <n|.> crush [bits] [hold]     destructive 8-bit and a lower rate
+med sample <n|.> normalize · trim · loop <start> <length> | off | pingpong
+med sample <n|.> name · vol · fine · transpose · clear · info
+med bounce [--tracks 1,3] [--song]       the block (or the song) into a new instrument
+med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8)
+```
+
+## The analog synth
+
+An instrument can be a **subtractive synth** instead of a sound: two oscillators (saw, square with
+its width, triangle, sine, noise) and a sub an octave down → a filter (low, high or band-pass,
+12 or 24 dB, resonance, key tracking) → the amplifier; an envelope (ADSR) for each, an LFO for the
+pitch, the filter or the width, and glide. C-3 is middle C; the tracker's commands (slides,
+vibrato, arpeggios, volume) play it like a sample, a note off (`^^^`) starts its release, and a
+new note lets the old one ring out.
+
+On the INSTRUMENT screen (alt I) an empty instrument has an **analog synth** button; a synth shows
+its presets above and a row a setting: ↑↓ choose, ←→ change (⇧ faster), or click ‹ ›, or the wheel.
+
+```
+med synth <n|.> new [preset]     the instrument becomes a synth (bass acid lead pad pluck brass sine)
+med synth <n|.> preset <name>    another starting point
+med synth <n|.> set <setting> <value>   e.g. set cutoff 800 · set reso 0.7 · set osc1.wave square
+med synth <n|.> show             every setting · med synth settings: their names and ranges
+med synth <n|.> bake             the synth as a sample of its C-3 (then the sampler's tools work on it)
+```
+
+`.bmed` keeps the settings. `.mod` and `.med` hold samples only: a synth is written as a sample of
+its C-3 (`med save` says so).
 
 ## How it plays
 

@@ -21,7 +21,7 @@
  * Not yet: 08 hold/decay (the instrument's own hold/decay works), 0E synth jump,
  * 20 reverse, the synth instruments' programs, MIDI.
  */
-import { NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Instrument, type Song } from "./song";
+import { NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, type Instrument, type Song } from "./song";
 
 /** What a voice does on a tick: only what changed. */
 export interface VoiceEvent {
@@ -226,7 +226,7 @@ export class Player {
     c.period = c.target = period;
     c.vibPos = c.tremPos = 0;
     c.age = 0;
-    if (inst && inst.kind !== "empty" && inst.data.length) {
+    if (playable(inst)) {
       c.on = true;
       triggers.set(t, 0);
     } else {

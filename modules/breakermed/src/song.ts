@@ -89,7 +89,11 @@ export interface Block {
   cells: Cell[][];
 }
 
-export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid";
+/** sample: a sound read at the note's speed · analog: our subtractive synth · synth / hybrid: OctaMED's (read from .med) */
+export type InstrumentKind = "empty" | "sample" | "synth" | "hybrid" | "analog";
+
+/** an instrument that makes sound (a sample with frames, or one of our synths) */
+export const playable = (i: Instrument | undefined) => !!i && (i.kind === "analog" || (i.kind !== "empty" && i.data.length > 0));
 
 export interface Instrument {
   name: string;
@@ -120,6 +124,8 @@ export interface Instrument {
   waveTable?: number[];
   volSpeed?: number;
   waveSpeed?: number;
+  /** the analog synth's settings (kind "analog") */
+  synth?: import("./dsp/analog").AnalogParams;
 }
 
 export function emptyCell(pages = 1): Cell {

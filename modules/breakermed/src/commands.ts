@@ -9,11 +9,12 @@ import { demoMod } from "./demo";
 import { readBmed, writeBmed } from "./format/bmed";
 import { checkFormat, encode, renderSong, trackUsed, type ExportFormat } from "./export";
 import { bounce, sampleCommand, SAMPLE_USAGE } from "./commands-sample";
+import { synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
 import { DEFAULT_TRACKS, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { Editor, parseNote } from "./edit";
-import type { State } from "./app";
+import { undoRedo, type State } from "./app";
 
 const EFFECTS: [string, string][] = [
   ["00xy", "arpeggio: the note, +x, +y semitones"],
@@ -146,16 +147,24 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
       "med undo · med redo",
       ...SAMPLE_USAGE,
+      ...SYNTH_USAGE,
       "med effects                every command (00–2E) in one line each",
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
         try {
           return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
+        } catch (err) {
+          return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
+        }
+      }
+      if (positional[0] === "synth") {
+        try {
+          return await synthCommand(ib, st, ctx, positional.slice(1));
         } catch (err) {
           return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
         }
@@ -396,7 +405,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "undo":
           case "redo": {
             need();
-            const label = sub === "undo" ? st.editor!.undo() : st.editor!.redo();
+            const label = undoRedo(st, sub === "redo");
             ctx.out(label ? `${sub === "undo" ? "undone" : "redone"}: ${label}\n` : `nothing to ${sub}\n`);
             return 0;
           }
@@ -416,7 +425,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
                 `slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
                 `length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
                 `instruments`,
-                ...s.instruments.map((i, n) => (i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${String(i.data.length).padStart(7)} frames · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`)).filter(Boolean),
+                ...s.instruments.map((i, n) => (i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" ? "  synth" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`)).filter(Boolean),
               ].join("\n") + "\n",
             );
             return 0;

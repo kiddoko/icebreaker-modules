@@ -24,6 +24,7 @@ import type { Action, App, IcebreakerAPI, KeyInput, MenuEntry, Rect, UI } from "
 import { colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
 import type { Engine } from "./engine";
 import { pianoKey } from "./keys";
+import { ANALOG_PARAMS, ANALOG_PRESETS, nudgeParam, showParam } from "./dsp/analog";
 import { hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
@@ -48,10 +49,30 @@ export interface State {
   error: string;
   /** what the right side shows: the block, or the instrument's tools (alt I / alt B) */
   screen: "block" | "instrument";
+  /** the synth setting the INSTRUMENT screen's cursor is on */
+  synthRow: number;
+}
+
+/**
+ * ⌘Z / ⌘⇧Z (and med undo / redo): if it takes away the instrument the keys
+ * play (a load, a chop, a bounce undone), the keys go to the nearest one left.
+ */
+export function undoRedo(st: State, redo: boolean): string | null {
+  const s = st.song, e = st.editor;
+  if (!s || !e) return null;
+  const had = s.instruments[st.inst] && s.instruments[st.inst].kind !== "empty";
+  const label = redo ? e.redo() : e.undo();
+  const now = s.instruments[st.inst];
+  if (had && (!now || now.kind === "empty")) {
+    let k = Math.min(st.inst, s.instruments.length - 1);
+    while (k > 0 && s.instruments[k]?.kind === "empty") k--;
+    st.inst = Math.max(0, k);
+  }
+  return label;
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block" };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", synthRow: 0 };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -157,9 +178,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const ins = s.instruments[st.inst];
     const n = hex(st.inst + 1);
     const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
+    if (ins?.kind === "analog" && ins.synth) return drawSynth(ui, inner, focused);
     if (!ins || ins.kind === "empty" || !ins.data.length) {
-      ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound:"), { fg: c.muted }, inner.w - 2);
-      ui.button(inner.x + 1, inner.y + 3, t("load…"), () => {}, { cmd: `med sample ${n} load`, tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault") });
+      ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
+      let x = inner.x + 1;
+      x += ui.button(x, inner.y + 3, t("load…"), () => {}, { cmd: `med sample ${n} load`, tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault") }) + 1;
+      ui.button(x, inner.y + 3, t("analog synth"), () => {}, { cmd: `med synth ${n} new`, tip: t("two oscillators, a filter, two envelopes, an LFO") });
       return;
     }
     // the wave: each cell is 2 × 4 dots; each dot column the min…max of its part of the sound
@@ -222,6 +246,47 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
   };
 
+  /** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
+  const nudge = (row: number, dir: 1 | -1, big = false) => {
+    const def = ANALOG_PARAMS[row];
+    if (def) ed()?.instrument(st.inst, def.label, (i) => i.synth && nudgeParam(i.synth, def.key, dir, big));
+  };
+
+  /** The analog synth's settings: a row each (‹ value ›), the presets above. */
+  const drawSynth = (ui: UI, inner: Rect, focused: boolean) => {
+    const c = ui.c;
+    const n = hex(st.inst + 1);
+    const p = st.song!.instruments[st.inst].synth!;
+    let x = inner.x + 1;
+    ui.text(x, inner.y, t("preset"), { fg: c.muted });
+    x += t("preset").length + 1;
+    for (const name of Object.keys(ANALOG_PRESETS)) {
+      if (x + name.length + 2 > inner.x + inner.w - 1) break;
+      x += ui.button(x, inner.y, name, () => {}, { cmd: `med synth ${n} preset ${name}`, quiet: true }) + 1;
+    }
+    const top = inner.y + 2;
+    const h = Math.max(1, inner.h - 3);
+    const colW = 36;
+    const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
+    const perCol = Math.ceil(ANALOG_PARAMS.length / cols);
+    // too many rows for the height: the column scrolls with the cursor
+    const scroll = perCol > h ? Math.max(0, Math.min(perCol - h, (st.synthRow % perCol) - Math.floor(h / 2))) : 0;
+    st.synthRow = Math.max(0, Math.min(ANALOG_PARAMS.length - 1, st.synthRow));
+    ANALOG_PARAMS.forEach((def, i) => {
+      const col = Math.floor(i / perCol), row = (i % perCol) - scroll;
+      if (row < 0 || row >= h) return;
+      const x0 = inner.x + 1 + col * colW, y = top + row;
+      const on = i === st.synthRow;
+      ui.text(x0, y, t(def.label).padEnd(18).slice(0, 18), { fg: on ? c.fg : c.muted });
+      ui.button(x0 + 19, y, "‹", () => ((st.synthRow = i), nudge(i, -1)), { quiet: !on });
+      ui.text(x0 + 23, y, showParam(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
+      ui.button(x0 + 32, y, "›", () => ((st.synthRow = i), nudge(i, 1)), { quiet: !on });
+      ui.hit({ x: x0, y, w: 18, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1) });
+      if (on && focused) ui.tint({ x: x0, y, w: 18, h: 1 }, undefined, c.highlight);
+    });
+    ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h"), { fg: c.subtle }, inner.w - 2);
+  };
+
   /** a track's new name, asked in a window (the command does it) */
   const rename = async (tr: number) => {
     const s = song();
@@ -280,7 +345,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     dirty: () => !!st.editor?.dirty,
     status: () =>
       st.song
-        ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} · ⏎ ${t("play")} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
+        ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
         : t("med open <file.med|.mod> — or med demo"),
 
     render(ui: UI, r: Rect, focused: boolean) {
@@ -324,12 +389,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.text(row.x, row.y, `${hex(i)} ${hex(s.sequence[i], 3)} ${b?.name ?? ""}`, { fg: sel ? c.accent : c.muted, attrs: sel ? BOLD : 0 }, row.w);
       });
       const instBox = ui.box({ x: body.x, y: body.y + seqH, w: leftW, h: body.h - seqH }, { title: t("INSTRUMENTS"), focused: false });
-      instList.items = s.instruments.map((_, i) => i);
-      if (instList.selected !== st.inst && st.inst < s.instruments.length) instList.select(st.inst);
+      // the instruments, and the free slot past them when the keys are on it (alt →)
+      instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
+      if (instList.selected !== st.inst) instList.select(st.inst);
       instList.render(ui, instBox, false, (i, row, sel) => {
-        const ins = s.instruments[i];
+        const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
-        const tag = ins.kind === "synth" ? "∿" : ins.kind === "hybrid" ? "≈" : "";
+        const tag = ins.kind === "synth" || ins.kind === "analog" ? "∿" : ins.kind === "hybrid" ? "≈" : "";
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
@@ -430,7 +496,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       }
       if (!s || !e) return false;
       // ⌘Z / ⌘⇧Z: the block's own history
-      if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(k.shift ? e.redo() : e.undo(), t(k.shift ? "redone" : "undone")), true;
+      if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
       if (k.alt) {
         const digit = /^Digit(\d)$/.exec(k.code);
         if (digit) return (st.step = +digit[1]), true;
@@ -440,7 +506,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "ArrowUp": return (st.octave = Math.min(7, st.octave + 1)), true;
           case "ArrowDown": return (st.octave = Math.max(0, st.octave - 1)), true;
           case "ArrowLeft": return (st.inst = Math.max(0, st.inst - 1)), true;
-          case "ArrowRight": return (st.inst = Math.min(Math.max(0, s.instruments.length - 1), st.inst + 1)), true;
+          // one past the last: a free slot, to load a sound or make a synth in
+          case "ArrowRight": return (st.inst = Math.min(62, s.instruments.length, st.inst + 1)), true;
           case "KeyC": return copy(), true;
           case "KeyX": return cut(), true;
           case "KeyV": return paste(), true;
@@ -449,6 +516,15 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
         }
         return false;
+      }
+      // the synth's settings: the arrows walk them (the piano keys still play)
+      if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "analog" && !k.ctrl && !k.meta) {
+        switch (k.key) {
+          case "up": return (st.synthRow = Math.max(0, st.synthRow - 1)), true;
+          case "down": return (st.synthRow = Math.min(ANALOG_PARAMS.length - 1, st.synthRow + 1)), true;
+          case "left": return nudge(st.synthRow, -1, k.shift), true;
+          case "right": return nudge(st.synthRow, 1, k.shift), true;
+        }
       }
       if (k.shift) {
         switch (k.key) {

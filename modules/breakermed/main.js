@@ -12,6 +12,8 @@ var NOTE_NAMES = [
 	"A#",
 	"B-"
 ];
+/** an instrument that makes sound (a sample with frames, or one of our synths) */
+var playable = (i) => !!i && (i.kind === "analog" || i.kind !== "empty" && i.data.length > 0);
 function emptyCell(pages = 1) {
 	return {
 		note: 0,
@@ -474,10 +476,11 @@ var Editor = class {
 		if (!old) return;
 		this.shape(label, () => {
 			const copy = { ...old };
+			if (old.synth) copy.synth = structuredClone(old.synth);
 			fn(copy);
 			if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
 			if (copy.loopLength <= 2) copy.loopStart = 0, copy.loopLength = 0;
-			copy.kind = copy.data.length ? copy.kind === "empty" ? "sample" : copy.kind : "empty";
+			if (copy.kind !== "analog") copy.kind = copy.data.length ? copy.kind === "empty" ? "sample" : copy.kind : "empty";
 			this.song.instruments[index] = copy;
 		});
 	}
@@ -595,7 +598,758 @@ var PIANO = {
 function pianoKey(code) {
 	return code in PIANO ? PIANO[code] : null;
 }
+// src/dsp/analog.ts
+/** what a rate means for a synth: the tracker's C-3 rate is middle C */
+var C3_RATE$1 = 3546895 / 214;
+var C3_HZ = 261.6256;
+function defaultAnalog() {
+	return {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .8
+		},
+		osc2: {
+			wave: "saw",
+			pw: .5,
+			level: 0,
+			semi: 0,
+			detune: 7
+		},
+		sub: 0,
+		filter: {
+			type: "lp",
+			cutoff: 2e3,
+			reso: .2,
+			env: 2,
+			keytrack: .5,
+			slope: 12
+		},
+		amp: {
+			a: .005,
+			d: .2,
+			s: .8,
+			r: .2
+		},
+		fenv: {
+			a: .005,
+			d: .3,
+			s: .3,
+			r: .2
+		},
+		lfo: {
+			wave: "sine",
+			rate: 5,
+			pitch: 0,
+			cutoff: 0,
+			pw: 0
+		},
+		glide: 0
+	};
+}
+/** our own starting points */
+var ANALOG_PRESETS = {
+	bass: (p) => Object.assign(p, {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .8
+		},
+		sub: .5,
+		filter: {
+			type: "lp",
+			cutoff: 300,
+			reso: .3,
+			env: 3,
+			keytrack: .3,
+			slope: 24
+		},
+		amp: {
+			a: .002,
+			d: .3,
+			s: .7,
+			r: .1
+		},
+		fenv: {
+			a: .002,
+			d: .25,
+			s: .1,
+			r: .1
+		}
+	}),
+	acid: (p) => Object.assign(p, {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .9
+		},
+		filter: {
+			type: "lp",
+			cutoff: 350,
+			reso: .85,
+			env: 4,
+			keytrack: .4,
+			slope: 12
+		},
+		amp: {
+			a: .002,
+			d: .2,
+			s: .8,
+			r: .05
+		},
+		fenv: {
+			a: .001,
+			d: .18,
+			s: 0,
+			r: .05
+		},
+		glide: .06
+	}),
+	lead: (p) => Object.assign(p, {
+		osc1: {
+			wave: "square",
+			pw: .35,
+			level: .6
+		},
+		osc2: {
+			wave: "saw",
+			pw: .5,
+			level: .5,
+			semi: 0,
+			detune: 9
+		},
+		filter: {
+			type: "lp",
+			cutoff: 2500,
+			reso: .25,
+			env: 1.5,
+			keytrack: .6,
+			slope: 12
+		},
+		lfo: {
+			wave: "sine",
+			rate: 5.5,
+			pitch: .15,
+			cutoff: 0,
+			pw: .15
+		},
+		glide: .03
+	}),
+	pad: (p) => Object.assign(p, {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .5
+		},
+		osc2: {
+			wave: "saw",
+			pw: .5,
+			level: .5,
+			semi: 0,
+			detune: 14
+		},
+		filter: {
+			type: "lp",
+			cutoff: 1200,
+			reso: .15,
+			env: 1,
+			keytrack: .5,
+			slope: 12
+		},
+		amp: {
+			a: .6,
+			d: .5,
+			s: .8,
+			r: 1.2
+		},
+		fenv: {
+			a: .8,
+			d: 1,
+			s: .5,
+			r: 1
+		},
+		lfo: {
+			wave: "triangle",
+			rate: .4,
+			pitch: 0,
+			cutoff: .4,
+			pw: 0
+		}
+	}),
+	pluck: (p) => Object.assign(p, {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .8
+		},
+		osc2: {
+			wave: "square",
+			pw: .5,
+			level: .3,
+			semi: 12,
+			detune: 0
+		},
+		filter: {
+			type: "lp",
+			cutoff: 500,
+			reso: .3,
+			env: 4,
+			keytrack: .6,
+			slope: 12
+		},
+		amp: {
+			a: .001,
+			d: .35,
+			s: 0,
+			r: .2
+		},
+		fenv: {
+			a: .001,
+			d: .15,
+			s: 0,
+			r: .1
+		}
+	}),
+	brass: (p) => Object.assign(p, {
+		osc1: {
+			wave: "saw",
+			pw: .5,
+			level: .6
+		},
+		osc2: {
+			wave: "saw",
+			pw: .5,
+			level: .5,
+			semi: 0,
+			detune: 6
+		},
+		filter: {
+			type: "lp",
+			cutoff: 700,
+			reso: .1,
+			env: 2.5,
+			keytrack: .5,
+			slope: 12
+		},
+		amp: {
+			a: .05,
+			d: .3,
+			s: .8,
+			r: .25
+		},
+		fenv: {
+			a: .08,
+			d: .4,
+			s: .5,
+			r: .2
+		}
+	}),
+	sine: (p) => Object.assign(p, {
+		osc1: {
+			wave: "sine",
+			pw: .5,
+			level: .9
+		},
+		filter: {
+			type: "lp",
+			cutoff: 18e3,
+			reso: 0,
+			env: 0,
+			keytrack: 0,
+			slope: 12
+		},
+		amp: {
+			a: .01,
+			d: .1,
+			s: 1,
+			r: .3
+		}
+	})
+};
+/** a fresh copy of a preset (or the default) */
+function analogPreset(name) {
+	const p = defaultAnalog();
+	ANALOG_PRESETS[name ?? ""]?.(p);
+	return structuredClone(p);
+}
+/** a band-limiting correction at a waveform's jump (polyBLEP) */
+function blep(t, dt) {
+	if (t < dt) {
+		const x = t / dt;
+		return x + x - x * x - 1;
+	}
+	if (t > 1 - dt) {
+		const x = (t - 1) / dt;
+		return x * x + x + x + 1;
+	}
+	return 0;
+}
+function osc(wave, phase, dt, pw, noise) {
+	switch (wave) {
+		case "saw": return 2 * phase - 1 - blep(phase, dt);
+		case "square": {
+			let y = phase < pw ? 1 : -1;
+			y += blep(phase, dt);
+			y -= blep((phase - pw + 1) % 1, dt);
+			return y;
+		}
+		case "triangle": return phase < .5 ? 4 * phase - 1 : 3 - 4 * phase;
+		case "sine": return Math.sin(2 * Math.PI * phase);
+		case "noise": return noise();
+	}
+}
+/** an envelope's level after `t` seconds of the note (`releasedAt`: when the key went up, its level then) */
+function adsr(e, t, released) {
+	if (released) {
+		const r = Math.max(.001, e.r);
+		return Math.max(0, released.from * (1 - (t - released.at) / r));
+	}
+	const a = Math.max(5e-4, e.a);
+	if (t < a) return t / a;
+	const d = Math.max(5e-4, e.d);
+	if (t < a + d) return 1 - (1 - e.s) * ((t - a) / d);
+	return e.s;
+}
+var AnalogVoice = class {
+	constructor(outRate) {
+		_defineProperty(this, "outRate", void 0);
+		_defineProperty(this, "on", false);
+		_defineProperty(this, "p", defaultAnalog());
+		_defineProperty(this, "hz", C3_HZ);
+		_defineProperty(this, "targetHz", C3_HZ);
+		_defineProperty(this, "ph1", 0);
+		_defineProperty(this, "ph2", 0);
+		_defineProperty(this, "phSub", 0);
+		_defineProperty(this, "lfoPh", 0);
+		_defineProperty(this, "lfoHold", 0);
+		_defineProperty(this, "t", 0);
+		_defineProperty(this, "released", null);
+		_defineProperty(this, "gl", 0);
+		_defineProperty(this, "gr", 0);
+		_defineProperty(this, "seed", 12345);
+		_defineProperty(this, "s1", [0, 0]);
+		_defineProperty(this, "s2", [0, 0]);
+		_defineProperty(this, "noise", () => (this.seed = this.seed * 1103515245 + 12345 & 2147483647) / 1073741823 - 1);
+		this.outRate = outRate;
+	}
+	start(n) {
+		const glide = this.on && (n.instrument.synth?.glide ?? 0) > 0;
+		this.p = n.instrument.synth ?? defaultAnalog();
+		this.targetHz = n.rate / C3_RATE$1 * C3_HZ;
+		if (!glide) this.hz = this.targetHz;
+		this.t = 0;
+		this.released = null;
+		this.on = true;
+	}
+	/** the tracker's pitch (slides, vibrato, arpeggio), loudness and place */
+	set(rate, volume, pan) {
+		this.targetHz = Math.max(1, rate) / C3_RATE$1 * C3_HZ;
+		if (!(this.p.glide > 0)) this.hz = this.targetHz;
+		const v = Math.max(0, Math.min(1, volume));
+		this.gl = v * Math.min(1, 1 - pan);
+		this.gr = v * Math.min(1, 1 + pan);
+	}
+	/** the key goes up: the release phase (the voice ends when it's silent) */
+	stop() {
+		if (!this.on || this.released) return;
+		this.released = {
+			at: this.t,
+			from: adsr(this.p.amp, this.t, null)
+		};
+	}
+	/** right now, no release (a hard cut) */
+	kill() {
+		this.on = false;
+	}
+	render(left, right, from, to) {
+		if (!this.on) return;
+		const p = this.p;
+		const sr = this.outRate;
+		const dtSec = 1 / sr;
+		const glideK = p.glide > 0 ? 1 - Math.exp(-dtSec / Math.max(.001, p.glide / 3)) : 1;
+		let g = 0, k = 0, fcut = 0;
+		for (let i = from; i < to; i++) {
+			this.hz += (this.targetHz - this.hz) * glideK;
+			this.lfoPh = (this.lfoPh + p.lfo.rate * dtSec) % 1;
+			let lfo;
+			switch (p.lfo.wave) {
+				case "triangle":
+					lfo = this.lfoPh < .5 ? 4 * this.lfoPh - 1 : 3 - 4 * this.lfoPh;
+					break;
+				case "square":
+					lfo = this.lfoPh < .5 ? 1 : -1;
+					break;
+				case "saw":
+					lfo = 2 * this.lfoPh - 1;
+					break;
+				case "random":
+					if (this.lfoPh < p.lfo.rate * dtSec) this.lfoHold = this.noise();
+					lfo = this.lfoHold;
+					break;
+				default: lfo = Math.sin(2 * Math.PI * this.lfoPh);
+			}
+			const hz = this.hz * 2 ** (lfo * p.lfo.pitch / 12);
+			const dt1 = Math.min(.49, hz / sr);
+			const dt2 = Math.min(.49, hz * 2 ** ((p.osc2.semi + p.osc2.detune / 100) / 12) / sr);
+			const pw1 = Math.max(.05, Math.min(.95, p.osc1.pw + lfo * p.lfo.pw * .45));
+			const pw2 = Math.max(.05, Math.min(.95, p.osc2.pw + lfo * p.lfo.pw * .45));
+			let x = p.osc1.level ? osc(p.osc1.wave, this.ph1, dt1, pw1, this.noise) * p.osc1.level : 0;
+			if (p.osc2.level) x += osc(p.osc2.wave, this.ph2, dt2, pw2, this.noise) * p.osc2.level;
+			if (p.sub) x += osc("square", this.phSub, dt1 / 2, .5, this.noise) * p.sub;
+			this.ph1 = (this.ph1 + dt1) % 1;
+			this.ph2 = (this.ph2 + dt2) % 1;
+			this.phSub = (this.phSub + dt1 / 2) % 1;
+			if ((i - from) % 8 === 0) {
+				const env = adsr(p.fenv, this.t, this.released ? {
+					at: this.released.at,
+					from: adsr(p.fenv, this.released.at, null)
+				} : null);
+				const key = Math.log2(hz / C3_HZ) * p.filter.keytrack;
+				fcut = Math.max(20, Math.min(sr * .45, p.filter.cutoff * 2 ** (env * p.filter.env + key + lfo * p.lfo.cutoff)));
+				g = Math.tan(Math.PI * fcut / sr);
+				k = 2 - 2 * Math.min(.98, Math.max(0, p.filter.reso));
+			}
+			x = this.svf(this.s1, x, g, k, p.filter.type);
+			if (p.filter.slope === 24) x = this.svf(this.s2, x, g, k, p.filter.type);
+			const amp = adsr(p.amp, this.t, this.released);
+			this.t += dtSec;
+			if (this.released && amp <= 0) {
+				this.on = false;
+				return;
+			}
+			const y = x * amp * .5;
+			left[i] += y * this.gl;
+			right[i] += y * this.gr;
+		}
+	}
+	/** one TPT state-variable filter step (Zavalishin): low, band or high-pass */
+	svf(s, x, g, k, type) {
+		const hp = (x - (k + g) * s[0] - s[1]) / (1 + g * (k + g));
+		const bp = g * hp + s[0];
+		const lp = g * bp + s[1];
+		s[0] = g * hp + bp;
+		s[1] = g * bp + lp;
+		return type === "lp" ? lp : type === "hp" ? hp : bp;
+	}
+};
+var WAVES = [
+	"saw",
+	"square",
+	"triangle",
+	"sine",
+	"noise"
+];
+var ANALOG_PARAMS = [
+	{
+		key: "osc1.wave",
+		label: "osc 1 wave",
+		choices: WAVES
+	},
+	{
+		key: "osc1.pw",
+		label: "osc 1 width",
+		min: .05,
+		max: .95,
+		step: .05
+	},
+	{
+		key: "osc1.level",
+		label: "osc 1 level",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "osc2.wave",
+		label: "osc 2 wave",
+		choices: WAVES
+	},
+	{
+		key: "osc2.pw",
+		label: "osc 2 width",
+		min: .05,
+		max: .95,
+		step: .05
+	},
+	{
+		key: "osc2.level",
+		label: "osc 2 level",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "osc2.semi",
+		label: "osc 2 semitones",
+		min: -24,
+		max: 24,
+		step: 1
+	},
+	{
+		key: "osc2.detune",
+		label: "osc 2 detune",
+		min: -50,
+		max: 50,
+		step: 1,
+		unit: "ct"
+	},
+	{
+		key: "sub",
+		label: "sub (octave down)",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "filter.type",
+		label: "filter",
+		choices: [
+			"lp",
+			"hp",
+			"bp"
+		]
+	},
+	{
+		key: "filter.slope",
+		label: "filter slope",
+		choices: ["12", "24"],
+		unit: "dB"
+	},
+	{
+		key: "filter.cutoff",
+		label: "cutoff",
+		min: 20,
+		max: 2e4,
+		step: 1.12,
+		log: true,
+		unit: "Hz"
+	},
+	{
+		key: "filter.reso",
+		label: "resonance",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "filter.env",
+		label: "filter env amount",
+		min: -8,
+		max: 8,
+		step: .25,
+		unit: "oct"
+	},
+	{
+		key: "filter.keytrack",
+		label: "key tracking",
+		min: 0,
+		max: 1,
+		step: .1
+	},
+	{
+		key: "fenv.a",
+		label: "filter attack",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "fenv.d",
+		label: "filter decay",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "fenv.s",
+		label: "filter sustain",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "fenv.r",
+		label: "filter release",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.a",
+		label: "attack",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.d",
+		label: "decay",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "amp.s",
+		label: "sustain",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "amp.r",
+		label: "release",
+		min: 0,
+		max: 10,
+		step: 1.25,
+		log: true,
+		unit: "s"
+	},
+	{
+		key: "lfo.wave",
+		label: "lfo wave",
+		choices: [
+			"sine",
+			"triangle",
+			"square",
+			"saw",
+			"random"
+		]
+	},
+	{
+		key: "lfo.rate",
+		label: "lfo rate",
+		min: .05,
+		max: 40,
+		step: 1.15,
+		log: true,
+		unit: "Hz"
+	},
+	{
+		key: "lfo.pitch",
+		label: "lfo → pitch",
+		min: 0,
+		max: 12,
+		step: .05,
+		unit: "st"
+	},
+	{
+		key: "lfo.cutoff",
+		label: "lfo → cutoff",
+		min: 0,
+		max: 4,
+		step: .1,
+		unit: "oct"
+	},
+	{
+		key: "lfo.pw",
+		label: "lfo → width",
+		min: 0,
+		max: 1,
+		step: .05
+	},
+	{
+		key: "glide",
+		label: "glide",
+		min: 0,
+		max: 2,
+		step: .01,
+		unit: "s"
+	}
+];
+/** a setting by its key, or its label's first word ("cutoff", "reso"…) */
+function findParam(name) {
+	const n = name.toLowerCase();
+	return ANALOG_PARAMS.find((x) => x.key === n) ?? ANALOG_PARAMS.find((x) => x.key.endsWith("." + n) || x.label === n) ?? ANALOG_PARAMS.find((x) => x.key.split(".").pop().startsWith(n) && n.length >= 3);
+}
+function getParam(p, key) {
+	const [a, b] = key.split(".");
+	const v = b ? p[a][b] : p[a];
+	return key === "filter.slope" ? String(v) : v;
+}
+/** A setting from text ("saw", "800", "1.5k") — checked and clamped. Throws on a bad value. */
+function setParam(p, key, text) {
+	const def = ANALOG_PARAMS.find((x) => x.key === key);
+	if (!def) throw new Error(`no setting "${key}"`);
+	let v;
+	if (def.choices) {
+		if (!def.choices.includes(text)) throw new Error(`${def.label}: ${def.choices.join(" | ")}`);
+		v = key === "filter.slope" ? +text : text;
+	} else {
+		const m = /^(-?[\d.]+)(k?)$/i.exec(text.trim());
+		const x = m ? parseFloat(m[1]) * (m[2] ? 1e3 : 1) : NaN;
+		if (!Number.isFinite(x)) throw new Error(`${def.label}: a number, ${def.min}…${def.max}`);
+		v = Math.max(def.min, Math.min(def.max, x));
+	}
+	const [a, b] = key.split(".");
+	if (b) p[a][b] = v;
+	else p[a] = v;
+}
+/** One step up or down (←→ on the screen): the next choice, or the next value. */
+function nudgeParam(p, key, dir, big = false) {
+	const def = ANALOG_PARAMS.find((x) => x.key === key);
+	const cur = getParam(p, key);
+	if (def.choices) {
+		const i = def.choices.indexOf(String(cur));
+		setParam(p, key, def.choices[(i + dir + def.choices.length) % def.choices.length]);
+		return;
+	}
+	const x = Number(cur);
+	const times = big ? 4 : 1;
+	let next;
+	if (def.log) next = x <= 0 ? dir > 0 ? .001 : 0 : x * def.step ** (dir * times);
+	else next = Math.round((x + dir * def.step * times) / def.step) * def.step;
+	if (def.log && next < .001 && dir < 0) next = def.min;
+	setParam(p, key, String(+next.toPrecision(4)));
+}
+/** a setting as the screen shows it */
+function showParam(p, def) {
+	const v = getParam(p, def.key);
+	if (typeof v === "string") return v + (def.unit ? ` ${def.unit}` : "");
+	return (def.unit === "Hz" && v >= 1e3 ? `${+(v / 1e3).toFixed(2)}k` : def.unit === "s" && v < 1 ? `${Math.round(v * 1e3)} ms` : String(+v.toFixed(2))) + (def.unit && !(def.unit === "s" && v < 1) ? ` ${def.unit}` : "");
+}
+/** Settings read from a file: every value checked, anything missing or wrong → the default. */
+function sanitizeAnalog(j) {
+	const p = defaultAnalog();
+	if (!j || typeof j !== "object") return p;
+	for (const def of ANALOG_PARAMS) {
+		const [a, b] = def.key.split(".");
+		const o = j;
+		const raw = b ? o[a]?.[b] : o[a];
+		if (raw === void 0 || raw === null) continue;
+		try {
+			setParam(p, def.key, String(raw));
+		} catch {}
+	}
+	return p;
+}
 // src/app.ts
+/**
+* ⌘Z / ⌘⇧Z (and med undo / redo): if it takes away the instrument the keys
+* play (a load, a chop, a bounce undone), the keys go to the nearest one left.
+*/
+function undoRedo(st, redo) {
+	const s = st.song, e = st.editor;
+	if (!s || !e) return null;
+	const had = s.instruments[st.inst] && s.instruments[st.inst].kind !== "empty";
+	const label = redo ? e.redo() : e.undo();
+	const now = s.instruments[st.inst];
+	if (had && (!now || now.kind === "empty")) {
+		let k = Math.min(st.inst, s.instruments.length - 1);
+		while (k > 0 && s.instruments[k]?.kind === "empty") k--;
+		st.inst = Math.max(0, k);
+	}
+	return label;
+}
 function newState() {
 	return {
 		song: null,
@@ -612,7 +1366,8 @@ function newState() {
 		sel: null,
 		clip: null,
 		error: "",
-		screen: "block"
+		screen: "block",
+		synthRow: 0
 	};
 }
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -742,11 +1497,17 @@ function makeApp(ib, engine, st) {
 			title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`,
 			focused
 		});
+		if (ins?.kind === "analog" && ins.synth) return drawSynth(ui, inner, focused);
 		if (!ins || ins.kind === "empty" || !ins.data.length) {
-			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound:"), { fg: c.muted }, inner.w - 2);
-			ui.button(inner.x + 1, inner.y + 3, t("load…"), () => {}, {
+			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
+			let x = inner.x + 1;
+			x += ui.button(x, inner.y + 3, t("load…"), () => {}, {
 				cmd: `med sample ${n} load`,
 				tip: t("a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault")
+			}) + 1;
+			ui.button(x, inner.y + 3, t("analog synth"), () => {}, {
+				cmd: `med synth ${n} new`,
+				tip: t("two oscillators, a filter, two envelopes, an LFO")
 			});
 			return;
 		}
@@ -887,6 +1648,60 @@ function makeApp(ib, engine, st) {
 		}
 		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
 	};
+	/** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
+	const nudge = (row, dir, big = false) => {
+		const def = ANALOG_PARAMS[row];
+		if (def) ed()?.instrument(st.inst, def.label, (i) => i.synth && nudgeParam(i.synth, def.key, dir, big));
+	};
+	/** The analog synth's settings: a row each (‹ value ›), the presets above. */
+	const drawSynth = (ui, inner, focused) => {
+		const c = ui.c;
+		const n = hex(st.inst + 1);
+		const p = st.song.instruments[st.inst].synth;
+		let x = inner.x + 1;
+		ui.text(x, inner.y, t("preset"), { fg: c.muted });
+		x += t("preset").length + 1;
+		for (const name of Object.keys(ANALOG_PRESETS)) {
+			if (x + name.length + 2 > inner.x + inner.w - 1) break;
+			x += ui.button(x, inner.y, name, () => {}, {
+				cmd: `med synth ${n} preset ${name}`,
+				quiet: true
+			}) + 1;
+		}
+		const top = inner.y + 2;
+		const h = Math.max(1, inner.h - 3);
+		const colW = 36;
+		const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
+		const perCol = Math.ceil(ANALOG_PARAMS.length / cols);
+		const scroll = perCol > h ? Math.max(0, Math.min(perCol - h, st.synthRow % perCol - Math.floor(h / 2))) : 0;
+		st.synthRow = Math.max(0, Math.min(ANALOG_PARAMS.length - 1, st.synthRow));
+		ANALOG_PARAMS.forEach((def, i) => {
+			const col = Math.floor(i / perCol), row = i % perCol - scroll;
+			if (row < 0 || row >= h) return;
+			const x0 = inner.x + 1 + col * colW, y = top + row;
+			const on = i === st.synthRow;
+			ui.text(x0, y, t(def.label).padEnd(18).slice(0, 18), { fg: on ? c.fg : c.muted });
+			ui.button(x0 + 19, y, "‹", () => (st.synthRow = i, nudge(i, -1)), { quiet: !on });
+			ui.text(x0 + 23, y, showParam(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
+			ui.button(x0 + 32, y, "›", () => (st.synthRow = i, nudge(i, 1)), { quiet: !on });
+			ui.hit({
+				x: x0,
+				y,
+				w: 18,
+				h: 1
+			}, {
+				onClick: () => st.synthRow = i,
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+			});
+			if (on && focused) ui.tint({
+				x: x0,
+				y,
+				w: 18,
+				h: 1
+			}, void 0, c.highlight);
+		});
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h"), { fg: c.subtle }, inner.w - 2);
+	};
 	/** a track's new name, asked in a window (the command does it) */
 	const rename = async (tr) => {
 		const s = song();
@@ -1001,7 +1816,7 @@ function makeApp(ib, engine, st) {
 		rawKeys: true,
 		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "breakerMED",
 		dirty: () => !!st.editor?.dirty,
-		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} · ⏎ ${t("play")} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
+		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
 		render(ui, r, focused) {
 			const c = ui.c;
 			const s = st.song;
@@ -1070,12 +1885,15 @@ function makeApp(ib, engine, st) {
 				title: t("INSTRUMENTS"),
 				focused: false
 			});
-			instList.items = s.instruments.map((_, i) => i);
-			if (instList.selected !== st.inst && st.inst < s.instruments.length) instList.select(st.inst);
+			instList.items = Array.from({ length: Math.max(s.instruments.length, st.inst + 1) }, (_, i) => i);
+			if (instList.selected !== st.inst) instList.select(st.inst);
 			instList.render(ui, instBox, false, (i, row, sel) => {
-				const ins = s.instruments[i];
+				const ins = s.instruments[i] ?? {
+					kind: "empty",
+					name: ""
+				};
 				const empty = ins.kind === "empty";
-				const tag = ins.kind === "synth" ? "∿" : ins.kind === "hybrid" ? "≈" : "";
+				const tag = ins.kind === "synth" || ins.kind === "analog" ? "∿" : ins.kind === "hybrid" ? "≈" : "";
 				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${ins.name || (empty ? "·" : t("(no name)"))}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
@@ -1252,7 +2070,7 @@ function makeApp(ib, engine, st) {
 				return true;
 			}
 			if (!s || !e) return false;
-			if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(k.shift ? e.redo() : e.undo(), t(k.shift ? "redone" : "undone")), true;
+			if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
 			if (k.alt) {
 				const digit = /^Digit(\d)$/.exec(k.code);
 				if (digit) return st.step = +digit[1], true;
@@ -1262,7 +2080,7 @@ function makeApp(ib, engine, st) {
 					case "ArrowUp": return st.octave = Math.min(7, st.octave + 1), true;
 					case "ArrowDown": return st.octave = Math.max(0, st.octave - 1), true;
 					case "ArrowLeft": return st.inst = Math.max(0, st.inst - 1), true;
-					case "ArrowRight": return st.inst = Math.min(Math.max(0, s.instruments.length - 1), st.inst + 1), true;
+					case "ArrowRight": return st.inst = Math.min(62, s.instruments.length, st.inst + 1), true;
 					case "KeyC": return copy(), true;
 					case "KeyX": return cut(), true;
 					case "KeyV": return paste(), true;
@@ -1271,6 +2089,12 @@ function makeApp(ib, engine, st) {
 					case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
 				}
 				return false;
+			}
+			if (st.screen === "instrument" && s.instruments[st.inst]?.kind === "analog" && !k.ctrl && !k.meta) switch (k.key) {
+				case "up": return st.synthRow = Math.max(0, st.synthRow - 1), true;
+				case "down": return st.synthRow = Math.min(ANALOG_PARAMS.length - 1, st.synthRow + 1), true;
+				case "left": return nudge(st.synthRow, -1, k.shift), true;
+				case "right": return nudge(st.synthRow, 1, k.shift), true;
 			}
 			if (k.shift) switch (k.key) {
 				case "up": return extend(-1, 0), true;
@@ -2335,6 +3159,7 @@ function writeBmed(song) {
 		if (ins.hold) j.hold = ins.hold;
 		if (ins.decay) j.decay = ins.decay;
 		if (ins.bits16) j.bits16 = true;
+		if (ins.kind === "analog") j.synth = ins.synth;
 		if (ins.volTable) j.volTable = ins.volTable, j.waveTable = ins.waveTable, j.volSpeed = ins.volSpeed, j.waveSpeed = ins.waveSpeed;
 		return j;
 	});
@@ -2402,6 +3227,7 @@ async function readBmed(jsonText, readFile) {
 			"sample",
 			"synth",
 			"hybrid",
+			"analog",
 			"empty"
 		].includes(ij.kind) ? ij.kind : "empty";
 		ins.data = await sample(ij.file);
@@ -2418,7 +3244,8 @@ async function readBmed(jsonText, readFile) {
 		ins.decay = num(ij.decay, 0, 0, 255);
 		ins.bits16 = !!ij.bits16;
 		if (Array.isArray(ij.volTable)) ins.volTable = ij.volTable, ins.waveTable = ij.waveTable ?? [], ins.volSpeed = ij.volSpeed, ins.waveSpeed = ij.waveSpeed;
-		if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
+		if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
+		else if (ins.kind !== "empty" && !ins.data.length) ins.kind = "empty";
 		instruments.push(ins);
 	}
 	const blocks = (j.blocks ?? []).map((bj, n) => {
@@ -3020,7 +3847,7 @@ var Player = class {
 		c.period = c.target = period;
 		c.vibPos = c.tremPos = 0;
 		c.age = 0;
-		if (inst && inst.kind !== "empty" && inst.data.length) {
+		if (playable(inst)) {
 			c.on = true;
 			triggers.set(t, 0);
 		} else {
@@ -3381,8 +4208,9 @@ var SampleVoice = class {
 		this.pos = pos;
 	}
 };
-/** The voice an instrument plays with. Synths and drums come with their own (steps 6–8). */
-function voiceFor(_instrument, outRate, paula) {
+/** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
+function voiceFor(instrument, outRate, paula) {
+	if (instrument.kind === "analog") return new AnalogVoice(outRate);
 	const v = new SampleVoice(outRate);
 	v.paula = paula;
 	return v;
@@ -3421,6 +4249,12 @@ var Renderer = class {
 		_defineProperty(this, "player", null);
 		_defineProperty(this, "voices", []);
 		_defineProperty(this, "previews", []);
+		_defineProperty(
+			this,
+			/** voices still releasing after their track moved on (a synth's tail) */
+			"tails",
+			[]
+		);
 		_defineProperty(this, "nextPreview", 0);
 		_defineProperty(
 			this,
@@ -3486,7 +4320,7 @@ var Renderer = class {
 	}
 	/** something to hear: the song, or a key still ringing */
 	get busy() {
-		return this.playing || this.previews.some((p) => p.voice.on && p.until > this.frame) || this.voices.some((v) => v?.on);
+		return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0;
 	}
 	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
 	preview(inst, rate, seconds = .6) {
@@ -3512,10 +4346,12 @@ var Renderer = class {
 			if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
 			const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
 			for (const v of this.voices) v?.render(left, right, at, at + span);
+			for (const v of this.tails) v.render(left, right, at, at + span);
+			if (this.tails.length) this.tails = this.tails.filter((v) => v.on);
 			for (const p of this.previews) {
 				if (!p) continue;
-				if (p.until <= this.frame + at) p.voice.stop();
-				else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
+				if (!p.released && p.until <= this.frame + at) p.voice.stop(), p.released = true;
+				if (p.voice.on) p.voice.render(left, right, at, at + span);
 			}
 			if (this.song.flags.filter) this.filter(left, right, at, at + span);
 			at += span;
@@ -3572,13 +4408,26 @@ var Renderer = class {
 		if (e.play !== void 0) {
 			const instrument = this.song.instruments[e.play];
 			if (!instrument) return;
-			const v = voiceFor(instrument, this.rate, this.paula);
-			v.start({
+			const old = this.voices[e.voice];
+			if (old?.on && instrument.kind === "analog" && old.instrument === instrument && (instrument.synth?.glide ?? 0) > 0) old.start({
 				instrument,
 				rate: e.rate ?? 8363,
-				offset: e.offset ?? 0
+				offset: 0
 			});
-			this.voices[e.voice] = v;
+			else {
+				if (old?.on && old instanceof AnalogVoice) {
+					old.stop();
+					if (old.on && this.tails.length < 32) this.tails.push(old);
+				}
+				const v = voiceFor(instrument, this.rate, this.paula);
+				v.instrument = instrument;
+				v.start({
+					instrument,
+					rate: e.rate ?? 8363,
+					offset: e.offset ?? 0
+				});
+				this.voices[e.voice] = v;
+			}
 		}
 		const v = this.voices[e.voice];
 		if (!v) return;
@@ -4067,6 +4916,133 @@ async function bounce(ib, engine, st, ctx, flags) {
 	ctx.out(`${ib.lib.fmt.green("✓")} ${hex(k + 1)} ${ins.name}: ${ins.data.length} frames (C-3 plays it as it was)\n`);
 	return 0;
 }
+// src/dsp/bake.ts
+/**
+* breakerMED — a synth turned into a sample, for the files other trackers read
+* (.mod, .med hold samples only): middle C held for a while, then released.
+*/
+/** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
+function bakeSynth(ins, hold = .8) {
+	const v = new AnalogVoice(HQ_RATE);
+	v.start({
+		instrument: ins,
+		rate: C3_RATE$1,
+		offset: 0
+	});
+	v.set(C3_RATE$1, 1, 0);
+	const max = Math.round(HQ_RATE * (hold + 2));
+	const l = new Float32Array(max), r = new Float32Array(max);
+	const held = Math.round(HQ_RATE * hold);
+	v.render(l, r, 0, held);
+	v.stop();
+	v.render(l, r, held, max);
+	let end = max;
+	while (end > held && Math.abs(l[end - 1]) < 1e-4) end--;
+	const out = emptyInstrument();
+	Object.assign(out, {
+		name: ins.name,
+		volume: ins.volume,
+		gain: ins.gain,
+		finetune: 0,
+		transpose: ins.transpose + 12,
+		kind: "sample"
+	});
+	out.data = l.slice(0, end).map((x) => Math.max(-1, Math.min(1, x * 2)));
+	return out;
+}
+/** The song with every synth as a sample (the song itself isn't changed), and how many there were. */
+function withSynthsBaked(song) {
+	let baked = 0;
+	const instruments = song.instruments.map((i) => i.kind === "analog" ? (baked++, bakeSynth(i)) : i);
+	return {
+		song: baked ? {
+			...song,
+			instruments
+		} : song,
+		baked
+	};
+}
+// src/commands-synth.ts
+var SYNTH_USAGE = [
+	"med synth <n|.> new [preset]             the instrument becomes an analog synth (presets: med synth presets)",
+	"med synth <n|.> preset <name> · set <setting> <value> · up|down <setting> · show",
+	"med synth <n|.> bake                     the synth as a sample of its C-3 (for the sampler's tools)"
+];
+async function synthCommand(ib, st, ctx, rest) {
+	const { fmt } = ib.lib;
+	if (rest[0] === "presets" || rest[0] === "settings") {
+		ctx.out(rest[0] === "presets" ? `${Object.keys(ANALOG_PRESETS).join(" · ")}\n` : ANALOG_PARAMS.map((d) => `  ${d.key.padEnd(15)} ${d.label.padEnd(18)} ${d.choices ? d.choices.join(" | ") : `${d.min}…${d.max}${d.unit ? ` ${d.unit}` : ""}`}`).join("\n") + "\n");
+		return 0;
+	}
+	const song = st.song, e = st.editor;
+	if (!song || !e) return ctx.err("no song loaded (med open <file>)\n"), 1;
+	const [which, op = "show", ...args] = rest;
+	const n = which === "." || which === void 0 ? st.inst : parseInt(which, 16) - 1;
+	if (!(n >= 0 && n < 63)) return ctx.err("med synth <01–3F | .> new|preset|set|show … (med -h)\n"), 1;
+	while (song.instruments.length <= n) song.instruments.push(emptyInstrument());
+	const ins = song.instruments[n];
+	const id = hex(n + 1);
+	const needSynth = () => {
+		if (ins.kind !== "analog" || !ins.synth) throw new Error(`instrument ${id} isn't a synth (med synth ${id} new)`);
+	};
+	switch (op) {
+		case "new": {
+			const name = args[0] ?? "";
+			if (name && !ANALOG_PRESETS[name]) return ctx.err(`no preset "${name}": ${Object.keys(ANALOG_PRESETS).join(" · ")}\n`), 1;
+			e.instrument(n, `synth ${name || "new"}`, (i) => {
+				Object.assign(i, emptyInstrument(), {
+					kind: "analog",
+					name: i.name && i.kind === "analog" ? i.name : `synth ${name || ""}`.trim(),
+					synth: analogPreset(name || void 0)
+				});
+			});
+			st.inst = n;
+			ctx.out(`${fmt.green("✓")} ${id}: an analog synth${name ? ` (${name})` : ""} · play it, or med synth ${id} set cutoff 800\n`);
+			return 0;
+		}
+		case "preset": {
+			needSynth();
+			const name = args[0] ?? "";
+			if (!ANALOG_PRESETS[name]) return ctx.err(`presets: ${Object.keys(ANALOG_PRESETS).join(" · ")}\n`), 1;
+			e.instrument(n, `preset ${name}`, (i) => {
+				i.synth = analogPreset(name);
+				if (/^synth( |$)/.test(i.name)) i.name = `synth ${name}`;
+			});
+			ctx.out(`${fmt.green("✓")} ${id}: ${name}\n`);
+			return 0;
+		}
+		case "set":
+		case "up":
+		case "down": {
+			needSynth();
+			const def = findParam(args[0] ?? "");
+			if (!def) return ctx.err(`med synth ${id} ${op} <setting>${op === "set" ? " <value>" : ""} · settings: med synth settings\n`), 1;
+			if (op === "set" && args[1] === void 0) return ctx.err(`med synth ${id} set ${def.key} <${def.choices ? def.choices.join("|") : `${def.min}…${def.max}`}>\n`), 1;
+			if (op === "set") setParam(structuredClone(ins.synth), def.key, args[1]);
+			e.instrument(n, def.label, (i) => op === "set" ? setParam(i.synth, def.key, args[1]) : nudgeParam(i.synth, def.key, op === "up" ? 1 : -1, args[1] === "big"));
+			if (op === "set") ctx.out(`${fmt.green("✓")} ${id} ${def.label}: ${showParam(song.instruments[n].synth, def)}\n`);
+			return 0;
+		}
+		case "bake": {
+			needSynth();
+			const baked = bakeSynth(ins);
+			const [k] = e.addInstruments([{
+				...baked,
+				name: `${ins.name} (sample)`.slice(0, 40)
+			}]);
+			if (k === void 0) return ctx.err("no free instrument (63 at most)\n"), 1;
+			st.inst = k;
+			ctx.out(`${fmt.green("✓")} ${hex(k + 1)}: ${id} as a sample (${baked.data.length} frames)\n`);
+			return 0;
+		}
+		case "show":
+		case "info":
+			needSynth();
+			ctx.out(`${id} ${ins.name || "(no name)"} · analog synth\n` + ANALOG_PARAMS.map((d) => `  ${d.label.padEnd(18)} ${showParam(ins.synth, d)}`).join("\n") + "\n");
+			return 0;
+		default: return ctx.err(`med synth: unknown "${op}"\n${SYNTH_USAGE.join("\n")}\n`), 1;
+	}
+}
 // src/format/write.ts
 /**
 * Writing .mod (ProTracker) and .med (MMD1, read by OctaMED Pro and later, and
@@ -4127,8 +5103,10 @@ function medToMod(song, cmd, v) {
 		default: return null;
 	}
 }
-function writeMod(song) {
+function writeMod(original) {
 	const warnings = [];
+	const { song, baked } = withSynthsBaked(original);
+	if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
 	const w = new Writer();
 	const tracks = song.tracks;
 	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -4218,8 +5196,10 @@ function writeMod(song) {
 		warnings
 	};
 }
-function writeMed(song) {
+function writeMed(original) {
 	const warnings = [];
+	const { song, baked } = withSynthsBaked(original);
+	if (baked) warnings.push(`${baked} analog synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
 	const w = new Writer();
 	const T = song.tracks;
 	const insts = song.instruments.slice(0, 63);
@@ -4435,6 +5415,7 @@ function registerCommands(ib, engine, st) {
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
 			"med undo · med redo",
 			...SAMPLE_USAGE,
+			...SYNTH_USAGE,
 			"med effects                every command (00–2E) in one line each",
 			"med info                   the song's settings"
 		].join("\n"),
@@ -4455,6 +5436,14 @@ function registerCommands(ib, engine, st) {
 			"export",
 			"sample",
 			"bounce",
+			"synth",
+			"presets",
+			"settings",
+			"preset",
+			"bake",
+			"show",
+			"up",
+			"down",
 			"filter",
 			"load",
 			"chop",
@@ -4517,6 +5506,11 @@ function registerCommands(ib, engine, st) {
 			]);
 			if (positional[0] === "sample" || positional[0] === "smp") try {
 				return await sampleCommand(ib, st, ctx, positional.slice(1), flags);
+			} catch (err) {
+				return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
+			}
+			if (positional[0] === "synth") try {
+				return await synthCommand(ib, st, ctx, positional.slice(1));
 			} catch (err) {
 				return ctx.err(`med: ${err instanceof Error ? err.message : err}\n`), 1;
 			}
@@ -4781,7 +5775,7 @@ function registerCommands(ib, engine, st) {
 					case "undo":
 					case "redo": {
 						need();
-						const label = sub === "undo" ? st.editor.undo() : st.editor.redo();
+						const label = undoRedo(st, sub === "redo");
 						ctx.out(label ? `${sub === "undo" ? "undone" : "redone"}: ${label}\n` : `nothing to ${sub}\n`);
 						return 0;
 					}
@@ -4800,7 +5794,7 @@ function registerCommands(ib, engine, st) {
 							`slides      ${s.flags.ptSlides ? "ProTracker" : "OctaMED"} · volumes ${s.flags.volHex ? "hex" : "decimal"} · ${s.flags.hardwareMix ? "Amiga voices" : "mixing"}`,
 							`length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
 							`instruments`,
-							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${String(i.data.length).padStart(7)} frames · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
+							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" ? "  synth" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
 						].join("\n") + "\n");
 						return 0;
 					}
@@ -5056,6 +6050,40 @@ var FR = {
 	"export (WAV + tracks)": "exporter (WAV + pistes)",
 	INSTRUMENT: "INSTRUMENT",
 	"empty — load a sound:": "vide — charge un son :",
+	"empty — load a sound, or make a synth:": "vide — charge un son, ou fais un synthé :",
+	"analog synth": "synthé analogique",
+	"two oscillators, a filter, two envelopes, an LFO": "deux oscillateurs, un filtre, deux enveloppes, un LFO",
+	"preset": "preset",
+	"the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med synth -h": "les touches le jouent · ↑↓ un réglage · ←→ le changer (⇧ plus vite) · med synth -h",
+	"osc 1 wave": "osc 1 onde",
+	"osc 1 width": "osc 1 largeur",
+	"osc 1 level": "osc 1 niveau",
+	"osc 2 wave": "osc 2 onde",
+	"osc 2 width": "osc 2 largeur",
+	"osc 2 level": "osc 2 niveau",
+	"osc 2 semitones": "osc 2 demi-tons",
+	"osc 2 detune": "osc 2 désaccord",
+	"sub (octave down)": "sub (−1 octave)",
+	"filter": "filtre",
+	"filter slope": "pente du filtre",
+	"cutoff": "coupure",
+	"resonance": "résonance",
+	"filter env amount": "enveloppe → filtre",
+	"key tracking": "suivi du clavier",
+	"filter attack": "filtre attaque",
+	"filter decay": "filtre déclin",
+	"filter sustain": "filtre maintien",
+	"filter release": "filtre relâche",
+	"attack": "attaque",
+	"decay": "déclin",
+	"sustain": "maintien",
+	"release": "relâche",
+	"lfo wave": "lfo onde",
+	"lfo rate": "lfo vitesse",
+	"lfo → pitch": "lfo → hauteur",
+	"lfo → cutoff": "lfo → coupure",
+	"lfo → width": "lfo → largeur",
+	"glide": "glissé",
 	"load…": "charger…",
 	"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault": "un .wav, .aif, .iff, .mp3, .m4a, .ogg… du vault",
 	frames: "trames",

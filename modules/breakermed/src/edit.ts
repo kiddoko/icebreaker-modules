@@ -295,10 +295,11 @@ export class Editor {
     if (!old) return;
     this.shape(label, () => {
       const copy: Instrument = { ...old };
+      if (old.synth) copy.synth = structuredClone(old.synth); // a synth's settings are changed in place
       fn(copy);
       if (copy.loopStart + copy.loopLength > copy.data.length) copy.loopLength = Math.max(0, copy.data.length - copy.loopStart);
       if (copy.loopLength <= 2) (copy.loopStart = 0), (copy.loopLength = 0);
-      copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
+      if (copy.kind !== "analog") copy.kind = copy.data.length ? (copy.kind === "empty" ? "sample" : copy.kind) : "empty";
       this.song.instruments[index] = copy;
     });
   }

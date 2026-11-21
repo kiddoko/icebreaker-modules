@@ -11,6 +11,7 @@
 import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
 import type { Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
+import { AnalogVoice } from "./dsp/analog";
 
 export interface LineMark {
   /** the frame (since this renderer started) the line begins on */
@@ -31,7 +32,9 @@ export class Renderer {
   ended = false;
   private player: Player | null = null;
   private voices: (Voice | null)[] = [];
-  private previews: { voice: Voice; until: number }[] = [];
+  private previews: { voice: Voice; until: number; released?: boolean }[] = [];
+  /** voices still releasing after their track moved on (a synth's tail) */
+  private tails: Voice[] = [];
   private nextPreview = 0;
   /** the A500's "LED" filter: a 12 dB low-pass at ~3.3 kHz, on when the song says (0FF9 / med filter on) */
   private led = { b0: 0, b1: 0, b2: 0, a1: 0, a2: 0, x: [0, 0, 0, 0], y: [0, 0, 0, 0] };
@@ -80,7 +83,7 @@ export class Renderer {
 
   /** something to hear: the song, or a key still ringing */
   get busy(): boolean {
-    return this.playing || this.previews.some((p) => p.voice.on && p.until > this.frame) || this.voices.some((v) => v?.on);
+    return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0;
   }
 
   /** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
@@ -101,10 +104,12 @@ export class Renderer {
       if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
       const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
       for (const v of this.voices) v?.render(left, right, at, at + span);
+      for (const v of this.tails) v.render(left, right, at, at + span);
+      if (this.tails.length) this.tails = this.tails.filter((v) => v.on);
       for (const p of this.previews) {
         if (!p) continue;
-        if (p.until <= this.frame + at) p.voice.stop();
-        else p.voice.render(left, right, at, at + Math.min(span, p.until - (this.frame + at)));
+        if (!p.released && p.until <= this.frame + at) (p.voice.stop(), (p.released = true));
+        if (p.voice.on) p.voice.render(left, right, at, at + span);
       }
       if (this.song.flags.filter) this.filter(left, right, at, at + span);
       at += span;
@@ -158,9 +163,21 @@ export class Renderer {
     if (e.play !== undefined) {
       const instrument = this.song.instruments[e.play];
       if (!instrument) return;
-      const v = voiceFor(instrument, this.rate, this.paula);
-      v.start({ instrument, rate: e.rate ?? 8363, offset: e.offset ?? 0 });
-      this.voices[e.voice] = v;
+      const old = this.voices[e.voice] as (Voice & { instrument?: unknown }) | null | undefined;
+      // a synth with glide slides from its last note: the same voice goes on
+      if (old?.on && instrument.kind === "analog" && old.instrument === instrument && (instrument.synth?.glide ?? 0) > 0) {
+        old.start({ instrument, rate: e.rate ?? 8363, offset: 0 });
+      } else {
+        // what was playing on the track releases (a synth's tail), then the new note
+        if (old?.on && old instanceof AnalogVoice) {
+          old!.stop();
+          if (old!.on && this.tails.length < 32) this.tails.push(old!);
+        }
+        const v = voiceFor(instrument, this.rate, this.paula) as Voice & { instrument?: unknown };
+        v.instrument = instrument;
+        v.start({ instrument, rate: e.rate ?? 8363, offset: e.offset ?? 0 });
+        this.voices[e.voice] = v;
+      }
     }
     const v = this.voices[e.voice];
     if (!v) return;
