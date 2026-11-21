@@ -10,22 +10,23 @@ const cell = (s: ReturnType<typeof newSong>, l: number, t: number) => s.blocks[0
 
 describe("breakerMED: editing", () => {
   it("columns: the note, two instrument digits, four a command page", () => {
-    expect(colsOf(1)).toBe(7);
+    expect(colsOf(1)).toBe(8);
     expect(colKind(0)).toEqual({ kind: "note" });
     expect(colKind(2)).toEqual({ kind: "inst", digit: 1 });
-    expect(colKind(3)).toEqual({ kind: "cmd", page: 0, digit: 0 });
-    expect(colKind(6)).toEqual({ kind: "val", page: 0, digit: 1 });
-    expect(colKind(7)).toEqual({ kind: "cmd", page: 1, digit: 0 });
+    expect(colKind(3)).toEqual({ kind: "chord" });
+    expect(colKind(4)).toEqual({ kind: "cmd", page: 0, digit: 0 });
+    expect(colKind(7)).toEqual({ kind: "val", page: 0, digit: 1 });
+    expect(colKind(8)).toEqual({ kind: "cmd", page: 1, digit: 0 });
   });
 
   it("writes a note with its instrument, and hex digit by digit", () => {
     const { s, e } = fresh();
     e.writeNote(0, 2, 1, 25, 3);
     expect([noteName(cell(s, 2, 1).note), cell(s, 2, 1).inst]).toEqual(["C-3", 3]);
-    e.writeHex(0, 2, 1, 3, 0x0);
-    e.writeHex(0, 2, 1, 4, 0xc);
-    e.writeHex(0, 2, 1, 5, 0x2);
-    e.writeHex(0, 2, 1, 6, 0x0);
+    e.writeHex(0, 2, 1, 4, 0x0);
+    e.writeHex(0, 2, 1, 5, 0xc);
+    e.writeHex(0, 2, 1, 6, 0x2);
+    e.writeHex(0, 2, 1, 7, 0x0);
     expect([cell(s, 2, 1).cmd[0], cell(s, 2, 1).val[0]]).toEqual([0x0c, 0x20]);
     e.writeHex(0, 2, 1, 1, 0xf);
     expect(cell(s, 2, 1).inst).toBe(63); // 0xF3 is past 63: kept in range

@@ -55,12 +55,15 @@ export function medToMod(song: Song, cmd: number, v: number): [number, number] |
   }
 }
 
+const hasChords = (s: Song) => s.blocks.some((b) => b.cells.some((row) => row.some((c) => c.chord && c.note && c.note !== NOTE_OFF)));
+
 export function writeMod(original: Song): Written {
   const warnings: string[] = [];
   const { song, baked, drums, lost } = withSynthsBaked(original);
   if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
+  if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
   const w = new Writer();
   const tracks = song.tracks;
   if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -156,6 +159,7 @@ export function writeMed(original: Song): Written {
   if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
+  if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
   const w = new Writer();
   const T = song.tracks;
   const insts = song.instruments.slice(0, 63);

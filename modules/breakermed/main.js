@@ -12,6 +12,101 @@ var NOTE_NAMES = [
 	"A#",
 	"B-"
 ];
+/** our default chord table: 1–F in the chord column */
+var DEFAULT_CHORDS = [
+	{
+		name: "maj",
+		notes: [4, 7]
+	},
+	{
+		name: "min",
+		notes: [3, 7]
+	},
+	{
+		name: "7",
+		notes: [
+			4,
+			7,
+			10
+		]
+	},
+	{
+		name: "m7",
+		notes: [
+			3,
+			7,
+			10
+		]
+	},
+	{
+		name: "maj7",
+		notes: [
+			4,
+			7,
+			11
+		]
+	},
+	{
+		name: "sus2",
+		notes: [2, 7]
+	},
+	{
+		name: "sus4",
+		notes: [5, 7]
+	},
+	{
+		name: "dim",
+		notes: [3, 6]
+	},
+	{
+		name: "aug",
+		notes: [4, 8]
+	},
+	{
+		name: "5",
+		notes: [7]
+	},
+	{
+		name: "6",
+		notes: [
+			4,
+			7,
+			9
+		]
+	},
+	{
+		name: "m6",
+		notes: [
+			3,
+			7,
+			9
+		]
+	},
+	{
+		name: "add9",
+		notes: [
+			4,
+			7,
+			14
+		]
+	},
+	{
+		name: "m9",
+		notes: [
+			3,
+			7,
+			10,
+			14
+		]
+	},
+	{
+		name: "oct",
+		notes: [12]
+	}
+];
+var chordsOf = (s) => s.chords ?? DEFAULT_CHORDS;
+/** the notes chord `n` (1–15) adds; none for 0 */
+var chordNotes = (s, n) => n ? chordsOf(s)[n - 1]?.notes ?? [] : [];
 /** our own instruments: computed, no sound data */
 var computed = (i) => i?.kind === "analog" || i?.kind === "fm" || i?.kind === "drums";
 /** an instrument that makes sound (a sample with frames, or one of our synths) */
@@ -207,7 +302,7 @@ function _defineProperty(e, r, t) {
 	}) : e[r] = t, e;
 }
 /** how many columns a cell has */
-var colsOf = (pages) => 3 + 4 * pages;
+var colsOf = (pages) => 4 + 4 * pages;
 /** what a column is: the note, the instrument, or a page's command / parameter (and which digit) */
 function colKind(col) {
 	if (col === 0) return { kind: "note" };
@@ -215,7 +310,8 @@ function colKind(col) {
 		kind: "inst",
 		digit: col - 1
 	};
-	const k = col - 3;
+	if (col === 3) return { kind: "chord" };
+	const k = col - 4;
 	const page = Math.floor(k / 4), r = k % 4;
 	return {
 		kind: r < 2 ? "cmd" : "val",
@@ -226,6 +322,7 @@ function colKind(col) {
 var clone = (c) => ({
 	note: c.note,
 	inst: c.inst,
+	...c.chord ? { chord: c.chord } : {},
 	cmd: [...c.cmd],
 	val: [...c.val]
 });
@@ -296,7 +393,8 @@ var Editor = class {
 			vol: [...this.song.trackVolume],
 			pan: [...this.song.trackPan],
 			names: [...this.song.trackNames],
-			insts: [...this.song.instruments]
+			insts: [...this.song.instruments],
+			chords: this.song.chords
 		});
 		const put = (s) => {
 			this.song.blocks = s.blocks.map(cloneBlock);
@@ -306,6 +404,8 @@ var Editor = class {
 			this.song.trackPan = [...s.pan];
 			this.song.trackNames = [...s.names];
 			this.song.instruments = [...s.insts];
+			if (s.chords) this.song.chords = s.chords;
+			else delete this.song.chords;
 		};
 		const before = take();
 		fn();
@@ -336,7 +436,10 @@ var Editor = class {
 		if (k.kind === "note") return;
 		this.cells("digit", block, [[line, track]], (c) => {
 			if (k.kind === "inst") c.inst = Math.min(63, setNibble(c.inst, k.digit, digit));
-			else {
+			else if (k.kind === "chord") {
+				if (digit) c.chord = digit & 15;
+				else delete c.chord;
+			} else {
 				while (c.cmd.length <= k.page) c.cmd.push(0), c.val.push(0);
 				if (k.kind === "cmd") c.cmd[k.page] = setNibble(c.cmd[k.page], k.digit, digit);
 				else c.val[k.page] = setNibble(c.val[k.page], k.digit, digit);
@@ -347,8 +450,9 @@ var Editor = class {
 	clear(block, line, track, col) {
 		const k = colKind(col);
 		this.cells("clear", block, [[line, track]], (c) => {
-			if (k.kind === "note") c.note = 0, c.inst = 0;
+			if (k.kind === "note") c.note = 0, c.inst = 0, delete c.chord;
 			else if (k.kind === "inst") c.inst = 0;
+			else if (k.kind === "chord") delete c.chord;
 			else c.cmd[k.page] = 0, c.val[k.page] = 0;
 		});
 	}
@@ -510,6 +614,18 @@ var Editor = class {
 			}
 		});
 		return placed;
+	}
+	/** one line of the song's chord table (1–15), or the default table back (`def` null) */
+	chords(n, def) {
+		this.shape("chords", () => {
+			const s = this.song;
+			if (!def) return void delete s.chords;
+			s.chords = (s.chords ?? DEFAULT_CHORDS).map((c) => ({
+				name: c.name,
+				notes: [...c.notes]
+			}));
+			s.chords[n - 1] = def;
+		});
 	}
 	/** put a block in the sequence at `pos` (before what's there) */
 	seqInsert(pos, block) {
@@ -2178,8 +2294,10 @@ function newState() {
 	};
 }
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
-var cellW = (pages) => 6 + pages * 5;
-var colX = (col) => col === 0 ? 0 : col <= 2 ? 3 + col : 7 + Math.floor((col - 3) / 4) * 5 + (col - 3) % 4;
+/** a cell's width: "C-3 01 0C20", and " 3" when the chord column shows */
+var cellW = (pages, chords) => 6 + (chords ? 2 : 0) + pages * 5;
+/** where a column sits in its cell */
+var colX = (col, chords) => col === 0 ? 0 : col <= 2 ? 3 + col : col === 3 ? 7 : (chords ? 9 : 7) + Math.floor((col - 4) / 4) * 5 + (col - 4) % 4;
 var colW = (col) => col === 0 ? 3 : 1;
 var LEFT = 22;
 var HEX = "0123456789abcdef";
@@ -2243,6 +2361,7 @@ function makeApp(ib, engine, st) {
 		if (!s || !b) return;
 		const n = colsOf(b.pages);
 		let c = st.col + d, tr = st.track;
+		if (c === 3 && !s.chordColumn) c += d;
 		if (c < 0) tr = (tr - 1 + s.tracks) % s.tracks, c = n - 1;
 		else if (c >= n) tr = (tr + 1) % s.tracks, c = 0;
 		st.col = c;
@@ -2292,6 +2411,13 @@ function makeApp(ib, engine, st) {
 	const paste = () => {
 		const e = ed();
 		if (e && st.clip) e.paste(blockNo(), st.line, st.track, st.clip);
+	};
+	/** the chord under the cursor, named (the column shows only its digit) */
+	const chordHere = () => {
+		const s = st.song, cell = block()?.cells[st.line]?.[st.track];
+		if (!s?.chordColumn || !cell) return "";
+		const n = cell.chord ?? 0;
+		return n ? ` · ${t("chord")} ${n.toString(16).toUpperCase()} ${chordsOf(s)[n - 1]?.name ?? ""}` : st.col === 3 ? ` · ${t("chord")}: 1–F (med chords)` : "";
 	};
 	const transpose = (semis) => ed()?.transpose(target(), semis);
 	const say = (label, what) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
@@ -2725,7 +2851,8 @@ function makeApp(ib, engine, st) {
 		if (k < 0 || k >= g.fits || line < 0 || line >= b.lines) return null;
 		const inCell = mx - g.x - g.numW - k * g.cw;
 		let col = 0;
-		for (let c = 0; c < colsOf(b.pages); c++) if (inCell >= colX(c)) col = c;
+		const chords = !!st.song?.chordColumn;
+		for (let c = 0; c < colsOf(b.pages); c++) if ((c !== 3 || chords) && inCell >= colX(c, chords)) col = c;
 		return {
 			line,
 			track: firstTrack + k,
@@ -2738,7 +2865,7 @@ function makeApp(ib, engine, st) {
 		rawKeys: true,
 		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "breakerMED",
 		dirty: () => !!st.editor?.dirty,
-		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
+		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
 		render(ui, r, focused) {
 			const c = ui.c;
 			const s = st.song;
@@ -2840,7 +2967,9 @@ function makeApp(ib, engine, st) {
 				focused
 			});
 			if (!b) return;
-			const cw = cellW(b.pages) + 1;
+			const chords = !!s.chordColumn;
+			if (!chords && st.col === 3) st.col = 4;
+			const cw = cellW(b.pages, chords) + 1;
 			const numW = 4;
 			const fits = Math.max(1, Math.floor((inner.w - numW) / cw));
 			if (st.track < firstTrack) firstTrack = st.track;
@@ -2933,6 +3062,10 @@ function makeApp(ib, engine, st) {
 						fg: dim ? c.faint : cell.inst ? c.accent : c.faint,
 						bg: cbg
 					});
+					if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", {
+						fg: dim ? c.faint : cell.chord ? c.warning : c.faint,
+						bg: cbg
+					});
 					for (let p = 0; p < b.pages; p++) {
 						const has = cell.cmd[p] || cell.val[p];
 						xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", {
@@ -2941,7 +3074,7 @@ function makeApp(ib, engine, st) {
 						});
 					}
 					if (here && tr === st.track && focused) ui.tint({
-						x: cx + colX(st.col),
+						x: cx + colX(st.col, chords),
 						y,
 						w: colW(st.col),
 						h: 1
@@ -3055,7 +3188,10 @@ function makeApp(ib, engine, st) {
 				if (d !== null) {
 					e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
 					const k = colKind(st.col);
-					if (k.kind !== "note" && k.digit === 0) st.col++;
+					if (k.kind === "chord") {
+						if (HEX.indexOf(d)) s.chordColumn = true;
+						advance();
+					} else if (k.kind !== "note" && k.digit === 0) st.col++;
 					else st.col--, advance();
 					return true;
 				}
@@ -4099,7 +4235,7 @@ function writeBmed(song) {
 		lines: b.lines,
 		pages: b.pages,
 		rows: b.cells.map((row) => row.map((c) => {
-			let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}`;
+			let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}${c.chord ? `:${c.chord.toString(16).toUpperCase()}` : ""}`;
 			for (let p = 0; p < b.pages; p++) s += c.cmd[p] || c.val[p] ? ` ${hex(c.cmd[p])}${hex(c.val[p])}` : " ....";
 			return s;
 		}).join(" | "))
@@ -4125,6 +4261,8 @@ function writeBmed(song) {
 			pan: song.trackPan[t] ?? 0
 		})),
 		sequence: song.sequence,
+		...song.chords ? { chords: song.chords } : {},
+		...song.chordColumn ? { chordColumn: true } : {},
 		instruments,
 		blocks
 	};
@@ -4192,7 +4330,10 @@ async function readBmed(jsonText, readFile) {
 				const parts = cellText.trim().split(/\s+/);
 				const c = emptyCell(pages);
 				c.note = parseNoteText(parts[0] ?? "---");
-				c.inst = parts[1] && parts[1] !== ".." ? Math.min(63, parseInt(parts[1], 16) || 0) : 0;
+				const [instText, chordText] = (parts[1] ?? "..").split(":");
+				c.inst = instText && instText !== ".." ? Math.min(63, parseInt(instText, 16) || 0) : 0;
+				const chord = chordText ? parseInt(chordText, 16) : 0;
+				if (chord >= 1 && chord <= 15) c.chord = chord;
 				for (let p = 0; p < pages; p++) {
 					const x = parts[2 + p];
 					if (x && x !== "....") {
@@ -4238,6 +4379,18 @@ async function readBmed(jsonText, readFile) {
 		}).map(([k, d]) => [k, typeof j.flags?.[k] === "boolean" ? j.flags[k] : d]))
 	};
 	if (!song.sequence.length) song.sequence = [0];
+	if (j.chordColumn === true) song.chordColumn = true;
+	if (Array.isArray(j.chords)) song.chords = DEFAULT_CHORDS.map((d, i) => {
+		const x = j.chords[i];
+		const notes = Array.isArray(x?.notes) ? x.notes.filter((n) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, 5) : [];
+		return notes.length ? {
+			name: String(x.name ?? "").slice(0, 8),
+			notes
+		} : {
+			name: d.name,
+			notes: [...d.notes]
+		};
+	});
 	return song;
 }
 // src/format/aiff.ts
@@ -4648,6 +4801,7 @@ var Player = class {
 			pan: this.song.trackPan[i] ?? 0,
 			offsetMem: 0,
 			delayed: null,
+			chord: 0,
 			cutAt: -1,
 			retrig: 0,
 			loopLine: 0,
@@ -4751,14 +4905,15 @@ var Player = class {
 				tick: delay,
 				note: cell.note,
 				inst: cell.inst,
-				porta
+				porta,
+				chord: cell.chord ?? 0
 			};
-			else this.noteOn(c, t, cell.note, cell.inst, porta, triggers);
+			else this.noteOn(c, t, cell.note, cell.inst, porta, triggers, cell.chord ?? 0);
 			for (let p = 0; p < cell.cmd.length; p++) this.lineCommand(c, t, cell.cmd[p], cell.val[p], !!cell.note, triggers);
 			if (!f.ptSlides) this.slides(c, cell.cmd, cell.val, true);
 		});
 	}
-	noteOn(c, t, note, instNo, porta, triggers) {
+	noteOn(c, t, note, instNo, porta, triggers, chord = 0) {
 		if (instNo) {
 			c.inst = instNo;
 			const inst = this.inst(c);
@@ -4779,6 +4934,7 @@ var Player = class {
 			return;
 		}
 		c.semi = semi;
+		c.chord = chord;
 		c.period = c.target = period;
 		c.vibPos = c.tremPos = 0;
 		c.age = 0;
@@ -4906,7 +5062,7 @@ var Player = class {
 			if (c.delayed && c.delayed.tick === this.tick) {
 				const d = c.delayed;
 				c.delayed = null;
-				this.noteOn(c, t, d.note, d.inst, d.porta, triggers);
+				this.noteOn(c, t, d.note, d.inst, d.porta, triggers, d.chord);
 			}
 			if (c.cutAt === this.tick) c.volume = 0;
 			if (c.retrig && this.tick % c.retrig === 0 && c.on) {
@@ -5008,6 +5164,8 @@ var Player = class {
 			if (trig !== void 0 && trig >= 0) {
 				ev.play = c.inst - 1;
 				ev.offset = trig;
+				const chord = chordNotes(s, c.chord);
+				if (chord.length) ev.chord = chord;
 				any = true;
 			}
 			if (any || Math.abs(rate - c.sent.rate) > 1e-6) ev.rate = rate, any = true;
@@ -5192,6 +5350,13 @@ var Renderer = class {
 			"tails",
 			[]
 		);
+		_defineProperty(
+			this,
+			/** each track's chord: the extra voices over its note, and their intervals */
+			"chordVoices",
+			[]
+		);
+		_defineProperty(this, "chordSteps", []);
 		_defineProperty(this, "nextPreview", 0);
 		_defineProperty(
 			this,
@@ -5242,11 +5407,15 @@ var Renderer = class {
 		this.tickLeft = 0;
 		this.carry = 0;
 		this.ended = false;
-		for (const v of this.voices) v?.stop();
+		this.stopAll();
 	}
 	stop() {
 		this.player = null;
+		this.stopAll();
+	}
+	stopAll() {
 		for (const v of this.voices) v?.stop();
+		for (const list of this.chordVoices) for (const v of list ?? []) v.stop();
 	}
 	/** The song ends here, but what's ringing keeps ringing (an export's tail). */
 	finish() {
@@ -5257,7 +5426,7 @@ var Renderer = class {
 	}
 	/** something to hear: the song, or a key still ringing */
 	get busy() {
-		return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0;
+		return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on));
 	}
 	/** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
 	preview(inst, rate, seconds = .6) {
@@ -5284,6 +5453,7 @@ var Renderer = class {
 			if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
 			const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
 			for (const v of this.voices) v?.render(left, right, at, at + span);
+			for (const list of this.chordVoices) for (const v of list ?? []) v.render(left, right, at, at + span);
 			for (const v of this.tails) v.render(left, right, at, at + span);
 			if (this.tails.length) this.tails = this.tails.filter((v) => v.on);
 			for (const p of this.previews) {
@@ -5341,6 +5511,7 @@ var Renderer = class {
 	apply(e) {
 		if (e.stop) {
 			this.voices[e.voice]?.stop();
+			for (const v of this.chordVoices[e.voice] ?? []) v.stop();
 			return;
 		}
 		if (e.play !== void 0) {
@@ -5367,6 +5538,22 @@ var Renderer = class {
 				});
 				this.voices[e.voice] = v;
 			}
+			for (const old of this.chordVoices[e.voice] ?? []) {
+				if (!old.on || !old.rings) continue;
+				if (!(old instanceof DrumVoice)) old.stop();
+				if (old.on && this.tails.length < 32) this.tails.push(old);
+			}
+			const steps = (e.chord ?? []).slice(0, 5);
+			this.chordSteps[e.voice] = steps;
+			this.chordVoices[e.voice] = steps.map((st) => {
+				const cv = voiceFor(instrument, this.rate, this.paula);
+				cv.start({
+					instrument,
+					rate: (e.rate ?? 8363) * 2 ** (st / 12),
+					offset: e.offset ?? 0
+				});
+				return cv;
+			});
 		}
 		const v = this.voices[e.voice];
 		if (!v) return;
@@ -5374,7 +5561,10 @@ var Renderer = class {
 		s.lastRate = e.rate ?? s.lastRate ?? 8363;
 		s.lastVol = e.volume ?? s.lastVol ?? 0;
 		s.lastPan = e.pan ?? s.lastPan ?? 0;
-		v.set(s.lastRate, s.lastVol, s.lastPan);
+		const chord = this.chordVoices[e.voice] ?? [];
+		const k = chord.length ? 1 / Math.sqrt(1 + chord.length) : 1;
+		v.set(s.lastRate, s.lastVol * k, s.lastPan);
+		chord.forEach((cv, i) => cv.set(s.lastRate * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol * k, s.lastPan));
 	}
 };
 // src/export.ts
@@ -6195,12 +6385,14 @@ function medToMod(song, cmd, v) {
 		default: return null;
 	}
 }
+var hasChords = (s) => s.blocks.some((b) => b.cells.some((row) => row.some((c) => c.chord && c.note && c.note !== 128)));
 function writeMod(original) {
 	const warnings = [];
 	const { song, baked, drums, lost } = withSynthsBaked(original);
 	if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
+	if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
 	const w = new Writer();
 	const tracks = song.tracks;
 	if (tracks > 32) warnings.push(`${tracks} tracks: a .mod holds 32 at most — cut`);
@@ -6296,6 +6488,7 @@ function writeMed(original) {
 	if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
 	if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
 	if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
+	if (hasChords(song)) warnings.push("chords: other trackers play only the note written (.bmed keeps them; med bounce keeps a chord's sound)");
 	const w = new Writer();
 	const T = song.tracks;
 	const insts = song.instruments.slice(0, 63);
@@ -6509,6 +6702,8 @@ function registerCommands(ib, engine, st) {
 			"med block new [lines] · med block copy · med block lines <n>",
 			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
+			"med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
+			"med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
 			"med undo · med redo",
 			...SAMPLE_USAGE,
 			...SYNTH_USAGE,
@@ -6572,6 +6767,9 @@ function registerCommands(ib, engine, st) {
 			"edit",
 			"step",
 			"note",
+			"chord",
+			"chords",
+			"reset",
 			"block",
 			"seq",
 			"tracks",
@@ -6797,6 +6995,48 @@ function registerCommands(ib, engine, st) {
 						if (st.edit) engine.stop();
 						ctx.out(st.edit ? "edit mode: typing writes in the block\n" : "edit mode off: the keys only play\n");
 						return 0;
+					case "chord": {
+						const s = need();
+						const [lineS, trackS, chordS] = rest;
+						const line = parseInt(lineS ?? "", 16), track = parseInt(trackS ?? "", 10) - 1;
+						const n = parseInt(chordS ?? "", 16);
+						const b = s.blocks[s.sequence[st.seq]];
+						if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || !(n >= 0 && n <= 15) || !/^[0-9a-f]$/i.test(chordS ?? "")) return ctx.err("med chord <line (hex)> <track 1–n> <0–F> (0: none · med chords: the table)\n"), 1;
+						st.editor.writeHex(s.sequence[st.seq], line, track, 3, n);
+						if (n) s.chordColumn = true;
+						const def = chordsOf(s)[n - 1];
+						ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${n ? `chord ${n.toString(16).toUpperCase()} ${def?.name ?? ""}` : "no chord"}\n`);
+						return 0;
+					}
+					case "chords": {
+						const s = need();
+						const [op, ...args] = rest;
+						if (op === "on" || op === "off") {
+							s.chordColumn = op === "on";
+							st.editor.dirty = true;
+							ctx.out(`the chord column: ${op}\n`);
+							return 0;
+						}
+						if (op === "set") {
+							const n = parseInt(args[0] ?? "", 16);
+							const name = args[1] ?? "";
+							const notes = args.slice(2).map((x) => parseInt(x, 10));
+							if (!(n >= 1 && n <= 15) || !name || !notes.length || notes.some((x) => !(x >= -24 && x <= 24) || x === 0) || notes.length > 5) return ctx.err(`med chords set <1–F> <name> <semitones over the note, 1 to 5 of them, -24…24> (e.g. med chords set 1 maj 4 7)\n`), 1;
+							st.editor.chords(n, {
+								name: name.slice(0, 8),
+								notes
+							});
+							ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (+${notes.join(" +")})\n`);
+							return 0;
+						}
+						if (op === "reset") {
+							st.editor.chords(0, null);
+							ctx.out("the chord table: back to the default\n");
+							return 0;
+						}
+						ctx.out(chordsOf(s).map((d, i) => `  ${(i + 1).toString(16).toUpperCase()}  ${d.name.padEnd(6)} ${d.notes.map((x) => x > 0 ? `+${x}` : x).join(" ")}`).join("\n") + `\n${fmt.dim(`the chord column: ${s.chordColumn ? "on" : "off"} (med chords on|off)`)}\n`);
+						return 0;
+					}
 					case "step": {
 						const n = parseInt(rest[0] ?? "", 10);
 						if (!(n >= 0 && n <= 16)) return ctx.err("med step 0–16\n"), 1;
@@ -6815,7 +7055,7 @@ function registerCommands(ib, engine, st) {
 						const bn = s.sequence[st.seq];
 						if (note) e.writeNote(bn, line, track, note, instS ? parseInt(instS, 16) || 0 : 0);
 						else e.clear(bn, line, track, 0);
-						if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, 3 + i, parseInt(d, 16)));
+						if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, 4 + i, parseInt(d, 16)));
 						const c = s.blocks[bn].cells[line][track];
 						ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${c.note ? noteName(c.note) : "---"} ${c.inst ? hex(c.inst) : ".."}${cmdS ? ` ${cmdS.toUpperCase()}` : ""}\n`);
 						return 0;
@@ -7159,6 +7399,7 @@ var FR = {
 	"empty — load a sound, or make a synth:": "vide — charge un son, ou fais un synthé :",
 	"analog synth": "synthé analogique",
 	"FM synth": "synthé FM",
+	"chord": "accord",
 	"two sine waves, one bending the other: pianos, bells, basses": "deux sinusoïdes, l'une tord l'autre : pianos, cloches, basses",
 	"ratio": "rapport",
 	"detune": "désaccord",

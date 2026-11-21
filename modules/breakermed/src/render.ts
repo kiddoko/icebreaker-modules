@@ -9,7 +9,7 @@
  * the computer goes, one track alone for a stem).
  */
 import { Player, type PlayOptions, type VoiceEvent } from "./replayer";
-import type { Song } from "./song";
+import { MAX_CHORD_NOTES, type Song } from "./song";
 import { voiceFor, type Voice } from "./dsp/voice";
 import { C3_RATE } from "./dsp/analog";
 import { DrumVoice, drumOf } from "./dsp/drums";
@@ -36,6 +36,9 @@ export class Renderer {
   private previews: { voice: Voice; until: number; released?: boolean }[] = [];
   /** voices still releasing after their track moved on (a synth's tail) */
   private tails: Voice[] = [];
+  /** each track's chord: the extra voices over its note, and their intervals */
+  private chordVoices: Voice[][] = [];
+  private chordSteps: number[][] = [];
   private nextPreview = 0;
   /** the A500's "LED" filter: a 12 dB low-pass at ~3.3 kHz, on when the song says (0FF9 / med filter on) */
   private led = { b0: 0, b1: 0, b2: 0, a1: 0, a2: 0, x: [0, 0, 0, 0], y: [0, 0, 0, 0] };
@@ -65,12 +68,17 @@ export class Renderer {
     this.tickLeft = 0;
     this.carry = 0;
     this.ended = false;
-    for (const v of this.voices) v?.stop();
+    this.stopAll();
   }
 
   stop(): void {
     this.player = null;
+    this.stopAll();
+  }
+
+  private stopAll(): void {
     for (const v of this.voices) v?.stop();
+    for (const list of this.chordVoices) for (const v of list ?? []) v.stop();
   }
 
   /** The song ends here, but what's ringing keeps ringing (an export's tail). */
@@ -84,7 +92,7 @@ export class Renderer {
 
   /** something to hear: the song, or a key still ringing */
   get busy(): boolean {
-    return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0;
+    return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on));
   }
 
   /** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
@@ -106,6 +114,7 @@ export class Renderer {
       if (this.player && !this.ended && this.tickLeft <= 0) this.tick(at);
       const span = this.player && !this.ended ? Math.min(n - at, Math.max(1, this.tickLeft)) : n - at;
       for (const v of this.voices) v?.render(left, right, at, at + span);
+      for (const list of this.chordVoices) for (const v of list ?? []) v.render(left, right, at, at + span);
       for (const v of this.tails) v.render(left, right, at, at + span);
       if (this.tails.length) this.tails = this.tails.filter((v) => v.on);
       for (const p of this.previews) {
@@ -160,6 +169,7 @@ export class Renderer {
   private apply(e: VoiceEvent): void {
     if (e.stop) {
       this.voices[e.voice]?.stop();
+      for (const v of this.chordVoices[e.voice] ?? []) v.stop();
       return;
     }
     if (e.play !== undefined) {
@@ -181,6 +191,19 @@ export class Renderer {
         v.start({ instrument, rate: e.rate ?? 8363, offset: e.offset ?? 0 });
         this.voices[e.voice] = v;
       }
+      // the chord: the old one's notes let go (or ring on), the new one's start with the note
+      for (const old of this.chordVoices[e.voice] ?? []) {
+        if (!old.on || !old.rings) continue;
+        if (!(old instanceof DrumVoice)) old.stop();
+        if (old.on && this.tails.length < 32) this.tails.push(old);
+      }
+      const steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
+      this.chordSteps[e.voice] = steps;
+      this.chordVoices[e.voice] = steps.map((st) => {
+        const cv = voiceFor(instrument, this.rate, this.paula);
+        cv.start({ instrument, rate: (e.rate ?? 8363) * 2 ** (st / 12), offset: e.offset ?? 0 });
+        return cv;
+      });
     }
     const v = this.voices[e.voice];
     if (!v) return;
@@ -188,6 +211,10 @@ export class Renderer {
     s.lastRate = e.rate ?? s.lastRate ?? 8363;
     s.lastVol = e.volume ?? s.lastVol ?? 0;
     s.lastPan = e.pan ?? s.lastPan ?? 0;
-    v.set(s.lastRate, s.lastVol, s.lastPan);
+    // a chord's notes follow the note (slides, vibrato, volume, place); together about as loud as one
+    const chord = this.chordVoices[e.voice] ?? [];
+    const k = chord.length ? 1 / Math.sqrt(1 + chord.length) : 1;
+    v.set(s.lastRate, s.lastVol * k, s.lastPan);
+    chord.forEach((cv, i) => cv.set(s.lastRate! * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol! * k, s.lastPan!));
   }
 }

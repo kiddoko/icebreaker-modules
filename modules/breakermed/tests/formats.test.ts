@@ -32,9 +32,9 @@ describe("breakerMED: our format (.bmed)", () => {
     const e = new Editor(song);
     e.writeNote(0, 0, 0, 25, 1);
     e.writeNote(0, 1, 7, NOTE_OFF);
-    e.writeHex(0, 0, 0, 3, 0);
-    e.writeHex(0, 0, 0, 4, 0xc);
-    e.writeHex(0, 0, 0, 5, 2);
+    e.writeHex(0, 0, 0, 4, 0);
+    e.writeHex(0, 0, 0, 5, 0xc);
+    e.writeHex(0, 0, 0, 6, 2);
     e.setTrack(2, { name: "kick", volume: 40, pan: 0.25 });
     e.setLines(0, 32);
     const files = writeBmed(song);
@@ -101,7 +101,7 @@ describe("breakerMED: writing .mod and .med", () => {
     const e = new Editor(song);
     e.writeNote(0, 0, 0, 25, 1);
     e.writeNote(0, 2, 5, NOTE_OFF);
-    [0, 0xc, 4, 0].forEach((d, i) => e.writeHex(0, 0, 0, 3 + i, d));
+    [0, 0xc, 4, 0].forEach((d, i) => e.writeHex(0, 0, 0, 4 + i, d));
     const { bytes, warnings } = writeMed(song);
     expect(warnings).toEqual([]);
     const back = readSong(bytes, "x.med");

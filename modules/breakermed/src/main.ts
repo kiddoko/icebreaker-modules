@@ -122,6 +122,7 @@ const FR: Record<string, string> = {
   "empty — load a sound, or make a synth:": "vide — charge un son, ou fais un synthé :",
   "analog synth": "synthé analogique",
   "FM synth": "synthé FM",
+  "chord": "accord",
   "two sine waves, one bending the other: pianos, bells, basses": "deux sinusoïdes, l'une tord l'autre : pianos, cloches, basses",
   "ratio": "rapport",
   "detune": "désaccord",

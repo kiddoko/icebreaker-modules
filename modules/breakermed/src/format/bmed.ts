@@ -10,7 +10,7 @@
  * Everything a .med / .mod can't hold (8–16 tracks, names, our synths' and kits' settings,
  * chords later) lives here; .med and .mod stay for sharing with other trackers.
  */
-import { emptyCell, emptyInstrument, hex, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
+import { DEFAULT_CHORDS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
 import { sanitizeKit, type DrumKit } from "../dsp/drums";
@@ -104,7 +104,8 @@ export function writeBmed(song: Song): SongFile[] {
     rows: b.cells.map((row) =>
       row
         .map((c) => {
-          let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}`;
+          // the chord, when there is one, rides on the instrument: "C-3 01:3 0C20"
+          let s = `${noteText(c.note)} ${c.inst ? hex(c.inst) : ".."}${c.chord ? `:${c.chord.toString(16).toUpperCase()}` : ""}`;
           for (let p = 0; p < b.pages; p++) s += c.cmd[p] || c.val[p] ? ` ${hex(c.cmd[p])}${hex(c.val[p])}` : " ....";
           return s;
         })
@@ -123,6 +124,8 @@ export function writeBmed(song: Song): SongFile[] {
     flags: song.flags,
     tracks: Array.from({ length: song.tracks }, (_, t) => ({ name: song.trackNames[t] ?? "", volume: song.trackVolume[t] ?? 64, pan: song.trackPan[t] ?? 0 })),
     sequence: song.sequence,
+    ...(song.chords ? { chords: song.chords } : {}),
+    ...(song.chordColumn ? { chordColumn: true } : {}),
     instruments,
     blocks,
   };
@@ -181,7 +184,10 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
         const parts = cellText.trim().split(/\s+/);
         const c = emptyCell(pages);
         c.note = parseNoteText(parts[0] ?? "---");
-        c.inst = parts[1] && parts[1] !== ".." ? Math.min(63, parseInt(parts[1], 16) || 0) : 0;
+        const [instText, chordText] = (parts[1] ?? "..").split(":");
+        c.inst = instText && instText !== ".." ? Math.min(63, parseInt(instText, 16) || 0) : 0;
+        const chord = chordText ? parseInt(chordText, 16) : 0;
+        if (chord >= 1 && chord <= 15) c.chord = chord;
         for (let p = 0; p < pages; p++) {
           const x = parts[2 + p];
           if (x && x !== "....") {
@@ -220,5 +226,14 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
     ) as unknown as Song["flags"],
   };
   if (!song.sequence.length) song.sequence = [0];
+  if (j.chordColumn === true) song.chordColumn = true;
+  if (Array.isArray(j.chords)) {
+    // the song's own chord table: each line checked, a wrong one → the default's
+    song.chords = DEFAULT_CHORDS.map((d, i) => {
+      const x = j.chords[i];
+      const notes = Array.isArray(x?.notes) ? x.notes.filter((n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= -24 && n <= 24 && n !== 0).slice(0, MAX_CHORD_NOTES) : [];
+      return notes.length ? { name: String(x.name ?? "").slice(0, 8), notes } : { name: d.name, notes: [...d.notes] };
+    });
+  }
   return song;
 }

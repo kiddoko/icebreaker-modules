@@ -2,22 +2,27 @@
  * breakerMED — editing a song: what the page's keys and the `med` commands
  * change, in one place, each change undoable. No UI here (tests/edit.test.ts).
  *
- * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), then per
- * command page 4 more: the command's two digits, the parameter's two.
+ * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), 3 the
+ * chord (one digit, 1–F of the song's table), then per command page 4 more:
+ * the command's two digits, the parameter's two.
  */
-import { computed, emptyCell, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
+import { computed, DEFAULT_CHORDS, emptyCell, type ChordDef, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
 
 /** a song holds 63 instruments at most (OctaMED's limit) */
 export const MAX_INSTRUMENTS = 63;
 
 export const NOTE_COL = 0;
+export const CHORD_COL = 3;
+/** the first command column (page 0's command, first digit) */
+export const CMD_COL = 4;
 /** how many columns a cell has */
-export const colsOf = (pages: number) => 3 + 4 * pages;
+export const colsOf = (pages: number) => CMD_COL + 4 * pages;
 /** what a column is: the note, the instrument, or a page's command / parameter (and which digit) */
-export function colKind(col: number): { kind: "note" } | { kind: "inst"; digit: 0 | 1 } | { kind: "cmd" | "val"; page: number; digit: 0 | 1 } {
+export function colKind(col: number): { kind: "note" } | { kind: "inst"; digit: 0 | 1 } | { kind: "chord" } | { kind: "cmd" | "val"; page: number; digit: 0 | 1 } {
   if (col === 0) return { kind: "note" };
   if (col <= 2) return { kind: "inst", digit: (col - 1) as 0 | 1 };
-  const k = col - 3;
+  if (col === CHORD_COL) return { kind: "chord" };
+  const k = col - CMD_COL;
   const page = Math.floor(k / 4), r = k % 4;
   return { kind: r < 2 ? "cmd" : "val", page, digit: (r % 2) as 0 | 1 };
 }
@@ -42,7 +47,7 @@ interface Step {
   redo: () => void;
 }
 
-const clone = (c: Cell): Cell => ({ note: c.note, inst: c.inst, cmd: [...c.cmd], val: [...c.val] });
+const clone = (c: Cell): Cell => ({ note: c.note, inst: c.inst, ...(c.chord ? { chord: c.chord } : {}), cmd: [...c.cmd], val: [...c.val] });
 const cloneBlock = (b: Block): Block => ({ ...b, cells: b.cells.map((row) => row.map(clone)) });
 const setNibble = (v: number, digit: 0 | 1, n: number) => (digit === 0 ? ((n & 15) << 4) | (v & 15) : (v & 0xf0) | (n & 15));
 
@@ -99,7 +104,7 @@ export class Editor {
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
   private shape(label: string, fn: () => void): void {
-    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], insts: [...this.song.instruments] });
+    const take = () => ({ blocks: this.song.blocks.map(cloneBlock), sequence: [...this.song.sequence], tracks: this.song.tracks, vol: [...this.song.trackVolume], pan: [...this.song.trackPan], names: [...this.song.trackNames], insts: [...this.song.instruments], chords: this.song.chords });
     const put = (s: ReturnType<typeof take>) => {
       this.song.blocks = s.blocks.map(cloneBlock);
       this.song.sequence = [...s.sequence];
@@ -108,6 +113,8 @@ export class Editor {
       this.song.trackPan = [...s.pan];
       this.song.trackNames = [...s.names];
       this.song.instruments = [...s.insts];
+      if (s.chords) this.song.chords = s.chords;
+      else delete this.song.chords;
     };
     const before = take();
     fn();
@@ -139,7 +146,10 @@ export class Editor {
     if (k.kind === "note") return;
     this.cells("digit", block, [[line, track]], (c) => {
       if (k.kind === "inst") c.inst = Math.min(63, setNibble(c.inst, k.digit, digit));
-      else {
+      else if (k.kind === "chord") {
+        if (digit) c.chord = digit & 15;
+        else delete c.chord;
+      } else {
         while (c.cmd.length <= k.page) (c.cmd.push(0), c.val.push(0));
         if (k.kind === "cmd") c.cmd[k.page] = setNibble(c.cmd[k.page], k.digit, digit);
         else c.val[k.page] = setNibble(c.val[k.page], k.digit, digit);
@@ -151,8 +161,9 @@ export class Editor {
   clear(block: number, line: number, track: number, col: number): void {
     const k = colKind(col);
     this.cells("clear", block, [[line, track]], (c) => {
-      if (k.kind === "note") (c.note = 0), (c.inst = 0);
+      if (k.kind === "note") (c.note = 0), (c.inst = 0), delete c.chord;
       else if (k.kind === "inst") c.inst = 0;
+      else if (k.kind === "chord") delete c.chord;
       else (c.cmd[k.page] = 0), (c.val[k.page] = 0);
     });
   }
@@ -321,6 +332,16 @@ export class Editor {
       }
     });
     return placed;
+  }
+
+  /** one line of the song's chord table (1–15), or the default table back (`def` null) */
+  chords(n: number, def: ChordDef | null): void {
+    this.shape("chords", () => {
+      const s = this.song;
+      if (!def) return void delete s.chords;
+      s.chords = (s.chords ?? DEFAULT_CHORDS).map((c) => ({ name: c.name, notes: [...c.notes] }));
+      s.chords[n - 1] = def;
+    });
   }
 
   /** put a block in the sequence at `pos` (before what's there) */

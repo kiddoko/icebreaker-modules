@@ -13,8 +13,8 @@ import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
-import { DEFAULT_TRACKS, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
-import { Editor, parseNote } from "./edit";
+import { chordsOf, DEFAULT_TRACKS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
+import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 
 const EFFECTS: [string, string][] = [
@@ -146,6 +146,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med block new [lines] · med block copy · med block lines <n>",
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
       "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
+      "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
+      "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords reset",
       "med undo · med redo",
       ...SAMPLE_USAGE,
       ...SYNTH_USAGE,
@@ -154,7 +156,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med info                   the song's settings",
     ].join("\n"),
     examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
@@ -327,6 +329,48 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             ctx.out(st.edit ? "edit mode: typing writes in the block\n" : "edit mode off: the keys only play\n");
             return 0;
           }
+          case "chord": {
+            // med chord <line> <track> <0–F>: the chord a note plays (0: none)
+            const s = need();
+            const [lineS, trackS, chordS] = rest;
+            const line = parseInt(lineS ?? "", 16), track = parseInt(trackS ?? "", 10) - 1;
+            const n = parseInt(chordS ?? "", 16);
+            const b = s.blocks[s.sequence[st.seq]];
+            if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || !(n >= 0 && n <= 15) || !/^[0-9a-f]$/i.test(chordS ?? "")) return ctx.err("med chord <line (hex)> <track 1–n> <0–F> (0: none · med chords: the table)\n"), 1;
+            st.editor!.writeHex(s.sequence[st.seq], line, track, CHORD_COL, n);
+            if (n) s.chordColumn = true;
+            const def = chordsOf(s)[n - 1];
+            ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${n ? `chord ${n.toString(16).toUpperCase()} ${def?.name ?? ""}` : "no chord"}\n`);
+            return 0;
+          }
+          case "chords": {
+            const s = need();
+            const [op, ...args] = rest;
+            if (op === "on" || op === "off") {
+              s.chordColumn = op === "on";
+              st.editor!.dirty = true;
+              ctx.out(`the chord column: ${op}\n`);
+              return 0;
+            }
+            if (op === "set") {
+              // med chords set <1–F> <name> <semitones…>: one line of the song's own table
+              const n = parseInt(args[0] ?? "", 16);
+              const name = args[1] ?? "";
+              const notes = args.slice(2).map((x) => parseInt(x, 10));
+              if (!(n >= 1 && n <= 15) || !name || !notes.length || notes.some((x) => !(x >= -24 && x <= 24) || x === 0) || notes.length > MAX_CHORD_NOTES)
+                return ctx.err(`med chords set <1–F> <name> <semitones over the note, 1 to ${MAX_CHORD_NOTES} of them, -24…24> (e.g. med chords set 1 maj 4 7)\n`), 1;
+              st.editor!.chords(n, { name: name.slice(0, 8), notes });
+              ctx.out(`${fmt.green("✓")} chord ${n.toString(16).toUpperCase()}: ${name} (+${notes.join(" +")})\n`);
+              return 0;
+            }
+            if (op === "reset") {
+              st.editor!.chords(0, null);
+              ctx.out("the chord table: back to the default\n");
+              return 0;
+            }
+            ctx.out(chordsOf(s).map((d, i) => `  ${(i + 1).toString(16).toUpperCase()}  ${d.name.padEnd(6)} ${d.notes.map((x) => (x > 0 ? `+${x}` : x)).join(" ")}`).join("\n") + `\n${fmt.dim(`the chord column: ${s.chordColumn ? "on" : "off"} (med chords on|off)`)}\n`);
+            return 0;
+          }
           case "step": {
             const n = parseInt(rest[0] ?? "", 10);
             if (!(n >= 0 && n <= 16)) return ctx.err("med step 0–16\n"), 1;
@@ -346,7 +390,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const bn = s.sequence[st.seq];
             if (note) e.writeNote(bn, line, track, note, instS ? parseInt(instS, 16) || 0 : 0);
             else e.clear(bn, line, track, 0);
-            if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, 3 + i, parseInt(d, 16)));
+            if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, CMD_COL + i, parseInt(d, 16)));
             const c = s.blocks[bn].cells[line][track];
             // what was written, the way the block shows it (a script or the LOG can check it)
             ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${c.note ? noteName(c.note) : "---"} ${c.inst ? hex(c.inst) : ".."}${cmdS ? ` ${cmdS.toUpperCase()}` : ""}\n`);

@@ -53,7 +53,42 @@ export interface Song {
   /** each track's name ("" = "track 3") */
   trackNames: string[];
   flags: SongFlags;
+  /** the chord table (1–F in the chord column); none = the default one */
+  chords?: ChordDef[];
+  /** the block shows the chord column (it comes on by itself when a chord is written) */
+  chordColumn?: boolean;
 }
+
+/** a chord: the notes it adds over the one written, in semitones */
+export interface ChordDef {
+  name: string;
+  notes: number[];
+}
+
+/** our default chord table: 1–F in the chord column */
+export const DEFAULT_CHORDS: readonly ChordDef[] = [
+  { name: "maj", notes: [4, 7] },
+  { name: "min", notes: [3, 7] },
+  { name: "7", notes: [4, 7, 10] },
+  { name: "m7", notes: [3, 7, 10] },
+  { name: "maj7", notes: [4, 7, 11] },
+  { name: "sus2", notes: [2, 7] },
+  { name: "sus4", notes: [5, 7] },
+  { name: "dim", notes: [3, 6] },
+  { name: "aug", notes: [4, 8] },
+  { name: "5", notes: [7] },
+  { name: "6", notes: [4, 7, 9] },
+  { name: "m6", notes: [3, 7, 9] },
+  { name: "add9", notes: [4, 7, 14] },
+  { name: "m9", notes: [3, 7, 10, 14] },
+  { name: "oct", notes: [12] },
+];
+
+export const chordsOf = (s: Song): readonly ChordDef[] => s.chords ?? DEFAULT_CHORDS;
+/** the notes chord `n` (1–15) adds; none for 0 */
+export const chordNotes = (s: Song, n: number | undefined): number[] => (n ? chordsOf(s)[n - 1]?.notes ?? [] : []);
+/** at most this many notes a chord adds (over the one written) */
+export const MAX_CHORD_NOTES = 5;
 
 export interface SongFlags {
   /** 0C's parameter is hex (else decimal, OctaMED's old default) */
@@ -75,6 +110,8 @@ export interface Cell {
   note: number;
   /** 0 none, 1–63 */
   inst: number;
+  /** 0 none, 1–15: a chord of the song's table played over the note */
+  chord?: number;
   /** one command a page (OctaMED can have several pages) */
   cmd: number[];
   val: number[];

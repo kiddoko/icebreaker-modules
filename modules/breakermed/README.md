@@ -6,7 +6,8 @@ It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's co
 keyboard, the mouse and a gamepad.
 
 > Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog and FM
-> synths and the drum machine are here (8 tracks by default, 16 at most, named); next come chords.
+> synths, the drum machine and chords are here (8 tracks by default, 16 at most, named); next come
+> MP3 / M4A / OGG export and the finishing touches.
 > breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
@@ -84,6 +85,32 @@ AIFF-C) or **FLAC** (16 / 24 bits, lossless, our own encoder). `--stems` adds **
 own** (`<name> stems/01 lead.wav`…), `--only-stems` only those, `--tracks 1,3` the ones you say.
 Muted tracks stay muted; the end rings out for `--tail` seconds, then fades; 16 bits get a little
 dither. MP3 / M4A / OGG come later, through an encoder pack the deck downloads on request.
+
+## Chords
+
+A note can play a **chord**: the cell's chord column (one digit, after the instrument) picks one of
+the song's 15 chords, and its notes play over the one written, with the same instrument; slides,
+vibrato, volume and pan move them all, a note off stops them all, and together they're about as
+loud as one note.
+
+```
+1 maj  +4 +7      2 min  +3 +7      3 7    +4 +7 +10   4 m7   +3 +7 +10   5 maj7 +4 +7 +11
+6 sus2 +2 +7      7 sus4 +5 +7      8 dim  +3 +6       9 aug  +4 +8       A 5    +7
+B 6    +4 +7 +9   C m6   +3 +7 +9   D add9 +4 +7 +14   E m9   +3 +7 +10 +14  F oct +12
+```
+
+The column shows when the song has chords (typing a digit in it, `med chord`, or `med chords on`);
+hidden, the cursor steps over it. The status line names the chord under the cursor.
+
+```
+med chord <line> <track> <0–F>        the chord a note plays (0: none)
+med chords                            the table · med chords on|off   the column
+med chords set <1–F> <name> <semitones…>   the song's own chord, e.g. med chords set 1 pow 7 12
+med chords reset                      the default table back
+```
+
+`.bmed` keeps them (`C-3 01:3 0C20`: chord 3 rides on the instrument). Other trackers play only
+the note written (`med save` says so); `med bounce` keeps a chord's sound as a sample.
 
 ## The sampler
 

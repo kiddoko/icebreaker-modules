@@ -21,13 +21,13 @@
  *   alt C / X / V copy cut paste · alt Q / A transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
  */
 import type { Action, App, IcebreakerAPI, KeyInput, MenuEntry, Rect, UI } from "./icebreaker";
-import { colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
+import { CHORD_COL, CMD_COL, colKind, colsOf, Editor, type Clip, type Selection } from "./edit";
 import type { Engine } from "./engine";
 import { pianoKey } from "./keys";
 import { nudgeIn, showIn } from "./dsp/params";
 import { settingsOf, synthOf, type SynthKind } from "./synths";
 import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, nudgeDrum } from "./dsp/drums";
-import { hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
+import { chordsOf, hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
   song: Song | null;
@@ -81,8 +81,11 @@ export function newState(): State {
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
-const cellW = (pages: number) => 3 + 1 + 2 + pages * 5;
-const colX = (col: number) => (col === 0 ? 0 : col <= 2 ? 3 + col : 7 + Math.floor((col - 3) / 4) * 5 + ((col - 3) % 4));
+/** a cell's width: "C-3 01 0C20", and " 3" when the chord column shows */
+const cellW = (pages: number, chords: boolean) => 3 + 1 + 2 + (chords ? 2 : 0) + pages * 5;
+/** where a column sits in its cell */
+const colX = (col: number, chords: boolean) =>
+  col === 0 ? 0 : col <= 2 ? 3 + col : col === CHORD_COL ? 7 : (chords ? 9 : 7) + Math.floor((col - CMD_COL) / 4) * 5 + ((col - CMD_COL) % 4);
 const colW = (col: number) => (col === 0 ? 3 : 1);
 const LEFT = 22;
 const HEX = "0123456789abcdef";
@@ -137,6 +140,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (!s || !b) return;
     const n = colsOf(b.pages);
     let c = st.col + d, tr = st.track;
+    if (c === CHORD_COL && !s.chordColumn) c += d; // the chord column, hidden: stepped over
     if (c < 0) (tr = (tr - 1 + s.tracks) % s.tracks), (c = n - 1);
     else if (c >= n) (tr = (tr + 1) % s.tracks), (c = 0);
     st.col = c;
@@ -173,6 +177,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const paste = () => {
     const e = ed();
     if (e && st.clip) e.paste(blockNo(), st.line, st.track, st.clip);
+  };
+  /** the chord under the cursor, named (the column shows only its digit) */
+  const chordHere = () => {
+    const s = st.song, cell = block()?.cells[st.line]?.[st.track];
+    if (!s?.chordColumn || !cell) return "";
+    const n = cell.chord ?? 0;
+    return n ? ` · ${t("chord")} ${n.toString(16).toUpperCase()} ${chordsOf(s)[n - 1]?.name ?? ""}` : st.col === CHORD_COL ? ` · ${t("chord")}: 1–F (med chords)` : "";
   };
   const transpose = (semis: number) => ed()?.transpose(target(), semis);
   const say = (label: string | null, what: string) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
@@ -421,7 +432,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (k < 0 || k >= g.fits || line < 0 || line >= b.lines) return null;
     const inCell = mx - g.x - g.numW - k * g.cw;
     let col = 0;
-    for (let c = 0; c < colsOf(b.pages); c++) if (inCell >= colX(c)) col = c;
+    const chords = !!st.song?.chordColumn;
+    for (let c = 0; c < colsOf(b.pages); c++) if ((c !== CHORD_COL || chords) && inCell >= colX(c, chords)) col = c;
     return { line, track: firstTrack + k, col };
   };
 
@@ -433,7 +445,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     dirty: () => !!st.editor?.dirty,
     status: () =>
       st.song
-        ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
+        ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
         : t("med open <file.med|.mod> — or med demo"),
 
     render(ui: UI, r: Rect, focused: boolean) {
@@ -495,7 +507,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const px = body.x + leftW;
       const inner = ui.box({ x: px, y: body.y, w: body.w - leftW, h: body.h }, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`, focused });
       if (!b) return;
-      const cw = cellW(b.pages) + 1;
+      const chords = !!s.chordColumn;
+      if (!chords && st.col === CHORD_COL) st.col = CMD_COL;
+      const cw = cellW(b.pages, chords) + 1;
       const numW = 4;
       const fits = Math.max(1, Math.floor((inner.w - numW) / cw));
       if (st.track < firstTrack) firstTrack = st.track;
@@ -545,11 +559,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           if (inSel) ui.fill({ x: cx, y, w: cw - 1, h: 1 }, { bg: cbg });
           let xx = ui.text(cx, y, noteName(cell.note), { fg: dim ? c.faint : cell.note === NOTE_OFF ? c.warning : cell.note ? c.fg : c.faint, bg: cbg, attrs: cell.note ? BOLD : 0 });
           xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", { fg: dim ? c.faint : cell.inst ? c.accent : c.faint, bg: cbg });
+          if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", { fg: dim ? c.faint : cell.chord ? c.warning : c.faint, bg: cbg });
           for (let p = 0; p < b.pages; p++) {
             const has = cell.cmd[p] || cell.val[p];
             xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", { fg: dim ? c.faint : has ? c.accentAlt : c.faint, bg: cbg });
           }
-          if (here && tr === st.track && focused) ui.tint({ x: cx + colX(st.col), y, w: colW(st.col), h: 1 }, c.bg, st.edit ? c.error : c.accent);
+          if (here && tr === st.track && focused) ui.tint({ x: cx + colX(st.col, chords), y, w: colW(st.col), h: 1 }, c.bg, st.edit ? c.error : c.accent);
           ui.hit({ x: cx, y, w: cw - 1, h: 1 }, {
             onClick: (m) => {
               const at = cellAt(m.x, m.y);
@@ -658,7 +673,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           e.writeHex(blockNo(), st.line, st.track, st.col, HEX.indexOf(d));
           // a two-digit field: the first digit moves right, the second goes back to the first and down
           const k = colKind(st.col);
-          if (k.kind !== "note" && k.digit === 0) st.col++;
+          if (k.kind === "chord") {
+            if (HEX.indexOf(d)) s.chordColumn = true;
+            advance(); // one digit: down to the next line
+          } else if (k.kind !== "note" && k.digit === 0) st.col++;
           else (st.col--, advance());
           return true;
         }

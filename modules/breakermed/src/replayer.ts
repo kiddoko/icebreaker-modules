@@ -21,7 +21,7 @@
  * Not yet: 08 hold/decay (the instrument's own hold/decay works), 0E synth jump,
  * 20 reverse, the synth instruments' programs, MIDI.
  */
-import { NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, type Instrument, type Song } from "./song";
+import { chordNotes, NOTE_OFF, PAULA_CLOCK, periodOf, playable, ptBpmOf, type Instrument, type Song } from "./song";
 
 /** What a voice does on a tick: only what changed. */
 export interface VoiceEvent {
@@ -35,6 +35,8 @@ export interface VoiceEvent {
   volume?: number;
   pan?: number;
   stop?: boolean;
+  /** with `play`: the notes of a chord over it (semitones); they follow its pitch, volume and place */
+  chord?: number[];
 }
 
 export interface Tick {
@@ -68,7 +70,9 @@ interface Chan {
   pan: number;
   offsetMem: number;
   /** a note waiting for its tick (note delay) */
-  delayed: { tick: number; note: number; inst: number; porta: boolean } | null;
+  delayed: { tick: number; note: number; inst: number; porta: boolean; chord: number } | null;
+  /** the chord the note plays (0 none) */
+  chord: number;
   cutAt: number;
   retrig: number;
   loopLine: number;
@@ -112,7 +116,7 @@ export class Player {
   }
 
   private newChan(i: number): Chan {
-    return { inst: 0, semi: 0, period: 0, target: 0, portaSpeed: 0, volume: 64, finetune: 0, vibPos: 0, vibSpeed: 0, vibDepth: 0, vibShift: 7, tremPos: 0, tremSpeed: 0, tremDepth: 0, pan: this.song.trackPan[i] ?? 0, offsetMem: 0, delayed: null, cutAt: -1, retrig: 0, loopLine: 0, loopCount: 0, age: 0, on: false, sent: { rate: -1, volume: -1, pan: -2 } };
+    return { inst: 0, semi: 0, period: 0, target: 0, portaSpeed: 0, volume: 64, finetune: 0, vibPos: 0, vibSpeed: 0, vibDepth: 0, vibShift: 7, tremPos: 0, tremSpeed: 0, tremDepth: 0, pan: this.song.trackPan[i] ?? 0, offsetMem: 0, delayed: null, chord: 0, cutAt: -1, retrig: 0, loopLine: 0, loopCount: 0, age: 0, on: false, sent: { rate: -1, volume: -1, pan: -2 } };
   }
 
   /** Start (again) from a position. */
@@ -195,14 +199,14 @@ export class Player {
         if (cmd === 0x0f && v === 0xf2) delay = this.speed >> 1;
       }
       if (delay && delay < this.speed && (cell.note || cell.inst)) {
-        c.delayed = { tick: delay, note: cell.note, inst: cell.inst, porta };
-      } else this.noteOn(c, t, cell.note, cell.inst, porta, triggers);
+        c.delayed = { tick: delay, note: cell.note, inst: cell.inst, porta, chord: cell.chord ?? 0 };
+      } else this.noteOn(c, t, cell.note, cell.inst, porta, triggers, cell.chord ?? 0);
       for (let p = 0; p < cell.cmd.length; p++) this.lineCommand(c, t, cell.cmd[p], cell.val[p], !!cell.note, triggers);
       if (!f.ptSlides) this.slides(c, cell.cmd, cell.val, true);
     });
   }
 
-  private noteOn(c: Chan, t: number, note: number, instNo: number, porta: boolean, triggers: Map<number, number>): void {
+  private noteOn(c: Chan, t: number, note: number, instNo: number, porta: boolean, triggers: Map<number, number>, chord = 0): void {
     if (instNo) {
       c.inst = instNo;
       const inst = this.inst(c);
@@ -223,6 +227,7 @@ export class Player {
       return;
     }
     c.semi = semi;
+    c.chord = chord;
     c.period = c.target = period;
     c.vibPos = c.tremPos = 0;
     c.age = 0;
@@ -310,7 +315,7 @@ export class Player {
       if (c.delayed && c.delayed.tick === this.tick) {
         const d = c.delayed;
         c.delayed = null;
-        this.noteOn(c, t, d.note, d.inst, d.porta, triggers);
+        this.noteOn(c, t, d.note, d.inst, d.porta, triggers, d.chord);
       }
       if (c.cutAt === this.tick) c.volume = 0;
       if (c.retrig && this.tick % c.retrig === 0 && c.on) {
@@ -395,6 +400,8 @@ export class Player {
       if (trig !== undefined && trig >= 0) {
         ev.play = c.inst - 1;
         ev.offset = trig;
+        const chord = chordNotes(s, c.chord);
+        if (chord.length) ev.chord = chord;
         any = true;
       }
       if (any || Math.abs(rate - c.sent.rate) > 1e-6) (ev.rate = rate), (any = true);
