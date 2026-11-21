@@ -67,7 +67,7 @@ export function makeStart(ib: IcebreakerAPI) {
           const glyph = settled ? ch : NOISE[(i * 7 + k * 3 + Math.floor(now / 40)) % NOISE.length];
           ui.text(x0 + i, y + k, glyph, { fg: mix(c.accent, c.accentAlt, i / w), attrs: settled ? BOLD : 0 });
         });
-      const sub = `β · ${t("a tracker: notes, samples, synths, chiptune")}`;
+      const sub = `β · ${t("tracker: notes, samples, synths, chiptune")}`;
       const shown = sub.slice(0, Math.max(0, Math.round(((p - 0.6) / 0.4) * sub.length)));
       ui.textCenter(r, y + LOGO.length + 1, shown, { fg: c.muted });
       y += LOGO.length + 3;
@@ -84,7 +84,7 @@ export function makeStart(ib: IcebreakerAPI) {
       const label = `${ch.key}  ${t(ch.label)}`.padEnd(Math.max(0, colW - 3));
       ui.button(bx, by, label, () => run(ch.cmd), { cmd: ch.cmd, tip: t(ch.tip), selected: i === row, quiet: i >= 4 && i !== row });
     });
-    ui.text(inner.x + 1, inner.y + inner.h - 1, t("a letter, or ↑↓ ←→ and ⏎ · the shell: med -h"), { fg: c.subtle }, inner.w - 2);
+    ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
     if (error) ui.textCenter(r, box.y + box.h + 1, error, { fg: c.error });
   };
 

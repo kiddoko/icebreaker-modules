@@ -210,7 +210,7 @@ function newSong(tracks = 8) {
 			vol7bit: false,
 			ptSlides: false,
 			eightChannel: false,
-			hardwareMix: true,
+			hardwareMix: false,
 			filter: false
 		}
 	};
@@ -915,12 +915,92 @@ function sanitizeWith(table, fresh, j) {
 	}
 	return fresh;
 }
+// src/dsp/levels.ts
+/**
+* breakerMED — each preset's level (dB), so they all sound about as loud as each
+* other (a hat as loud as a pad, by its loudest 100 ms). Measured by
+* tests/levels.test.ts, which says what to put here when a preset changes.
+*/
+var PRESET_LEVELS = {
+	"analog:bass": 1,
+	"analog:acid": .5,
+	"analog:lead": .5,
+	"analog:pad": 5,
+	"analog:pluck": 6,
+	"analog:brass": 2.5,
+	"analog:sine": 1,
+	"fm:epiano": .5,
+	"fm:bass": 1,
+	"fm:brass": 1,
+	"fm:organ": -2,
+	"fm:pluck": .5,
+	"fm:metal": .5,
+	"fm:ym-bass": 1.5,
+	"fm:ym-slap": -.5,
+	"fm:ym-brass": 1.5,
+	"fm:ym-lead": 2,
+	"fm:ym-epiano": .5,
+	"chip:2a03-lead": 1.5,
+	"chip:2a03-lead12": 4,
+	"chip:2a03-square": .5,
+	"chip:2a03-bass": 5,
+	"chip:2a03-arp": 4,
+	"chip:2a03-pluck": 4,
+	"chip:2a03-kick": 7.5,
+	"chip:2a03-snare": 4,
+	"chip:2a03-hat": 2,
+	"chip:dmg-lead": .5,
+	"chip:dmg-lead25": 2,
+	"chip:dmg-sweep": 1.5,
+	"chip:dmg-wave-bass": 2.5,
+	"chip:dmg-wave-pad": 5.5,
+	"chip:dmg-arp": 2,
+	"chip:dmg-snare": 4.5,
+	"chip:dmg-hat": 3,
+	"chip:sid-pwm-lead": .5,
+	"chip:sid-pwm-bass": 1.5,
+	"chip:sid-saw-bass": 5,
+	"chip:sid-sync-lead": 5.5,
+	"chip:sid-ring-bell": 5.5,
+	"chip:sid-arp": 1,
+	"chip:sid-kick": 7.5,
+	"chip:sid-snare": 9.5,
+	"chip:ay-square": .5,
+	"chip:ay-buzz-saw": 4.5,
+	"chip:ay-buzz-tri": 4.5,
+	"chip:ay-arp": .5,
+	"chip:ay-kick": 5,
+	"chip:ay-snare": 3.5,
+	"chip:ay-hat": 2.5,
+	"chip:psg-square": .5,
+	"chip:psg-bass": 6.5,
+	"chip:psg-arp": .5,
+	"chip:psg-pluck": 2.5,
+	"chip:psg-snare": 3.5,
+	"chip:psg-hat": 3,
+	"chip:pce-wave-lead": 6.5,
+	"chip:pce-wave-bass": 2.5,
+	"chip:pce-organ": 6,
+	"chip:pce-pluck": 8,
+	"chip:pce-arp": 5.5
+};
 // src/dsp/analog.ts
+/**
+* breakerMED — the analog synth (subtractive, the classic way: Moog, Juno,
+* SH-101). Two oscillators and a sub → a filter (low / high / band-pass, 12 or
+* 24 dB, resonance) → an amplifier; an envelope for each (ADSR), an LFO for the
+* pitch, the filter or the pulse width, glide. Our own code: band-limited
+* oscillators (polyBLEP) and a state-variable filter (TPT), cheap and stable.
+*
+* A note's pitch comes from the tracker like a sample's (a "rate"), so slides,
+* vibrato and arpeggios work the same: C-3 is middle C (261.63 Hz).
+*/
 /** what a rate means for a synth: the tracker's C-3 rate is middle C */
 var C3_RATE$2 = 3546895 / 214;
 var C3_HZ = 261.6256;
 function defaultAnalog() {
 	return {
+		level: 0,
 		osc1: {
 			wave: "saw",
 			pw: .5,
@@ -1187,6 +1267,7 @@ var ANALOG_PRESETS = {
 function analogPreset(name) {
 	const p = defaultAnalog();
 	ANALOG_PRESETS[name ?? ""]?.(p);
+	p.level = PRESET_LEVELS[`analog:${name ?? ""}`] ?? 0;
 	return structuredClone(p);
 }
 /** a band-limiting correction at a waveform's jump (polyBLEP) */
@@ -1263,7 +1344,7 @@ var AnalogVoice = class {
 	set(rate, volume, pan) {
 		this.targetHz = Math.max(1, rate) / C3_RATE$2 * C3_HZ;
 		if (!(this.p.glide > 0)) this.hz = this.targetHz;
-		const v = Math.max(0, Math.min(1, volume));
+		const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
 		this.gl = v * Math.min(1, 1 - pan);
 		this.gr = v * Math.min(1, 1 + pan);
 	}
@@ -1583,6 +1664,14 @@ var ANALOG_PARAMS = [
 		max: 2,
 		step: .01,
 		unit: "s"
+	},
+	{
+		key: "level",
+		label: "level",
+		min: -24,
+		max: 12,
+		step: .5,
+		unit: "dB"
 	}
 ];
 /** Settings read from a file: every value checked, anything missing or wrong → the default. */
@@ -1600,6 +1689,7 @@ var sanitizeAnalog = (j) => sanitizeWith(ANALOG_PARAMS, defaultAnalog(), j);
 */
 function defaultFm() {
 	return {
+		level: 0,
 		ratio: 1,
 		detune: 0,
 		index: 2,
@@ -1855,6 +1945,7 @@ var FM_PRESETS = {
 function fmPreset(name) {
 	const p = defaultFm();
 	FM_PRESETS[name ?? ""]?.(p);
+	p.level = PRESET_LEVELS[`fm:${name ?? ""}`] ?? 0;
 	return structuredClone(p);
 }
 var FM_PARAMS = [
@@ -1971,6 +2062,14 @@ var FM_PARAMS = [
 		max: 12,
 		step: .05,
 		unit: "st"
+	},
+	{
+		key: "level",
+		label: "level",
+		min: -24,
+		max: 12,
+		step: .5,
+		unit: "dB"
 	}
 ];
 var sanitizeFm = (j) => sanitizeWith(FM_PARAMS, defaultFm(), j);
@@ -2009,7 +2108,7 @@ var FmVoice = class {
 	}
 	set(rate, volume, pan) {
 		this.hz = Math.max(1, rate) / C3_RATE$2 * C3_HZ;
-		const v = Math.max(0, Math.min(1, volume));
+		const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
 		this.gl = v * Math.min(1, 1 - pan);
 		this.gr = v * Math.min(1, 1 + pan);
 	}
@@ -2118,6 +2217,7 @@ var CHIP_LIKE = {
 };
 function defaultChip() {
 	return {
+		level: 0,
 		chip: "2a03",
 		wave: "pulse",
 		duty: .5,
@@ -2641,6 +2741,7 @@ var CHIP_PRESETS = {
 function chipPreset(name) {
 	const p = defaultChip();
 	CHIP_PRESETS[name ?? ""]?.(p);
+	p.level = PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0;
 	return structuredClone(p);
 }
 /** the presets of one chip (the INSTRUMENT screen shows those) */
@@ -2802,6 +2903,14 @@ var CHIP_PARAMS = [
 		min: 0,
 		max: .95,
 		step: .05
+	},
+	{
+		key: "level",
+		label: "level",
+		min: -24,
+		max: 12,
+		step: .5,
+		unit: "dB"
 	}
 ];
 function sanitizeChip(j) {
@@ -3009,7 +3118,7 @@ var ChipVoice = class {
 	}
 	set(rate, volume, pan) {
 		this.hz = Math.max(1, rate) / C3_RATE$2 * C3_HZ;
-		const v = Math.max(0, Math.min(1, volume));
+		const v = Math.max(0, Math.min(1, volume)) * 10 ** ((this.p.level ?? 0) / 20);
 		this.gl = v * Math.min(1, 1 - pan);
 		this.gr = v * Math.min(1, 1 + pan);
 	}
@@ -3310,6 +3419,234 @@ var DRUM_KITS = {
 			decay: 1,
 			level: 1,
 			tone: .4
+		};
+	},
+	/** a long sub kick that hums, a soft snare, airy hats */
+	boom: (k) => {
+		k.drums[0] = {
+			tune: -3,
+			decay: 2.6,
+			level: 1,
+			tone: .1
+		};
+		k.drums[2] = {
+			tune: -1,
+			decay: 1.1,
+			level: .7,
+			tone: .3
+		};
+		k.drums[3] = {
+			tune: -1,
+			decay: 1.2,
+			level: .75,
+			tone: .4
+		};
+		k.drums[6] = {
+			tune: 0,
+			decay: 1.4,
+			level: .6,
+			tone: .4
+		};
+	},
+	/** four on the floor: a firm kick, a wide clap, a bright open hat and ride */
+	house: (k) => {
+		k.drums[0] = {
+			tune: 1,
+			decay: .9,
+			level: 1,
+			tone: .7
+		};
+		k.drums[3] = {
+			tune: 1,
+			decay: 1.3,
+			level: .9,
+			tone: .6
+		};
+		k.drums[4] = {
+			tune: 1,
+			decay: .7,
+			level: .65,
+			tone: .75
+		};
+		k.drums[6] = {
+			tune: 1,
+			decay: 1.3,
+			level: .65,
+			tone: .75
+		};
+		k.drums[11] = {
+			tune: 2,
+			decay: 1.2,
+			level: .6,
+			tone: .8
+		};
+	},
+	/** snappy and high: clicky kick, tight snare, toms and cowbell tuned up */
+	electro: (k) => {
+		k.drums[0] = {
+			tune: 5,
+			decay: .6,
+			level: 1,
+			tone: .9
+		};
+		k.drums[2] = {
+			tune: 4,
+			decay: .6,
+			level: .85,
+			tone: .9
+		};
+		for (const t of [
+			5,
+			7,
+			9
+		]) k.drums[t] = {
+			tune: 5,
+			decay: .7,
+			level: .8,
+			tone: .6
+		};
+		k.drums[8] = {
+			tune: 3,
+			decay: .8,
+			level: .7,
+			tone: .5
+		};
+		k.drums[4] = {
+			tune: 2,
+			decay: .35,
+			level: .6,
+			tone: .9
+		};
+	},
+	/** a kick that slides on and on, a hard snare, ticking hats */
+	trap: (k) => {
+		k.drums[0] = {
+			tune: -5,
+			decay: 3.2,
+			level: 1,
+			tone: .35
+		};
+		k.drums[2] = {
+			tune: 3,
+			decay: .6,
+			level: .9,
+			tone: .8
+		};
+		k.drums[3] = {
+			tune: 2,
+			decay: .9,
+			level: .9,
+			tone: .7
+		};
+		k.drums[4] = {
+			tune: 3,
+			decay: .3,
+			level: .55,
+			tone: .85
+		};
+		k.drums[6] = {
+			tune: 3,
+			decay: .8,
+			level: .55,
+			tone: .85
+		};
+	},
+	/** soft and warm, 8 bits: drums off an old record */
+	dusty: (k) => {
+		k.bits = 8;
+		k.hold = 2;
+		k.drums[0] = {
+			tune: -1,
+			decay: 1.1,
+			level: 1,
+			tone: .3
+		};
+		k.drums[2] = {
+			tune: -2,
+			decay: 1.2,
+			level: .8,
+			tone: .3
+		};
+		k.drums[4] = {
+			tune: -1,
+			decay: .8,
+			level: .55,
+			tone: .3
+		};
+		k.drums[6] = {
+			tune: -1,
+			decay: 1.1,
+			level: .55,
+			tone: .3
+		};
+	},
+	/** tuned down, long and crushed to 4 bits: metal and machines */
+	industrial: (k) => {
+		k.bits = 4;
+		k.hold = 2;
+		for (const d of k.drums) Object.assign(d, {
+			tune: -4,
+			decay: 1.5,
+			tone: .9
+		});
+		k.drums[0].level = 1;
+	},
+	/** toms that ring, a rim and a cowbell up front */
+	tribal: (k) => {
+		k.drums[0] = {
+			tune: -2,
+			decay: 1.2,
+			level: .95,
+			tone: .4
+		};
+		k.drums[1] = {
+			tune: 0,
+			decay: 1.2,
+			level: .9,
+			tone: .6
+		};
+		k.drums[5] = {
+			tune: -3,
+			decay: 2,
+			level: .95,
+			tone: .3
+		};
+		k.drums[7] = {
+			tune: 0,
+			decay: 1.8,
+			level: .95,
+			tone: .3
+		};
+		k.drums[9] = {
+			tune: 3,
+			decay: 1.6,
+			level: .95,
+			tone: .3
+		};
+		k.drums[8] = {
+			tune: 0,
+			decay: 1,
+			level: .9,
+			tone: .5
+		};
+	},
+	/** every drum short and quiet, a clicky rim: room for the rest */
+	minimal: (k) => {
+		for (const d of k.drums) Object.assign(d, {
+			decay: .35,
+			level: .65
+		});
+		k.drums[0] = {
+			tune: 0,
+			decay: .6,
+			level: .95,
+			tone: .5
+		};
+		k.drums[1] = {
+			tune: 2,
+			decay: .5,
+			level: .8,
+			tone: .85
 		};
 	}
 };
@@ -4069,7 +4406,7 @@ var Player = class {
 		this.speed = song.speed;
 		this.tempo = song.tempo;
 		this.chans = Array.from({ length: song.tracks }, (_, i) => this.newChan(i));
-		this.mix = .5 * Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
+		this.mix = Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
 	}
 	newChan(i) {
 		return {
@@ -4169,7 +4506,7 @@ var Player = class {
 	/** a note number → the semitone it plays (0 = C-1), the Amiga's octave folding included */
 	semiOf(note, inst) {
 		let s = note - 1 + this.song.transpose + this.song.noteShift + (inst?.transpose ?? 0);
-		if (this.song.format.startsWith("MMD")) {
+		if (this.song.format.startsWith("MMD") && !computed(inst)) {
 			const top = this.song.flags.hardwareMix ? 36 : 48;
 			if (s >= top) s -= Math.floor((s - top + 12) / 12) * 12;
 		}
@@ -4600,6 +4937,32 @@ function voiceFor(instrument, outRate, paula) {
 	v.paula = paula;
 	return v;
 }
+// src/dsp/limiter.ts
+/**
+* breakerMED — the last thing on the mix: a peak limiter, so a louder song never
+* clips. Below the ceiling it does nothing; a peak over it turns the gain down at
+* once (the same gain on both sides, no distortion), and the gain comes back slowly.
+*/
+var Limiter = class Limiter {
+	constructor(rate, releaseSeconds = .15) {
+		_defineProperty(this, "gain", 1);
+		_defineProperty(this, "back", void 0);
+		this.back = 1 - Math.exp(-1 / (releaseSeconds * rate));
+	}
+	process(left, right, from, to) {
+		const c = Limiter.CEILING;
+		let g = this.gain;
+		for (let i = from; i < to; i++) {
+			const peak = Math.max(Math.abs(left[i]), Math.abs(right[i]));
+			const want = peak > c ? c / peak : 1;
+			g = want < g ? want : g + (want - g) * this.back;
+			left[i] *= g;
+			right[i] *= g;
+		}
+		this.gain = g;
+	}
+};
+_defineProperty(Limiter, "CEILING", .891);
 // src/render.ts
 /**
 * breakerMED — the renderer: the song turned into sound, frame by frame, here
@@ -4613,6 +4976,8 @@ function voiceFor(instrument, outRate, paula) {
 */
 /** keys played on the piano: a few voices of their own, in turn */
 var PREVIEWS = 4;
+/** a key played alone: about as loud as a note of the song */
+var PREVIEW_GAIN = .7;
 var Renderer = class {
 	constructor(song, rate, paula = true) {
 		_defineProperty(this, "song", void 0);
@@ -4678,6 +5043,18 @@ var Renderer = class {
 			"tickLeft",
 			0
 		);
+		_defineProperty(
+			this,
+			/** the mix's last stage: loud, never clipping */
+			"limiter",
+			void 0
+		);
+		_defineProperty(
+			this,
+			/** the limiter on (tests of the echo or the mix turn it off to measure them) */
+			"limit",
+			true
+		);
 		_defineProperty(this, "carry", 0);
 		_defineProperty(
 			this,
@@ -4690,6 +5067,7 @@ var Renderer = class {
 		this.song = song;
 		this.rate = rate;
 		this.paula = paula;
+		this.limiter = new Limiter(rate);
 		const w = Math.tan(Math.PI * Math.min(3275, rate * .45) / rate);
 		const n = 1 / (1 + Math.SQRT2 * w + w * w);
 		this.led.b0 = w * w * n;
@@ -4748,7 +5126,7 @@ var Renderer = class {
 			rate,
 			offset: 0
 		});
-		voice.set(rate, .45 * instrument.gain * (instrument.volume / 64), 0);
+		voice.set(rate, PREVIEW_GAIN * instrument.gain * (instrument.volume / 64), 0);
 		this.previews[slot] = {
 			voice,
 			until: this.frame + Math.round(seconds * this.rate)
@@ -4772,6 +5150,7 @@ var Renderer = class {
 			if (this.song.flags.filter) this.filter(left, right, at, at + span);
 			if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
 			else if (this.echoL) this.echoL = this.echoR = null;
+			if (this.limit) this.limiter.process(left, right, at, at + span);
 			at += span;
 			this.tickLeft -= span;
 		}
@@ -5138,6 +5517,12 @@ var SCREENS = [
 		label: "EXPORT",
 		short: "EXP",
 		key: "E"
+	},
+	{
+		id: "guide",
+		label: "? GUIDE",
+		short: "?",
+		key: "?"
 	}
 ];
 var FORMATS = [
@@ -5613,12 +5998,13 @@ function makeScreens(ib, engine, st) {
 			names,
 			SCREENS.map((s) => t(s.short))
 		].find(fit) ?? SCREENS.map((s) => s.key);
+		const open = (s) => () => (s === "guide" && st.screen !== "guide" && (st.back = st.screen), st.screen = s);
 		let xx = x;
-		SCREENS.forEach((s, i) => xx += ui.button(xx, y, labels[i], () => st.screen = s.id, {
+		SCREENS.forEach((s, i) => xx += ui.button(xx, y, labels[i], open(s.id), {
 			selected: st.screen === s.id,
 			quiet: st.screen !== s.id
 		}));
-		if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E", { fg: c.faint });
+		if (xx + 18 < x + w) ui.textRight(x + w - 1, y, "alt B · I · S · E · ?", { fg: c.faint });
 	};
 	return {
 		drawSong,
@@ -5626,6 +6012,324 @@ function makeScreens(ib, engine, st) {
 		drawExport,
 		keyExport,
 		drawTabs
+	};
+}
+// src/guide.ts
+/** the effect commands, as the replayer plays them (replayer.ts) */
+var EFFECTS = [
+	["00xy", "arpeggio: the note, +x, +y semitones, very fast (a chord on one track)"],
+	["01xx / 02xx", "slide the pitch up / down (xx: how fast)"],
+	["03xx", "slide to the note written (xx: speed) — a portamento"],
+	["04xy", "vibrato (x speed, y depth, twice ProTracker's)"],
+	["05xy / 06xy", "03 / 04 going on, with a volume slide"],
+	["07xy", "tremolo: the volume wobbles (x speed, y depth)"],
+	["09xx", "speed: ticks a line (01–20)"],
+	["0Axy / 0Dxy", "volume slide (x up, y down)"],
+	["0Bxx", "jump to position xx of the sequence"],
+	["0Cxx", "volume (decimal 00–64, or hex in hex mode)"],
+	["0Fxx", "tempo · 0F00 next block · F1 note twice · F2 half a line late · F3 three times · FE stop · FF note off"],
+	["11x / 12x", "fine slide up / down"],
+	["14xy", "vibrato, ProTracker's depth"],
+	["15x", "finetune (-8…7)"],
+	["16x", "loop: 1600 marks the start, 16x plays it x more times"],
+	["18x", "cut the note at tick x"],
+	["19xx", "start xx × 256 frames into the sample"],
+	["1Ax / 1Bx", "fine volume up / down"],
+	["1Dxx", "next block, at line xx"],
+	["1Ex", "play the line x more times"],
+	["1Fxy", "note x ticks late · y: again every y ticks"],
+	["2Exx", "pan (F0 left … 00 middle … 10 right)"]
+];
+/** the guide, part by part: [what you press or type, what it does] */
+var GUIDE = [
+	{
+		title: "START",
+		rows: [
+			["med new", "a new song: 8 tracks, drums and synths, a beat ready to play"],
+			["med new --chip", "a chiptune song: 2 pulses, a triangle, a noise (NES-style)"],
+			["med open", "open a .med, .mod or .bmed of the vault"],
+			["med demo", "the demo song"],
+			["med save", "save (a new song becomes a .bmed in songs/)"],
+			["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
+			["space", "stop · when stopped: EDIT MODE on / off"]
+		]
+	},
+	{
+		title: "EDIT MODE (space: the line turns red, ● EDIT at the top)",
+		rows: [
+			["the letter keys", "a piano: Z S X D C V… (bottom row) and Q 2 W 3 E R… (top row), by place"],
+			["`", "note off (^^^): the note stops, a synth releases"],
+			["0–9 A–F", "the hex columns: the instrument (2 digits), the chord, the command (4)"],
+			["delete · ⌫", "clear the column · delete the line (⇧: in every track)"],
+			["alt enter", "insert a line (⇧: in every track)"],
+			["alt ↑↓ · alt ←→", "the octave · the instrument the keys play"],
+			["alt 0–9", "the step: lines the cursor moves after a note"],
+			["⇧ arrows · drag", "select · alt C / X / V copy cut paste · alt Q / A transpose"],
+			["⌘Z · ⌘⇧Z", "undo · redo (notes, instruments, settings, mutes)"]
+		]
+	},
+	{
+		title: "A CELL: C-3 01 . 0C20",
+		rows: [
+			["C-3", "the note (C-1 … B-7) · ^^^ a note off"],
+			["01", "the instrument (01–3F, the list on the left)"],
+			[".", "the chord (1–F of the song's table: med chords), when the song has chords"],
+			["0C20", "an effect: the command (0C) and its value (20) — the list below"]
+		]
+	},
+	{
+		title: "EFFECTS (the last 4 hex digits of a cell: command, value)",
+		rows: EFFECTS
+	},
+	{
+		title: "THE SAMPLER (your own sounds)",
+		rows: [
+			["med sampler", "load a sound into a free instrument (a list of the vault's sounds)"],
+			["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
+			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n"],
+			["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
+			["med bounce", "this block, rendered into a new instrument"],
+			["med pack", "the starter sounds, recorded by people: which are there (med pack load <name>)"]
+		]
+	},
+	{
+		title: "SCREENS (the tabs, or alt B I S E, ? for this guide)",
+		rows: [
+			["BLOCK", "the notes, track by track"],
+			["INSTRUMENT", "the instrument the keys play: a sound's tools, a synth's settings, a drum kit"],
+			["SONG", "tempo, swing, echo, tracks: name, volume, pan, strum, mute, solo"],
+			["EXPORT", "WAV, AIFF, FLAC, MP3, M4A, OGG, Opus, with each track apart"],
+			["right-click", "a menu on a cell, a track's name, a position, an instrument"],
+			["med -h", "every command (all the mouse does, the shell does too)"]
+		]
+	}
+];
+/** every row of the guide, flat: a part's title, then its rows */
+var lines = () => GUIDE.flatMap((p, i) => [
+	...i ? [{ title: "" }] : [],
+	{ title: p.title },
+	...p.rows.map(([keys, what]) => ({
+		keys,
+		what
+	}))
+]);
+function makeGuide(ib) {
+	const { BOLD, t, truncate } = ib.lib;
+	let scroll = 0;
+	let height = 10;
+	const draw = (ui, r, focused) => {
+		const c = ui.c;
+		const inner = ui.box(r, {
+			title: t("GUIDE"),
+			focused
+		});
+		const all = lines();
+		height = Math.max(1, inner.h - 1);
+		scroll = Math.max(0, Math.min(scroll, all.length - height));
+		const keyW = Math.min(22, Math.max(10, Math.floor(inner.w / 3)));
+		for (let k = 0; k < height && scroll + k < all.length; k++) {
+			const row = all[scroll + k], y = inner.y + k;
+			if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", {
+				fg: c.accent,
+				attrs: BOLD
+			}, inner.w - 2);
+			else {
+				ui.text(inner.x + 2, y, truncate(row.keys, keyW - 1), { fg: /^[0-9A-F]{2}/.test(row.keys) ? c.accentAlt : c.fg });
+				ui.text(inner.x + 2 + keyW, y, t(row.what), { fg: c.muted }, inner.w - keyW - 3);
+			}
+		}
+		ui.hit(inner, { onWheel: (d) => scroll += Math.sign(d) * 3 });
+		const more = all.length > height ? ` ${scroll + 1}–${Math.min(all.length, scroll + height)}/${all.length} · ↑↓ ` : " ";
+		ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or esc: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
+	};
+	const key = (k) => {
+		switch (k.key) {
+			case "up": return scroll = Math.max(0, scroll - 1), true;
+			case "down": return scroll += 1, true;
+			case "pageup": return scroll = Math.max(0, scroll - height), true;
+			case "pagedown":
+			case "space": return scroll += height, true;
+			case "home": return scroll = 0, true;
+			case "end": return scroll = 9999, true;
+		}
+		return false;
+	};
+	/** the guide as text, for the shell */
+	const text = () => GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${a.padEnd(22)} ${b}`).join("\n")}`).join("\n\n") + "\n";
+	return {
+		draw,
+		key,
+		text,
+		top: () => scroll = 0
+	};
+}
+// src/start.ts
+/** the logo, in half blocks: our own letters, 3 rows high */
+var FONT = {
+	B: [
+		"█▀▄",
+		"█▀▄",
+		"▀▀ "
+	],
+	R: [
+		"█▀▄",
+		"█▀▄",
+		"▀ ▀"
+	],
+	E: [
+		"█▀▀",
+		"█▀▀",
+		"▀▀▀"
+	],
+	A: [
+		"▄▀▄",
+		"█▀█",
+		"▀ ▀"
+	],
+	K: [
+		"█ █",
+		"█▀▄",
+		"▀ ▀"
+	],
+	M: [
+		"█▄ ▄█",
+		"█ ▀ █",
+		"▀   ▀"
+	],
+	D: [
+		"█▀▄",
+		"█ █",
+		"▀▀ "
+	]
+};
+var WORD = "BREAKERMED";
+/** the logo's 3 rows */
+var LOGO = [
+	0,
+	1,
+	2
+].map((row) => [...WORD].map((ch) => FONT[ch][row]).join(" "));
+/** how long the logo takes to build itself (ms) */
+var INTRO_MS = 1100;
+var NOISE = "░▒▓█▚▞";
+var START = [
+	{
+		key: "N",
+		label: "new song",
+		cmd: "med new",
+		tip: "8 tracks, drums and synths, a beat ready: ⏎ plays it, space to write"
+	},
+	{
+		key: "O",
+		label: "open…",
+		cmd: "med open",
+		tip: "a .med, .mod or .bmed of the vault"
+	},
+	{
+		key: "D",
+		label: "demo",
+		cmd: "med demo",
+		tip: "listen to the demo song"
+	},
+	{
+		key: "?",
+		label: "guide",
+		cmd: "med guide",
+		tip: "the keys, the edit mode, the effects in hex, the sampler"
+	},
+	{
+		key: "C",
+		label: "chiptune song",
+		cmd: "med new --chip",
+		tip: "2 pulses, a triangle, a noise: an old console's sound"
+	},
+	{
+		key: "S",
+		label: "sampler",
+		cmd: "med sampler",
+		tip: "your own sounds: load one into an instrument"
+	}
+];
+function makeStart(ib) {
+	const { BOLD, t, mix } = ib.lib;
+	const run = (line) => void ib.shell.run(line);
+	/** when the logo started building (the first time the page is drawn) */
+	let since = 0;
+	let row = 0;
+	const draw = (ui, r, error) => {
+		const c = ui.c;
+		const now = performance.now();
+		if (!since) since = now;
+		const p = Math.min(1, (now - since) / INTRO_MS);
+		if (p < 1) ui.animate(33);
+		const w = LOGO[0].length;
+		const boxW = Math.min(r.w - 2, 46), boxH = 9;
+		const tall = r.h >= LOGO.length + boxH + 5;
+		let y = r.y + Math.max(1, Math.floor((r.h - (tall ? LOGO.length + 3 : 0) - boxH) / 2));
+		if (tall && w <= r.w - 2) {
+			const x0 = r.x + Math.floor((r.w - w) / 2);
+			for (let k = 0; k < LOGO.length; k++) [...LOGO[k]].forEach((ch, i) => {
+				if (ch === " ") return;
+				const at = i / w * .75;
+				if (p < at) return;
+				const settled = p >= at + .25;
+				const glyph = settled ? ch : NOISE[(i * 7 + k * 3 + Math.floor(now / 40)) % 6];
+				ui.text(x0 + i, y + k, glyph, {
+					fg: mix(c.accent, c.accentAlt, i / w),
+					attrs: settled ? BOLD : 0
+				});
+			});
+			const sub = `β · ${t("tracker: notes, samples, synths, chiptune")}`;
+			const shown = sub.slice(0, Math.max(0, Math.round((p - .6) / .4 * sub.length)));
+			ui.textCenter(r, y + LOGO.length + 1, shown, { fg: c.muted });
+			y += LOGO.length + 3;
+		} else ui.textCenter(r, y++, "BreakerMED β", {
+			fg: c.accent,
+			attrs: BOLD
+		});
+		const box = {
+			x: r.x + Math.floor((r.w - boxW) / 2),
+			y,
+			w: boxW,
+			h: boxH
+		};
+		const inner = ui.box(box, {
+			title: t("START"),
+			focused: true
+		});
+		const colW = Math.floor((inner.w - 2) / 2);
+		row = Math.max(0, Math.min(START.length - 1, row));
+		START.forEach((ch, i) => {
+			const col = i % 2, line = Math.floor(i / 2);
+			const bx = inner.x + 1 + col * colW, by = inner.y + line * 2 + (i >= 4 ? 1 : 0);
+			if (by >= inner.y + inner.h) return;
+			const label = `${ch.key}  ${t(ch.label)}`.padEnd(Math.max(0, colW - 3));
+			ui.button(bx, by, label, () => run(ch.cmd), {
+				cmd: ch.cmd,
+				tip: t(ch.tip),
+				selected: i === row,
+				quiet: i >= 4 && i !== row
+			});
+		});
+		ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
+		if (error) ui.textCenter(r, box.y + box.h + 1, error, { fg: c.error });
+	};
+	const key = (k) => {
+		const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
+		const hit = START.find((ch) => ch.key === letter);
+		if (hit && !k.alt && !k.ctrl && !k.meta) return run(hit.cmd), true;
+		switch (k.key) {
+			case "up": return row = Math.max(0, row - 2), true;
+			case "down": return row = Math.min(START.length - 1, row + 2), true;
+			case "left": return row = Math.max(0, row - 1), true;
+			case "right": return row = Math.min(START.length - 1, row + 1), true;
+			case "enter": return run(START[row].cmd), true;
+		}
+		return false;
+	};
+	return {
+		draw,
+		key
 	};
 }
 // src/app.ts
@@ -5663,6 +6367,7 @@ function newState() {
 		clip: null,
 		error: "",
 		screen: "block",
+		back: "block",
 		songRow: 0,
 		songCol: 0,
 		exp: newExportChoices(),
@@ -5710,7 +6415,51 @@ function makeApp(ib, engine, st) {
 		}
 	];
 	const screens = makeScreens(ib, engine, st);
+	const guide = makeGuide(ib);
+	const start = makeStart(ib);
+	/** ? : the guide, and back to where you were */
+	const toggleGuide = () => {
+		if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
+		else st.back = st.screen, st.screen = "guide";
+	};
 	instList.onSelect = (i) => st.inst = i;
+	instList.menuOf = (i) => {
+		const n = hex(i + 1);
+		const ins = st.song?.instruments[i];
+		const empty = !ins || ins.kind === "empty";
+		return [
+			{
+				label: t("open it (INSTRUMENT)"),
+				hint: "alt I",
+				run: () => (st.inst = i, st.screen = "instrument")
+			},
+			...empty ? [] : [{
+				label: t("play it"),
+				run: () => preview(st.octave * 12, i)
+			}],
+			"-",
+			{
+				label: t("sampler: load a sound…"),
+				cmd: `med sample ${n} load`
+			},
+			{
+				label: t("analog synth"),
+				cmd: `med synth ${n} new`
+			},
+			{
+				label: t("FM synth"),
+				cmd: `med fm ${n} new`
+			},
+			{
+				label: t("chip synth"),
+				cmd: `med chip ${n} new 2a03-lead`
+			},
+			{
+				label: t("drum machine"),
+				cmd: `med drums ${n} new`
+			}
+		];
+	};
 	instList.onActivate = (i) => preview(st.octave * 12, i);
 	/** first track shown (the page scrolls sideways when they don't fit) */
 	let firstTrack = 0;
@@ -5820,9 +6569,9 @@ function makeApp(ib, engine, st) {
 			ui.text(inner.x + 1, inner.y + 1, t("empty — load a sound, or make a synth:"), { fg: c.muted }, inner.w - 2);
 			const choices = [
 				[
-					"load…",
+					"sampler · load a sound…",
 					`med sample ${n} load`,
-					"a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault"
+					"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault (chop, stretch, loop it after)"
 				],
 				[
 					"analog synth",
@@ -6090,7 +6839,16 @@ function makeApp(ib, engine, st) {
 		ui.text(x, inner.y, t("kit"), { fg: c.muted });
 		x += t("kit").length + 2;
 		const now = stable(kit);
-		for (const name of Object.keys(DRUM_KITS)) {
+		const kits = Object.keys(DRUM_KITS);
+		for (const [k, name] of kits.entries()) {
+			if (x + name.length + 2 > inner.x + inner.w - 1 - (k < kits.length - 1 ? 4 : 0)) {
+				ui.button(x, inner.y, "…", () => {}, {
+					cmd: "med drums kits",
+					quiet: true,
+					tip: `${kits.slice(k).join(" · ")} · med drums ${n} kit <name>`
+				});
+				break;
+			}
 			const on = stable(drumKit(name)) === now;
 			if (on) ui.text(x - 1, inner.y, "▸", { fg: c.accent });
 			x += ui.button(x, inner.y, name, () => {}, {
@@ -6098,9 +6856,8 @@ function makeApp(ib, engine, st) {
 				quiet: !on
 			}) + 1;
 		}
-		let gy = inner.y;
-		x += 2;
-		if (x + 30 >= inner.x + inner.w) x = inner.x + 1, gy = inner.y + 1;
+		const gy = inner.y + 1;
+		x = inner.x + 1;
 		ui.text(x, gy, t("grit"), { fg: c.muted });
 		x += t("grit").length + 1;
 		x += ui.button(x, gy, "‹", () => nudgeGrit("bits", -1), { quiet: true });
@@ -6189,59 +6946,64 @@ function makeApp(ib, engine, st) {
 		{
 			label: t("copy"),
 			hint: "alt C",
-			run: copy
+			cmd: "med copy"
 		},
 		{
 			label: t("cut"),
 			hint: "alt X",
-			run: cut
+			cmd: "med cut"
 		},
 		{
 			label: t("paste"),
 			hint: "alt V",
-			run: () => (st.line = line, st.track = track, paste()),
+			cmd: "med paste",
 			disabled: !st.clip
 		},
 		{
 			label: t("clear"),
 			hint: "del",
-			run: () => ed()?.clearSelection(target())
+			cmd: "med clear"
 		},
 		"-",
 		{
 			label: t("transpose up"),
 			hint: "alt Q",
-			run: () => transpose(1)
+			cmd: "med transpose 1"
 		},
 		{
 			label: t("transpose down"),
 			hint: "alt A",
-			run: () => transpose(-1)
+			cmd: "med transpose -1"
 		},
 		{
 			label: t("an octave up"),
 			hint: "⇧ alt Q",
-			run: () => transpose(12)
+			cmd: "med transpose 12"
 		},
 		{
 			label: t("an octave down"),
 			hint: "⇧ alt A",
-			run: () => transpose(-12)
+			cmd: "med transpose -12"
 		},
 		"-",
 		{
 			label: t("insert a line"),
 			hint: "alt ⏎",
-			run: () => ed()?.insertLine(blockNo(), line, [track])
+			cmd: "med line insert"
 		},
 		{
 			label: t("delete the line"),
 			hint: "⌫",
-			run: () => ed()?.deleteLine(blockNo(), line, [track])
+			cmd: "med line delete"
 		},
 		{
 			label: t("mute / unmute this track"),
 			cmd: `med mute ${track + 1}`
+		},
+		{
+			label: st.edit ? t("edit mode off") : t("edit mode on"),
+			hint: "space",
+			cmd: `med edit ${st.edit ? "off" : "on"}`
 		},
 		"-",
 		{
@@ -6257,12 +7019,21 @@ function makeApp(ib, engine, st) {
 		{
 			label: t("export…"),
 			hint: "alt E",
-			run: () => st.screen = "export"
+			cmd: "med screen export"
 		},
 		{
 			label: t("the song's settings"),
 			hint: "alt S",
-			run: () => st.screen = "song"
+			cmd: "med screen song"
+		},
+		{
+			label: t("sampler: load a sound…"),
+			cmd: "med sampler"
+		},
+		{
+			label: t("the guide"),
+			hint: "?",
+			cmd: "med guide"
 		}
 	];
 	/** the cell (and column) under the mouse, from where the block was drawn */
@@ -6288,7 +7059,7 @@ function makeApp(ib, engine, st) {
 		rawKeys: true,
 		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED",
 		dirty: () => !!st.editor?.dirty,
-		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : t("med open <file.med|.mod> — or med demo"),
+		status: () => st.song ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}` : `N ${t("new song")} · O ${t("open…")} · D ${t("demo")} · ? ${t("guide")}`,
 		render(ui, r, focused) {
 			const c = ui.c;
 			const s = st.song;
@@ -6331,9 +7102,13 @@ function makeApp(ib, engine, st) {
 				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
 			}
 			if (!s) {
-				ui.textCenter(r, r.y + Math.floor(r.h / 2) - 1, t("no song loaded"), { fg: c.muted });
-				ui.textCenter(r, r.y + Math.floor(r.h / 2) + 1, st.error || "med open <file.med | file.mod> · med demo", { fg: st.error ? c.error : c.subtle });
-				return;
+				const page = {
+					x: r.x,
+					y: r.y + 1,
+					w: r.w,
+					h: r.h - 1
+				};
+				return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
 			}
 			clampCursor();
 			const body = {
@@ -6396,6 +7171,7 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "instrument") return drawInstrument(ui, right, focused);
 			if (st.screen === "song") return screens.drawSong(ui, right, focused);
 			if (st.screen === "export") return screens.drawExport(ui, right, focused);
+			if (st.screen === "guide") return guide.draw(ui, right, focused);
 			const bn = blockNo();
 			const b = s.blocks[bn];
 			const inner = ui.box(right, {
@@ -6403,6 +7179,12 @@ function makeApp(ib, engine, st) {
 				focused
 			});
 			if (!b) return;
+			const badge = engine.playing ? ` ${t("space: stop")} ` : st.edit ? ` ● ${t("EDIT")} · ${t("space: stop editing")} ` : ` ${t("space: edit mode")} `;
+			if (right.w > badge.length + 30) ui.textRight(right.x + right.w - 2, right.y, badge, st.edit && !engine.playing ? {
+				fg: c.bg,
+				bg: c.error,
+				attrs: BOLD
+			} : { fg: engine.playing ? c.success : c.warning });
 			const chords = !!s.chordColumn;
 			if (!chords && st.col === 3) st.col = 4;
 			const cw = cellW(b.pages, chords) + 1;
@@ -6586,6 +7368,13 @@ function makeApp(ib, engine, st) {
 		onKey(k) {
 			const s = st.song;
 			const e = ed();
+			if ((k.key === "?" || k.key === "/" && k.shift || k.code === "Slash" && k.shift) && !k.ctrl && !k.meta || k.alt && k.code === "KeyG") return toggleGuide(), true;
+			if (st.screen === "guide") {
+				if (k.key === "backspace" || k.key === "escape") return toggleGuide(), true;
+				if (guide.key(k)) return true;
+				if (!s) return false;
+			}
+			if (!s) return start.key(k);
 			if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
 				if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
 				const semi = k.key === "space" ? null : pianoKey(k.code);
@@ -6684,6 +7473,11 @@ function makeApp(ib, engine, st) {
 			}
 			return false;
 		},
+		onText(text) {
+			if (text !== "?") return false;
+			toggleGuide();
+			return true;
+		},
 		onAction(a) {
 			switch (a) {
 				case "up": return moveLine(-1), true;
@@ -6698,16 +7492,34 @@ function makeApp(ib, engine, st) {
 		},
 		menu: () => st.song ? cellMenu(st.line, st.track) : [
 			{
-				label: t("open a song…"),
-				cmd: "med open"
-			},
-			{
 				label: t("a new song"),
+				hint: "N",
 				cmd: "med new"
 			},
 			{
+				label: t("open a song…"),
+				hint: "O",
+				cmd: "med open"
+			},
+			{
 				label: t("the demo song"),
+				hint: "D",
 				cmd: "med demo"
+			},
+			{
+				label: t("the guide"),
+				hint: "?",
+				cmd: "med guide"
+			},
+			{
+				label: t("a chiptune song"),
+				hint: "C",
+				cmd: "med new --chip"
+			},
+			{
+				label: t("sampler: load a sound…"),
+				hint: "S",
+				cmd: "med sampler"
 			}
 		]
 	};
@@ -8597,7 +9409,7 @@ async function synthCommand(ib, st, ctx, rest, sk) {
 	}
 }
 var DRUMS_USAGE = [
-	"med drums <n|.> new [kit]                the instrument becomes a drum machine (kits: classic punch tight lofi)",
+	"med drums <n|.> new [kit]                the instrument becomes a drum machine (med drums kits: classic punch tight lofi boom house…)",
 	"med drums <n|.> kit <name> · set <drum> tune|decay|level|tone <value> · grit <bits> [hold] · show",
 	"med drums <n|.> bake <drum>              one drum as a sample · drums: C kick C# rim D snare D# clap E closed hat",
 	"                                         F low tom F# open hat G mid tom G# cowbell A high tom A# crash B ride"
@@ -8940,31 +9752,173 @@ function writeMed(original) {
 		warnings
 	};
 }
-// src/commands.ts
-var EFFECTS = [
-	["00xy", "arpeggio: the note, +x, +y semitones"],
-	["01xx / 02xx", "slide the pitch up / down"],
-	["03xx", "slide to the note (xx: speed)"],
-	["04xy", "vibrato (x speed, y depth, twice ProTracker's)"],
-	["05xy / 06xy", "03 / 04 going on, with a volume slide"],
-	["07xy", "tremolo"],
-	["09xx", "speed: ticks a line (01–20)"],
-	["0Axy / 0Dxy", "volume slide (x up, y down)"],
-	["0Bxx", "jump to position xx"],
-	["0Cxx", "volume (decimal 00–64, or hex in hex mode)"],
-	["0Fxx", "tempo · 0F00 next block · F1 note twice · F2 half a line late · F3 three times · FE stop · FF note off"],
-	["11x / 12x", "fine slide up / down"],
-	["14xy", "vibrato, ProTracker's depth"],
-	["15x", "finetune (-8…7)"],
-	["16x", "loop: 1600 marks, 16x plays x more times"],
-	["18x", "cut the note at tick x"],
-	["19xx", "start xx × 256 frames into the sample"],
-	["1Ax / 1Bx", "fine volume up / down"],
-	["1Dxx", "next block, at line xx"],
-	["1Ex", "play the line x more times"],
-	["1Fxy", "note x ticks late · y: again every y ticks"],
-	["2Exx", "pan (F0 left … 00 middle … 10 right)"]
+// src/pack.ts
+/**
+* BreakerMED — the starter sound pack: the sampled sounds we want, made by people
+* (not computed: those are the synths and the drum machine). Until a musician
+* records one, it's a placeholder: listed, not there. SOUND_DESIGN.md says how to
+* make them; `med pack` shows which are in the vault, `med pack load <name>` loads one.
+*/
+/** where the pack lives in the vault */
+var PACK_DIR = "sounds/breakermed-pack";
+var PACK = [
+	{
+		file: "drums/kick-acoustic.wav",
+		what: "an acoustic kick drum, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/snare-acoustic.wav",
+		what: "an acoustic snare, one hit, medium",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/hat-closed.wav",
+		what: "a closed hi-hat, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/hat-open.wav",
+		what: "an open hi-hat, let ring",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/ride.wav",
+		what: "a ride cymbal, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/crash.wav",
+		what: "a crash cymbal, let ring",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tom-low.wav",
+		what: "a floor tom",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tom-high.wav",
+		what: "a rack tom",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/clap.wav",
+		what: "real hands clapping, a few people",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/shaker.wav",
+		what: "a shaker, one shake",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tambourine.wav",
+		what: "a tambourine, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "keys/piano-c3.wav",
+		what: "an acoustic piano, middle C, let ring",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "keys/epiano-c3.wav",
+		what: "an electric piano, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "keys/organ-c3.wav",
+		what: "an organ, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "bass/bass-electric-c2.wav",
+		what: "an electric bass, C an octave under middle C",
+		pitch: "C-2",
+		loop: false
+	},
+	{
+		file: "bass/bass-upright-c2.wav",
+		what: "an upright bass, plucked, C under middle C",
+		pitch: "C-2",
+		loop: false
+	},
+	{
+		file: "guitar/guitar-clean-c3.wav",
+		what: "a clean electric guitar, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "guitar/guitar-muted-c3.wav",
+		what: "a palm-muted guitar, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "strings/strings-c3.wav",
+		what: "strings (or one violin / cello), middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-ah-c3.wav",
+		what: "a voice singing “ah”, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-oh-c3.wav",
+		what: "a voice singing “oh”, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-hey.wav",
+		what: "a short shout: “hey!”",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "fx/vinyl-crackle.wav",
+		what: "vinyl crackle, a texture",
+		pitch: null,
+		loop: true
+	},
+	{
+		file: "fx/riser.wav",
+		what: "a rising sweep, 2–4 s",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "fx/impact.wav",
+		what: "a big hit, with its tail",
+		pitch: null,
+		loop: false
+	}
 ];
+/** a sound of the pack by its name: "kick-acoustic", "drums/kick-acoustic", the file */
+var findPack = (name) => {
+	const n = name.toLowerCase().replace(/\.wav$/, "");
+	return PACK.find((p) => p.file.replace(/\.wav$/, "") === n || p.file.split("/").pop().replace(/\.wav$/, "") === n);
+};
+// src/commands.ts
 function registerCommands(ib, engine, st) {
 	const { fmt, parseFlags } = ib.lib;
 	const find = async (dir = "", depth = 0, out = []) => {
@@ -9030,6 +9984,12 @@ function registerCommands(ib, engine, st) {
 		const len = songLength(song);
 		ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
 	};
+	/** the pack's sounds that are in the vault (their files, under PACK_DIR) */
+	const packHave = async () => {
+		const out = /* @__PURE__ */ new Set();
+		for (const dir of new Set(PACK.map((p) => p.file.split("/")[0]))) for (const e of await ib.vault.list(`${PACK_DIR}/${dir}`).catch(() => [])) if (!e.isDir) out.add(`${dir}/${e.name}`);
+		return out;
+	};
 	const need = () => {
 		if (!st.song) throw new Error("no song loaded (med open <file>)");
 		return st.song;
@@ -9050,11 +10010,18 @@ function registerCommands(ib, engine, st) {
 			"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
 			"med play [song|block] [position] [line]",
 			"med stop",
-			"med pos <position> [line]  move the cursor (and where play starts)",
+			"med pos <position> [line] [track]   move the cursor (and where play starts)",
 			"med mute <track> · med solo <track>   (again: back)",
 			"med paula on|off           stepped like the Amiga (on), or smooth",
 			"med edit on|off            typing writes in the block (space on the page)",
 			"med step <0–9>             lines the cursor moves after a note",
+			"med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
+			"med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
+			"med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)",
+			"med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
+			"med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
+			"med sampler [file]         load a sound into a free instrument (no file: choose one)",
+			"med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
 			"med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
 			"med block new [lines] · med block copy · med block lines <n>",
 			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
@@ -9342,6 +10309,7 @@ function registerCommands(ib, engine, st) {
 						if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med: position 0–${hex(s.sequence.length - 1)}\n`), 1;
 						st.seq = seq;
 						st.line = rest[1] ? parseInt(rest[1], 16) || 0 : 0;
+						if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
 						if (engine.playing) await engine.play(engine.mode ?? "song", {
 							seq: st.seq,
 							line: st.line
@@ -9450,6 +10418,102 @@ function registerCommands(ib, engine, st) {
 						}
 						ctx.out(chordsOf(s).map((d, i) => `  ${(i + 1).toString(16).toUpperCase()}  ${d.name.padEnd(6)} ${d.notes.map((x) => x > 0 ? `+${x}` : x).join(" ")}`).join("\n") + `\n${fmt.dim(`the chord column: ${s.chordColumn ? "on" : "off"} (med chords on|off)`)}\n`);
 						return 0;
+					}
+					case "octave": {
+						const n = parseInt(rest[0] ?? "", 10);
+						if (!(n >= 1 && n <= 8)) return ctx.err("med octave 1–8 (the piano's bottom row)\n"), 1;
+						st.octave = n - 1;
+						return 0;
+					}
+					case "ins": {
+						const s = need();
+						const n = parseInt(rest[0] ?? "", 16);
+						if (!(n >= 1 && n <= Math.min(63, s.instruments.length + 1))) return ctx.err(`med ins 01–${hex(Math.min(63, s.instruments.length + 1))} (the instrument the keys play)\n`), 1;
+						st.inst = n - 1;
+						return 0;
+					}
+					case "guide":
+						if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${b}`).join("\n")}`).join("\n\n") + "\n"), 0;
+						if (st.screen !== "guide") st.back = st.screen;
+						st.screen = "guide";
+						ib.apps.open("breakermed");
+						ctx.out("the guide is on the page: ↑↓ to read, ? to go back · med guide --text: here\n");
+						return 0;
+					case "screen": {
+						const id = rest[0];
+						if (!SCREENS.some((x) => x.id === id)) return ctx.err(`med screen ${SCREENS.map((x) => x.id).join("|")}\n`), 1;
+						if (id === "guide" && st.screen !== "guide") st.back = st.screen;
+						st.screen = id;
+						ib.apps.open("breakermed");
+						return 0;
+					}
+					case "copy":
+					case "cut":
+					case "paste":
+					case "clear":
+					case "transpose": {
+						const s = need();
+						const e = st.editor;
+						const block = s.sequence[st.seq];
+						const sel = st.sel && st.sel.block === block ? st.sel : {
+							block,
+							line0: st.line,
+							line1: st.line,
+							track0: st.track,
+							track1: st.track
+						};
+						if (sub === "copy") st.clip = e.copy(sel);
+						else if (sub === "cut") st.clip = e.cut(sel), st.sel = null;
+						else if (sub === "clear") e.clearSelection(sel);
+						else if (sub === "paste") {
+							if (!st.clip) return ctx.err("med paste: nothing copied (med copy)\n"), 1;
+							e.paste(block, st.line, st.track, st.clip);
+						} else {
+							const n = parseInt(rest[0] ?? "", 10);
+							if (!(n >= -48 && n <= 48 && n !== 0)) return ctx.err("med transpose <±1–48 semitones> (12: an octave)\n"), 1;
+							e.transpose(sel, n);
+						}
+						return 0;
+					}
+					case "line": {
+						const s = need();
+						const tracks = flags.all ? [...Array(s.tracks).keys()] : [st.track];
+						if (rest[0] === "insert") st.editor.insertLine(s.sequence[st.seq], st.line, tracks);
+						else if (rest[0] === "delete") st.editor.deleteLine(s.sequence[st.seq], st.line, tracks);
+						else return ctx.err("med line insert|delete [--all]\n"), 1;
+						return 0;
+					}
+					case "pack": {
+						if (rest[0] === "load") {
+							const p = findPack(rest[1] ?? "");
+							if (!p) return ctx.err(`med pack load <name>: ${PACK.map((x) => x.file.split("/").pop().replace(/\.wav$/, "")).join(" · ")}\n`), 1;
+							if (!(await packHave()).has(p.file)) return ctx.err(`${p.file}: a placeholder — nobody has recorded it yet (SOUND_DESIGN.md)\n`), 1;
+							return ib.shell.run(`med sampler ${PACK_DIR}/${p.file}`);
+						}
+						let have = 0;
+						const found = await packHave();
+						for (const p of PACK) {
+							const there = found.has(p.file);
+							if (there) have++;
+							ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
+						}
+						ctx.out(`${have}/${PACK.length} in ${PACK_DIR}/ · the others are placeholders: sounds made by people, see the module's SOUND_DESIGN.md\n`);
+						return 0;
+					}
+					case "sampler": {
+						if (!st.song) await adopt(ctx, templateSong(), "untitled.bmed");
+						const s = need();
+						let n = s.instruments.findIndex((x) => x.kind === "empty");
+						if (n < 0) n = s.instruments.length;
+						if (n >= 63) return ctx.err("med sampler: the 63 instruments are taken\n"), 1;
+						st.inst = n;
+						st.screen = "instrument";
+						ib.apps.open("breakermed");
+						return sampleCommand(ib, st, ctx, [
+							hex(n + 1),
+							"load",
+							...rest
+						], flags);
 					}
 					case "step": {
 						const n = parseInt(rest[0] ?? "", 10);
@@ -9776,6 +10840,71 @@ function deactivate() {
 	engine = null;
 }
 var FR = {
+	"the starter sounds, recorded by people: which are there (med pack load <name>)": "les sons de départ, enregistrés par des gens : lesquels sont là (med pack load <nom>)",
+	"START": "COMMENCER",
+	"new song": "nouveau morceau",
+	"open…": "ouvrir…",
+	"demo": "démo",
+	"guide": "guide",
+	"chiptune song": "morceau chiptune",
+	"sampler": "sampleur",
+	"8 tracks, drums and synths, a beat ready: ⏎ plays it, space to write": "8 pistes, batterie et synthés, un rythme prêt : ⏎ le joue, espace pour écrire",
+	"a .med, .mod or .bmed of the vault": "un .med, .mod ou .bmed du vault",
+	"listen to the demo song": "écouter le morceau de démo",
+	"the keys, the edit mode, the effects in hex, the sampler": "les touches, le mode édition, les effets en hexa, le sampleur",
+	"2 pulses, a triangle, a noise: an old console's sound": "2 pulses, un triangle, un bruit : le son d'une vieille console",
+	"your own sounds: load one into an instrument": "tes propres sons : en charger un dans un instrument",
+	"N O D ? C S, or the arrows and ⏎": "N O D ? C S, ou les flèches et ⏎",
+	"tracker: notes, samples, synths, chiptune": "tracker : notes, samples, synthés, chiptune",
+	"space: edit mode": "espace : mode édition",
+	"space: stop editing": "espace : arrêter d'éditer",
+	"space: stop": "espace : stop",
+	"GUIDE": "GUIDE",
+	"? GUIDE": "? GUIDE",
+	"? or esc: back": "? ou échap : retour",
+	"edit mode on": "mode édition",
+	"edit mode off": "quitter le mode édition",
+	"sampler: load a sound…": "sampleur : charger un son…",
+	"the guide": "le guide",
+	"open it (INSTRUMENT)": "l'ouvrir (INSTRUMENT)",
+	"play it": "le jouer",
+	"a chiptune song": "un morceau chiptune",
+	"sampler · load a sound…": "sampleur · charger un son…",
+	"your own sound: a .wav, .aif, .iff, .mp3, .m4a, .ogg… of the vault (chop, stretch, loop it after)": "ton propre son : un .wav, .aif, .iff, .mp3, .m4a, .ogg… du vault (à découper, étirer, boucler ensuite)",
+	"EDIT MODE (space: the line turns red, ● EDIT at the top)": "MODE ÉDITION (espace : la ligne devient rouge, ● EDIT en haut)",
+	"A CELL: C-3 01 . 0C20": "UNE CASE : C-3 01 . 0C20",
+	"EFFECTS (the last 4 hex digits of a cell: command, value)": "EFFETS (les 4 derniers chiffres hexa d'une case : commande, valeur)",
+	"THE SAMPLER (your own sounds)": "LE SAMPLEUR (tes propres sons)",
+	"SCREENS (the tabs, or alt B I S E, ? for this guide)": "ÉCRANS (les onglets, ou alt B I S E, ? pour ce guide)",
+	"a new song: 8 tracks, drums and synths, a beat ready to play": "un nouveau morceau : 8 pistes, batterie et synthés, un rythme prêt à jouer",
+	"a chiptune song: 2 pulses, a triangle, a noise (NES-style)": "un morceau chiptune : 2 pulses, un triangle, un bruit (façon NES)",
+	"open a .med, .mod or .bmed of the vault": "ouvrir un .med, .mod ou .bmed du vault",
+	"save (a new song becomes a .bmed in songs/)": "enregistrer (un nouveau morceau devient un .bmed dans songs/)",
+	"play the song from the cursor · ⇧enter: this block, again and again": "jouer le morceau depuis le curseur · ⇧entrée : ce bloc, en boucle",
+	"stop · when stopped: EDIT MODE on / off": "stop · à l'arrêt : MODE ÉDITION oui / non",
+	"a piano: Z S X D C V… (bottom row) and Q 2 W 3 E R… (top row), by place": "un piano : Z S X D C V… (rangée du bas) et Q 2 W 3 E R… (du haut), par position (W X C… en AZERTY)",
+	"note off (^^^): the note stops, a synth releases": "note off (^^^) : la note s'arrête, un synthé relâche",
+	"the hex columns: the instrument (2 digits), the chord, the command (4)": "les colonnes hexa : l'instrument (2 chiffres), l'accord, la commande (4)",
+	"clear the column · delete the line (⇧: in every track)": "vider la colonne · supprimer la ligne (⇧ : dans toutes les pistes)",
+	"insert a line (⇧: in every track)": "insérer une ligne (⇧ : dans toutes les pistes)",
+	"the octave · the instrument the keys play": "l'octave · l'instrument que jouent les touches",
+	"the step: lines the cursor moves after a note": "le pas : les lignes que descend le curseur après une note",
+	"select · alt C / X / V copy cut paste · alt Q / A transpose": "sélectionner · alt C / X / V copier couper coller · alt Q / A transposer",
+	"undo · redo (notes, instruments, settings, mutes)": "annuler · rétablir (notes, instruments, réglages, mutes)",
+	"the note (C-1 … B-7) · ^^^ a note off": "la note (C-1 … B-7) · ^^^ un note off",
+	"the instrument (01–3F, the list on the left)": "l'instrument (01–3F, la liste à gauche)",
+	"the chord (1–F of the song's table: med chords), when the song has chords": "l'accord (1–F de la table du morceau : med chords), quand le morceau a des accords",
+	"an effect: the command (0C) and its value (20) — the list below": "un effet : la commande (0C) et sa valeur (20) — la liste en dessous",
+	"load a sound into a free instrument (a list of the vault's sounds)": "charger un son dans un instrument libre (la liste des sons du vault)",
+	"on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…": "sur une case libre : « sampleur · charger un son… » ; sur un son : découper, étirer, fondu, boucle…",
+	"a .wav .aif .iff .mp3 .m4a .ogg… of the vault into instrument n": "un .wav .aif .iff .mp3 .m4a .ogg… du vault dans l'instrument n",
+	"8 slices, each a new instrument · chop onsets: a slice an attack": "8 tranches, chacune un nouvel instrument · chop onsets : une tranche par attaque",
+	"the notes, track by track": "les notes, piste par piste",
+	"the instrument the keys play: a sound's tools, a synth's settings, a drum kit": "l'instrument que jouent les touches : les outils d'un son, les réglages d'un synthé, un kit",
+	"tempo, swing, echo, tracks: name, volume, pan, strum, mute, solo": "tempo, swing, écho, pistes : nom, volume, pan, strum, mute, solo",
+	"WAV, AIFF, FLAC, MP3, M4A, OGG, Opus, with each track apart": "WAV, AIFF, FLAC, MP3, M4A, OGG, Opus, avec chaque piste à part",
+	"a menu on a cell, a track's name, a position, an instrument": "un menu sur une case, un nom de piste, une position, un instrument",
+	"every command (all the mouse does, the shell does too)": "toutes les commandes (tout ce que fait la souris, le shell le fait aussi)",
 	"enter play": "entrée joue",
 	block: "bloc",
 	"space stop": "espace stop",

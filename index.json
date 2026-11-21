@@ -231,7 +231,7 @@
     "description": "A tracker like OctaMED and ProTracker: .med and .mod songs (and its own .bmed), 8 to 16 tracks, a sampler, analog, FM and chip synths (NES, Game Boy, C64-style…), a drum machine, chords, exports to WAV, FLAC, MP3… — in ASCII, keyboard, mouse and gamepad",
     "author": "icebreaker",
     "repo": "kiddoko/icebreaker-modules/tree/main/modules/breakermed",
-    "version": "0.10.2",
+    "version": "0.11.0",
     "permissions": [
       "audio",
       "vault:read",

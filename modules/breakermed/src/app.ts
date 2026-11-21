@@ -520,7 +520,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     status: () =>
       st.song
         ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
-        : t("med open <file.med|.mod> — or med demo"),
+        : `N ${t("new song")} · O ${t("open…")} · D ${t("demo")} · ? ${t("guide")}`,
 
     render(ui: UI, r: Rect, focused: boolean) {
       const c = ui.c;
@@ -703,7 +703,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const s = st.song;
       const e = ed();
       // ? (or alt G): the guide; on it, the arrows read it
-      if ((k.key === "?" && !k.ctrl && !k.meta) || (k.alt && k.code === "KeyG")) return toggleGuide(), true;
+      const help = (k.key === "?" || (k.key === "/" && k.shift) || (k.code === "Slash" && k.shift)) && !k.ctrl && !k.meta;
+      if (help || (k.alt && k.code === "KeyG")) return toggleGuide(), true;
       if (st.screen === "guide") {
         if (k.key === "backspace" || k.key === "escape") return toggleGuide(), true;
         if (guide.key(k)) return true;
@@ -821,6 +822,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         return true;
       }
       return false;
+    },
+
+    // a ? that came as text (some keyboards, input methods): the guide too
+    onText(text: string) {
+      if (text !== "?") return false;
+      toggleGuide();
+      return true;
     },
 
     // the gamepad (and what the keys above didn't take)
