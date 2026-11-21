@@ -18,6 +18,7 @@ import type { IcebreakerAPI } from "./icebreaker";
 import { makeApp, newState, type State } from "./app";
 import { registerCommands } from "./commands";
 import { Engine } from "./engine";
+import { Autosave } from "./autosave";
 
 let engine: Engine | null = null;
 
@@ -27,6 +28,13 @@ export function activate(ib: IcebreakerAPI): void {
   ib.lib.addTranslations("fr", FR);
   engine = new Engine(ib.audio);
   const st: State = newState();
+  // the autosave: a copy in songs/.recovery/ after each change (autosave.ts)
+  st.autosave = new Autosave(
+    { vault: ib.vault, storage: ib.storage, now: () => Date.now(), later: (fn, ms) => setTimeout(fn, ms), cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) },
+    () => ({ song: st.song, editor: st.editor, path: st.path, playing: !!engine?.playing }),
+  );
+  st.autosave.onError = (m) => ib.ui.notify(`BreakerMED: autosave off — ${m} (med autosave on to try again)`, "warning");
+  void st.autosave.load().then(() => ib.ui.redraw());
   engine.onChange = () => ib.ui.redraw();
   // you silence it from the deck (`audio stop`, the ♪ in the status bar): the song stops, not only its notes
   ib.audio.onStop?.(() => engine?.silence());
@@ -57,6 +65,14 @@ export function deactivate(): void {
 }
 
 const FR: Record<string, string> = {
+  "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)": "actif par défaut : une copie 1,5 s après chaque changement, dans songs/.recovery/ (jamais par-dessus le morceau)",
+  "changes never saved (a quit, a crash): back on the page · START offers them too (R)": "des changements jamais enregistrés (quitter, un plantage) : de retour sur la page · START les propose aussi (R)",
+  recover: "reprendre",
+  autosaved: "sauvegardé",
+  "autosave off": "autosave coupé",
+  "don't save": "ne pas enregistrer",
+  "cancel: back to the song": "annuler : revenir au morceau",
+  "changes that were never saved, kept by the autosave": "des changements jamais enregistrés, gardés par l'autosave",
   "the starter sounds, recorded by people: which are there (med pack load <name>)": "les sons de départ, enregistrés par des gens : lesquels sont là (med pack load <nom>)",
   "START": "COMMENCER",
   "new song": "nouveau morceau",

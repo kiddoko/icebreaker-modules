@@ -36,6 +36,7 @@ import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, drumKit, nudgeDrum } 
 import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "./screens";
 import { makeGuide } from "./guide";
 import { makeStart } from "./start";
+import type { Autosave } from "./autosave";
 import { chordsOf, hex, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
@@ -62,6 +63,8 @@ export interface State {
   screen: Screen;
   /** where the guide goes back to */
   back: Screen;
+  /** the copies of the song after each change (main.ts makes it: it needs the deck) */
+  autosave: Autosave | null;
   /** the SONG screen's cursor: a setting or a track (past the settings), a track's column */
   songRow: number;
   songCol: number;
@@ -94,7 +97,7 @@ export function undoRedo(st: State, redo: boolean): string | null {
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", autosave: null, songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -129,6 +132,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const screens = makeScreens(ib, engine, st);
   const guide = makeGuide(ib);
   const start = makeStart(ib);
+  // the start page offers the newest autosaved copy never saved (looked up now and then)
+  let rescueAt = 0;
+  const lookRescue = () => {
+    if (performance.now() - rescueAt < 3000 || !st.autosave) return;
+    rescueAt = performance.now();
+    void st.autosave.list().then((l) => (start.setRescue(l[0] ? { title: l[0].title, at: l[0].at } : null), ib.ui.redraw()));
+  };
   /** ? : the guide, and back to where you were */
   const toggleGuide = () => {
     if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
@@ -517,6 +527,28 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     rawKeys: true,
     title: () => (st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED"),
     dirty: () => !!st.editor?.dirty,
+
+    /**
+     * Closing the page with changes: the autosave's copy first, then save / don't save /
+     * cancel. A deck that waits for the answer keeps the page on "cancel"; one that
+     * doesn't has closed it already, so "cancel" opens it again (the song is still here).
+     */
+    async close() {
+      const e = st.editor, a = st.autosave;
+      if (!st.song || !e?.dirty) return true;
+      await a?.flush();
+      const name = st.song.title || st.path.split("/").pop() || "untitled";
+      const pick = await ib.ui.choose(`BreakerMED: save the changes to “${name}”?`, [{ label: t("save") }, { label: t("don't save") }, { label: t("cancel: back to the song") }]);
+      if (pick === 0) return (await ib.shell.run("med save")) === 0;
+      if (pick === 1) {
+        await a?.forget(st.path);
+        engine.stop();
+        st.song = st.editor = null;
+        return true;
+      }
+      void ib.apps.open("breakermed");
+      return false;
+    },
     status: () =>
       st.song
         ? `${t("ins")} ${hex(st.inst + 1)} · ${t("oct")} ${st.octave + 1} · ${t("step")} ${st.step}${chordHere()} ${engine.playing ? "" : ` · ⏎ ${t("play")}`} · ${t("space")} ${engine.playing ? t("stop") : t("edit")} · esc ${t("leave")}`
@@ -550,6 +582,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           [6, s.format],
           [5, engine.paula ? "PAULA" : "SMOOTH"],
           ...(s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`] as [number, string]] : []),
+          // the autosave: when the last copy of the changes was written
+          ...(st.editor?.dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate
+            ? [[2, `✓ ${t("autosaved")} ${new Date(st.autosave.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`] as [number, string]]
+            : st.autosave?.error
+              ? [[2, t("autosave off")] as [number, string]]
+              : []),
         ];
         const space = r.w - 2 - (x - r.x) - state.length - 6;
         let shown = parts;
@@ -565,6 +603,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (!s) {
         // no song: the logo and START (or the guide, which needs no song)
         const page = { x: r.x, y: r.y + 1, w: r.w, h: r.h - 1 };
+        if (st.screen !== "guide") lookRescue();
         return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
       }
       clampCursor();

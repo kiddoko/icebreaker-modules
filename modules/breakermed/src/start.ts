@@ -45,6 +45,10 @@ export function makeStart(ib: IcebreakerAPI) {
   let since = 0;
   let row = 0;
 
+  /** the newest autosaved copy never saved (R: back on the page) */
+  let rescue: { title: string; at: number } | null = null;
+  const setRescue = (r: { title: string; at: number } | null) => (rescue = r);
+
   const draw = (ui: UI, r: Rect, error: string) => {
     const c = ui.c;
     const now = performance.now();
@@ -85,11 +89,19 @@ export function makeStart(ib: IcebreakerAPI) {
       ui.button(bx, by, label, () => run(ch.cmd), { cmd: ch.cmd, tip: t(ch.tip), selected: i === row, quiet: i >= 4 && i !== row });
     });
     ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
-    if (error) ui.textCenter(r, box.y + box.h + 1, error, { fg: c.error });
+    let below = box.y + box.h + 1;
+    if (rescue && below < r.y + r.h) {
+      const label = `R  ${t("recover")} “${rescue.title}” · ${t("autosaved")} ${new Date(rescue.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
+      const w = Math.min(r.w - 2, label.length + 2);
+      ui.button(r.x + Math.floor((r.w - w) / 2), below, label, () => run("med recover"), { cmd: "med recover", tip: t("changes that were never saved, kept by the autosave") });
+      below += 2;
+    }
+    if (error) ui.textCenter(r, below, error, { fg: c.error });
   };
 
   const key = (k: KeyInput): boolean => {
     const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
+    if (letter === "R" && rescue && !k.alt && !k.ctrl && !k.meta) return run("med recover"), true;
     const hit = START.find((ch) => ch.key === letter);
     if (hit && !k.alt && !k.ctrl && !k.meta) return run(hit.cmd), true;
     switch (k.key) {
@@ -102,5 +114,5 @@ export function makeStart(ib: IcebreakerAPI) {
     return false;
   };
 
-  return { draw, key };
+  return { draw, key, setRescue };
 }

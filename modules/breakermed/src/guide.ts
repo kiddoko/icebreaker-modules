@@ -47,6 +47,8 @@ export const GUIDE: GuidePart[] = [
       ["med open", "open a .med, .mod or .bmed of the vault"],
       ["med demo", "the demo song"],
       ["med save", "save (a new song becomes a .bmed in songs/)"],
+      ["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
+      ["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
       ["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
       ["space", "stop · when stopped: EDIT MODE on / off"],
     ],
