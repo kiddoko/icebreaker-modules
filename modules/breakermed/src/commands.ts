@@ -20,6 +20,7 @@ import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
 import { findPack, PACK, PACK_DIR } from "./pack";
+import { placeholderFor } from "./placeholder";
 import { RECOVERY_DIR, type Recovery } from "./autosave";
 import { SCREENS, type Screen } from "./screens";
 
@@ -696,7 +697,21 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (rest[0] === "load") {
               const p = findPack(rest[1] ?? "");
               if (!p) return ctx.err(`med pack load <name>: ${PACK.map((x) => x.file.split("/").pop()!.replace(/\.wav$/, "")).join(" · ")}\n`), 1;
-              if (!(await packHave()).has(p.file)) return ctx.err(`${p.file}: a placeholder — nobody has recorded it yet (SOUND_DESIGN.md)\n`), 1;
+              if (!(await packHave()).has(p.file)) {
+                // nobody has recorded it yet: a computed stand-in, until the real one is in songs/sound-pack/
+                if (!st.song) await adopt(ctx, templateSong(), "untitled.bmed");
+                const s = need();
+                let n = s.instruments.findIndex((x) => x.kind === "empty");
+                if (n < 0) n = s.instruments.length;
+                if (n >= 63) return ctx.err("med pack load: the 63 instruments are taken\n"), 1;
+                const ins = placeholderFor(p);
+                st.editor!.addInstruments([ins], n);
+                st.inst = n;
+                st.screen = "instrument";
+                void ib.apps.open("breakermed");
+                ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name}: a computed placeholder, until someone records ${p.file} (SOUND_DESIGN.md)\n`);
+                return 0;
+              }
               return ib.shell.run(`med sampler ${PACK_DIR}/${p.file}`);
             }
             let have = 0;
@@ -704,9 +719,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             for (const p of PACK) {
               const there = found.has(p.file);
               if (there) have++;
-              ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
+              ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${there ? "" : "placeholder (computed) · "}${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
             }
-            ctx.out(`${have}/${PACK.length} in ${PACK_DIR}/ · the others are placeholders: sounds made by people, see the module's SOUND_DESIGN.md\n`);
+            ctx.out(`${have}/${PACK.length} recorded in ${PACK_DIR}/ · the others load as computed placeholders until people record them (SOUND_DESIGN.md)\n`);
             return 0;
           }
           case "sampler": {
