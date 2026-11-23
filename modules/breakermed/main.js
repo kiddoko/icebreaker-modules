@@ -6177,7 +6177,7 @@ var GUIDE = [
 			["med save · ⌘S", "save (a new song asks for its name: never over another song)"],
 			["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
 			["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
-			["enter", "play the song from the cursor · ⇧enter: this block, again and again · enter again: stop"],
+			["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
 			["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
 			["med new, open, demo", "a song with changes asks first: save, don't save (the autosave keeps a copy), cancel"]
 		]
@@ -6725,6 +6725,10 @@ function makeApp(ib, engine, st) {
 		];
 	};
 	instList.onActivate = (i) => preview(st.octave * 12, i);
+	instList.tipOf = (i) => {
+		const ins = st.song?.instruments[i];
+		return ins && ins.kind !== "empty" ? `${ins.name}${/ \(placeholder\)$/.test(ins.name) ? ` · ${t("computed until someone records it (med pack)")}` : ""}` : void 0;
+	};
 	/** first track shown (the page scrolls sideways when they don't fit) */
 	let firstTrack = 0;
 	/** where the block was drawn (mouse → cell) */
@@ -7770,8 +7774,9 @@ function makeApp(ib, engine, st) {
 					name: ""
 				};
 				const empty = ins.kind === "empty";
-				const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-				const label = ins.name || (empty ? i >= s.instruments.length ? `· ${t("free")}` : "·" : t("(no name)"));
+				const placeholder = / \(placeholder\)$/.test(ins.name);
+				const tag = placeholder ? "◌" : ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+				const label = (placeholder ? ins.name.replace(/ \(placeholder\)$/, "") : ins.name) || (empty ? i >= s.instruments.length ? `· ${t("free")}` : "·" : t("(no name)"));
 				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
@@ -8017,7 +8022,7 @@ function makeApp(ib, engine, st) {
 				const semi = k.key === "space" ? null : pianoKey(k.code);
 				if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
 			}
-			if (k.key === "enter" && !k.alt) return run(engine.playing ? "med stop" : k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+			if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
 			if (k.key === "space") {
 				if (engine.playing) run("med stop");
 				else run(`med edit ${st.edit ? "off" : "on"}`);
@@ -10917,21 +10922,6 @@ var Autosave = class {
 		delete list[path];
 		await this.io.storage.set("recovery", list);
 	}
-	/**
-	* A song came on the page: make the folder its copies will go in, now. The deck asks
-	* for the permission to write the first time (songs/.recovery/…): better when the song
-	* opens than a minute later, in the middle of typing notes.
-	*/
-	async prepare(path) {
-		if (!this.on) return;
-		try {
-			await this.io.vault.mkdir(`${recoveryFile(path)}/samples`);
-		} catch (e) {
-			this.on = false;
-			this.error = e instanceof Error ? e.message : String(e);
-			this.onError?.(this.error);
-		}
-	}
 	/** a new song on the page: nothing to copy yet */
 	reset() {
 		if (this.timer !== null) this.io.cancel(this.timer);
@@ -11083,7 +11073,6 @@ function registerCommands(ib, engine, st) {
 		st.editor = new Editor(song);
 		st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
 		st.autosave?.reset();
-		st.autosave?.prepare(path);
 		st.savedAt = 0;
 		st.sel = null;
 		st.col = 0;
@@ -12562,6 +12551,7 @@ var FR = {
 	"unused": "inutilisé(s)",
 	"use another block…": "choisir un autre bloc…",
 	"which block?": "quel bloc ?",
-	"←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer"
+	"←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer",
+	"computed until someone records it (med pack)": "calculé en attendant que quelqu'un l'enregistre (med pack)"
 };
 export { activate, deactivate };

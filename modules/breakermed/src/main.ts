@@ -448,4 +448,5 @@ const FR: Record<string, string> = {
   "use another block…": "choisir un autre bloc…",
   "which block?": "quel bloc ?",
   "←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer",
+  "computed until someone records it (med pack)": "calculé en attendant que quelqu'un l'enregistre (med pack)",
 };

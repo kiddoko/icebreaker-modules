@@ -220,6 +220,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     ];
   };
   instList.onActivate = (i) => preview(st.octave * 12, i);
+  instList.tipOf = (i) => {
+    const ins = st.song?.instruments[i];
+    return ins && ins.kind !== "empty" ? `${ins.name}${/ \(placeholder\)$/.test(ins.name) ? ` · ${t("computed until someone records it (med pack)")}` : ""}` : undefined;
+  };
   /** first track shown (the page scrolls sideways when they don't fit) */
   let firstTrack = 0;
   /** where the block was drawn (mouse → cell) */
@@ -795,8 +799,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       instList.render(ui, instBox, false, (i, row, sel) => {
         const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
-        const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-        const label = ins.name || (empty ? (i >= s.instruments.length ? `· ${t("free")}` : "·") : t("(no name)"));
+        // a pack sound nobody has recorded yet: ◌ and its name (the list is narrow; the full name in the tip)
+        const placeholder = / \(placeholder\)$/.test(ins.name);
+        const tag = placeholder ? "◌" : ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+        const label = (placeholder ? ins.name.replace(/ \(placeholder\)$/, "") : ins.name) || (empty ? (i >= s.instruments.length ? `· ${t("free")}` : "·") : t("(no name)"));
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
@@ -945,8 +951,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const semi = k.key === "space" ? null : pianoKey(k.code);
         if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
       }
-      // ⏎ plays (⇧⏎ the block, again and again); ⏎ again stops
-      if (k.key === "enter" && !k.alt) return run(engine.playing ? "med stop" : k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+      if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
       if (k.key === "space") {
         if (engine.playing) run("med stop");
         else run(`med edit ${st.edit ? "off" : "on"}`);

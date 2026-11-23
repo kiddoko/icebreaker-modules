@@ -184,8 +184,6 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     // each step of the history: the page again, and a copy soon (the autosave)
     st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
     st.autosave?.reset();
-    // its folder for the autosave's copies, now: the deck asks for the permission here, not in the middle of the editing
-    void st.autosave?.prepare(path);
     st.savedAt = 0;
     st.sel = null;
     st.col = 0;

@@ -1,20 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { key, makeDeck } from "./harness";
+import { makeDeck } from "./harness";
 
-const settle = () => new Promise((r) => setTimeout(r, 0));
-
-describe("0.12.1: ⏎ again stops", () => {
-  it("enter plays, enter again stops", async () => {
-    const d = makeDeck();
-    await d.med("med new");
-    d.press(key("enter"));
-    await settle();
-    expect(d.engine.playing).toBe(true);
-    d.press(key("enter"));
-    await settle();
-    expect(d.engine.playing).toBe(false);
-  });
-});
 
 describe("0.12.1: where the song is, with follow off", () => {
   it("the frame says the line heard, even when it's off screen", async () => {
@@ -61,11 +47,14 @@ describe("0.12.1: the save note, the saved time", () => {
   });
 });
 
-describe("0.12.1: the autosave's permission is asked when the song starts, not mid-edit", () => {
-  it("med new writes the recovery folder at once (the deck asks then)", async () => {
+describe("0.12.1: a placeholder's name fits the instrument list", () => {
+  it("◌ and the sound's name in the list; the full name in its tip", async () => {
     const d = makeDeck();
     await d.med("med new");
-    await settle();
-    expect([...d.files.keys()].some((p) => p.startsWith("songs/.recovery/"))).toBe(true);
+    await d.med("med pack load kick-acoustic");
+    d.st.screen = "block";
+    const ui = d.draw();
+    const row = ui.texts.find((t) => /^06 /.test(t.s))!;
+    expect(row.s).toBe("06 ◌kick-acoustic");
   });
 });

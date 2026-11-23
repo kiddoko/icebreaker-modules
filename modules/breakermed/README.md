@@ -57,7 +57,7 @@ every **alt** combination (alt + arrows too, on Mac, Windows and Linux), like an
 **Esc** gives the keys back to the deck (the tree takes them), a click on the page brings them back.
 
 ```
-enter        play the song from the cursor (again: stop)   ⇧ enter    play the block, again and again
+enter        play the song from the cursor      ⇧ enter    play the block, again and again
 tab          the next track                     ⇧ alt ← →  the position before · after
 alt F        follow the song while it plays, or not (scroll lock too): off, the cursor stays where you edit
 space        stop (playing) · edit mode on / off (stopped: a red ● EDIT, typing writes in the block)
