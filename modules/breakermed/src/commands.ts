@@ -104,6 +104,73 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     return `${dir}/${base}.bmed`;
   };
 
+  /** is there a song (a .bmed folder) or a file at this path already */
+  const exists = async (path: string): Promise<boolean> => {
+    const p = path.replace(/\/+$/, "");
+    const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+    const name = p.slice(dir ? dir.length + 1 : 0);
+    const list = await ib.vault.list(dir).catch(() => []);
+    return list.some((e) => e.name === name);
+  };
+  /** where `med save` writes: .bmed unless .mod / .med is said */
+  const savedAs = (p: string) => (/\.(mod|med|mmd1|bmed)$/i.test(p) || /(^|\/)mod\.[^/]+$/i.test(p) ? p : `${p}.bmed`);
+  /** the song has a file of its own (saved, or opened from songs/) */
+  const hasHome = () => st.path.startsWith("songs/");
+  /** a name for a song never saved: its title, or untitled — and a free one ("untitled 2") */
+  const freeName = async () => {
+    const base = defaultPath().replace(/\.bmed$/i, "");
+    const titled = st.song?.title && st.song.title !== "untitled" ? `songs/${st.song.title.replace(/[\\/:*?"<>|]/g, "-")}` : base;
+    for (let n = 1; n < 100; n++) {
+      const p = `${titled}${n > 1 ? ` ${n}` : ""}.bmed`;
+      if (!(await exists(p))) return p;
+    }
+    return `${titled}.bmed`;
+  };
+  /**
+   * Save, never over another song without a yes: a song with no file asks for a
+   * name (save as…); a path that holds another song asks before replacing it.
+   * 0: saved · 1: not saved (cancelled, said in the LOG).
+   */
+  const saveSafely = async (ctx: ShellContext, given: string | null, o: { ask?: boolean; force?: boolean } = {}): Promise<number> => {
+    need();
+    let path = given;
+    if (!path && !o.ask && hasHome()) path = defaultPath();
+    if (!path) {
+      const name = await ib.ui.prompt("SAVE AS", { initial: await freeName(), placeholder: "songs/my song.bmed (or .mod, .med)" });
+      if (name === null || !name.trim()) return ctx.err("med save: not saved (no name given)\n"), 1;
+      const p = name.trim();
+      path = p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`;
+    }
+    const target = savedAs(path);
+    if (!o.force && target !== st.path && (await exists(target))) {
+      const pick = await ib.ui.choose(`BreakerMED: ${target} already exists — replace it with this song?`, [{ label: "replace it" }, { label: "cancel: keep it" }], { selected: 1 });
+      if (pick !== 0) return ctx.err(`med save: not saved (${target} kept)\n`), 1;
+    }
+    await save(ctx, path);
+    return 0;
+  };
+
+  /**
+   * Before another song takes the page: a song with changes asks first (save /
+   * don't save / cancel). The autosave writes its copy first, whatever is chosen.
+   * true: go on.
+   */
+  const mayReplace = async (ctx: ShellContext, what: string, force: boolean): Promise<boolean> => {
+    if (!st.song || !st.editor?.dirty) return true;
+    await st.autosave?.flush();
+    if (force) return true;
+    const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
+    const pick = await ib.ui.choose(`BreakerMED: the changes to “${name}” aren't saved`, [
+      { label: "save them first" },
+      { label: "don't save (the autosave keeps a copy: med recover)" },
+      { label: "cancel: keep the song" },
+    ]);
+    if (pick === 0) return (await saveSafely(ctx, null)) === 0;
+    if (pick === 1) return true;
+    ctx.err(`med ${what}: “${name}” has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
+    return false;
+  };
+
   /** this song is the one on the page now */
   const adopt = async (ctx: ShellContext, song: Song, path: string) => {
     st.song = song;
@@ -152,9 +219,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
       "med ls                     the songs in the vault",
       "med demo                   a little song of ours, to try it right away",
-      "med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
+      "med new [tracks] [--empty] [--force] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
       "med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
+      "                           (new, open, demo: a song with changes asks first · --force: replace it, the autosave keeps a copy)",
       "med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
+      "                           never over another song without asking (--force: no question) · a new song asks for its name",
       "med continue               back to the song in memory (after the page was closed)",
       "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
       "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
@@ -234,6 +303,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               if (i === null) return 1;
               path = songs[i];
             }
+            if (!(await mayReplace(ctx, "open", !!flags.force))) return 1;
             await open(ctx, ctx.resolve(path));
             void ib.apps.open("breakermed");
             return 0;
@@ -289,18 +359,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           }
           case "save": {
             need();
-            const path = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath();
-            await save(ctx, path);
-            return 0;
+            return saveSafely(ctx, rest.length ? ctx.resolve(rest.join(" ")) : null, { force: !!flags.force });
           }
           case "saveas": {
             // save as…: a name asked in a window (in songs/: the module's folder)
             need();
-            const name = await ib.ui.prompt("SAVE AS", { initial: defaultPath(), placeholder: "songs/my song.bmed (or .mod, .med)" });
-            if (name === null || !name.trim()) return 1;
-            const p = name.trim();
-            await save(ctx, p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`);
-            return 0;
+            return saveSafely(ctx, null, { ask: true, force: !!flags.force });
           }
           case "continue": {
             // back to the song in memory (the page shows START after it was closed)
@@ -313,6 +377,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             // 8 tracks (or what you say, up to 16), one empty block, the demo's four instruments to start with
             const n = rest[0] ? parseInt(rest[0], 10) : DEFAULT_TRACKS;
             if (!(n >= 1 && n <= MAX_TRACKS)) return ctx.err(`med new [tracks 1–${MAX_TRACKS}]\n`), 1;
+            if (!(await mayReplace(ctx, "new", !!flags.force))) return 1;
             // the template (named tracks, drums, synths, a first bar) — or a blank page with the demo's samples
             const song = flags.chip ? chipSong() : flags.empty ? newSong(n) : templateSong(n);
             if (flags.empty) (song.instruments = readSong(demoMod()).instruments), (song.title = "untitled");
@@ -336,6 +401,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             return 0;
           }
           case "demo":
+            if (!(await mayReplace(ctx, "demo", !!flags.force))) return 1;
             await open(ctx, "demo.mod", demoMod());
             void ib.apps.open("breakermed");
             return 0;
@@ -557,6 +623,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             }
             const r = what === undefined ? list[0] : pickN(what);
             if (!r) return ctx.err(`med recover <1–${list.length}>\n`), 1;
+            if (r.path !== st.path && !(await mayReplace(ctx, "recover", !!flags.force))) return 1;
             await recover(ctx, r);
             void ib.apps.open("breakermed");
             return 0;

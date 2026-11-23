@@ -841,11 +841,14 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         case "end": return moveLine(9999), true;
         case "left": return unselect(), moveCol(-1), true;
         case "right": return unselect(), moveCol(1), true;
+        // they write: in edit mode only (off, the keys only play)
         case "delete":
+          if (!st.edit) return true;
           if (st.sel) e.clearSelection(st.sel), unselect();
-          else e.clear(blockNo(), st.line, st.track, st.col), st.edit && advance();
+          else e.clear(blockNo(), st.line, st.track, st.col), advance();
           return true;
         case "backspace":
+          if (!st.edit) return true;
           e.deleteLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
           return true;
       }
