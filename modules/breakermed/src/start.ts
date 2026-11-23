@@ -59,7 +59,7 @@ export function makeStart(ib: IcebreakerAPI) {
     const p = Math.min(1, (now - since) / INTRO_MS);
     if (p < 1) ui.animate(33);
     const w = LOGO[0].length;
-    const boxW = Math.min(r.w - 2, 46), boxH = 9;
+    const boxW = Math.min(r.w - 2, 46), boxH = 8;
     const tall = r.h >= LOGO.length + boxH + 5;
     let y = r.y + Math.max(1, Math.floor((r.h - (tall ? LOGO.length + 3 : 0) - boxH) / 2));
     // the logo: each column lands in turn (noise first), from the left, colours sliding accent → accentAlt
@@ -91,7 +91,6 @@ export function makeStart(ib: IcebreakerAPI) {
       const label = `${ch.key}  ${t(ch.label)}`.padEnd(Math.max(0, colW - 3));
       ui.button(bx, by, label, () => run(ch.cmd), { cmd: ch.cmd, tip: t(ch.tip), selected: i === row, quiet: i >= 4 && i !== row });
     });
-    ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
     let below = box.y + box.h + 1;
     if (song && below < r.y + r.h) {
       // the song of before: continue it, or save it

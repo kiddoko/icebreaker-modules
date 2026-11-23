@@ -39,6 +39,8 @@ export class Engine {
   /** stepped like the Amiga's Paula (true) or smooth */
   paula = true;
   muted = new Set<number>();
+  /** a click on each beat while playing (med click) */
+  metronome = false;
   onChange?: () => void;
   private line: StreamLike | null = null;
   private opening: Promise<StreamLike> | null = null;
@@ -67,6 +69,7 @@ export class Engine {
     // (what's still waiting from before — 30 ms at most — plays out: a flush through the deck
     // could arrive after the new frames, which go straight to the node)
     r.paula = this.paula;
+    r.metronome = this.metronome;
     r.play(from.seq, from.line, { loopBlock: mode === "block", muted: this.muted });
     this.mode = mode;
     this.push(this.line!.high);
@@ -100,6 +103,34 @@ export class Engine {
       pos = m;
     }
     return { seq: pos.seq, block: pos.block, line: pos.line };
+  }
+
+  /** the frame being heard now (what was written, less what still waits) */
+  private heard(): number {
+    const r = this.r;
+    if (!r || !this.line) return 0;
+    return Math.min(r.frame, this.clock.written - this.clock.waiting + ((performance.now() - this.clock.at) / 1000) * this.line.rate);
+  }
+
+  /** each track's meter (0–1): its last note, fading over ~0.4 s; null when stopped */
+  levels(): number[] | null {
+    const r = this.r;
+    if (!this.mode || !r || !this.line || !this.song) return null;
+    const now = this.heard(), rate = this.line.rate;
+    return Array.from({ length: this.song.tracks }, (_, t) => {
+      const h = r.hits[t];
+      if (!h || this.muted.has(t) || h.frame > now) return 0;
+      return h.vol * Math.exp(-((now - h.frame) / rate) * 6);
+    });
+  }
+
+  /** the mix since the last call: its peak (0–1) and how much the limiter took (dB, ≥ 0) */
+  master(): { peak: number; limitDb: number } | null {
+    const r = this.r;
+    if (!this.mode || !r) return null;
+    const m = { peak: r.meter.peak, limitDb: -20 * Math.log10(Math.max(1e-6, r.meter.gain)) };
+    r.meter = { peak: 0, gain: 1 };
+    return m;
   }
 
   /** A key played on the piano: instrument `inst` at `rate`, heard ~30 ms later. */

@@ -80,6 +80,14 @@ export interface State {
   /** the drum machine's cursor: a drum (0–11), a setting (0–3) */
   drumRow: number;
   drumCol: number;
+  /** the block's view: the cursor's line in the middle (ProTracker), or a view that scrolls at the edges (OctaMED) */
+  view: "center" | "edges";
+  /** while playing, the cursor follows the line heard (off: it stays where you edit) */
+  follow: boolean;
+  /** when the song was last saved (the top line says so) */
+  savedAt: number;
+  /** a click on each beat while playing (med click) */
+  metronome: boolean;
 }
 
 /**
@@ -101,7 +109,7 @@ export function undoRedo(st: State, redo: boolean): string | null {
 }
 
 export function newState(): State {
-  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", home: false, page: null, autosave: null, songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0 };
+  return { song: null, editor: null, path: "", seq: 0, line: 0, track: 0, col: 0, inst: 0, octave: 2, edit: false, step: 1, sel: null, clip: null, error: "", screen: "block", back: "block", home: false, page: null, autosave: null, songRow: 0, songCol: 0, exp: newExportChoices(), expRow: 0, synthRow: 0, drumRow: 0, drumCol: 0, view: "center", follow: true, savedAt: 0, metronome: false };
 }
 
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -172,6 +180,35 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   /** where the block was drawn (mouse → cell) */
   let geo: { x: number; y: number; w: number; h: number; numW: number; cw: number; top: number; fits: number } | null = null;
   let anchor: { line: number; track: number } | null = null;
+  /** while the mouse drags a selection: the view stays put (the line under the mouse is the one drawn) */
+  let dragTop: number | null = null;
+  /** the master meter, held a little between frames */
+  let meterPeak = 0, meterLim = 0;
+  /** the first line on screen when the view scrolls at the edges */
+  let viewTop = 0;
+  /** a drag, whichever hit of the block gets the moves (the deck sends them to the hit where it started) */
+  const dragTo = (m: { x: number; y: number }) => {
+    const g = geo, b = block();
+    if (!g || !b || !anchor || dragTop === null) return;
+    // at the frame's top or bottom row: the view scrolls, a line a move
+    if (m.y <= g.y && dragTop > 0) dragTop--;
+    else if (m.y >= g.y + g.h - 1 && dragTop + g.h < b.lines) dragTop++;
+    g.top = dragTop;
+    const at = cellAt(m.x, Math.max(g.y, Math.min(g.y + g.h - 1, m.y)));
+    if (!at) return;
+    dragEnd = { line: at.line, track: at.track };
+    st.sel = { block: blockNo(), line0: Math.min(anchor.line, at.line), line1: Math.max(anchor.line, at.line), track0: Math.min(anchor.track, at.track), track1: Math.max(anchor.track, at.track) };
+  };
+  let dragEnd: { line: number; track: number } | null = null;
+  /** the mouse let go: the cursor goes to where the drag ended */
+  const dragDone = () => {
+    if (dragTop === null) return;
+    viewTop = dragTop;
+    dragTop = null;
+    if (dragEnd) (st.line = dragEnd.line), (st.track = dragEnd.track);
+    dragEnd = null;
+  };
+  const drag = { onDrag: dragTo, onUp: dragDone };
 
   const song = () => st.song;
   const blockNo = () => st.song?.sequence[st.seq] ?? 0;
@@ -216,6 +253,24 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     st.sel = { block: blockNo(), line0: Math.min(anchor.line, st.line), line1: Math.max(anchor.line, st.line), track0: Math.min(anchor.track, st.track), track1: Math.max(anchor.track, st.track) };
   };
   const unselect = () => ((st.sel = null), (anchor = null));
+  /** alt L: the whole track · alt K: the whole block (again: nothing) */
+  const selectTrack = () => {
+    const b = block();
+    if (b) st.sel = { block: blockNo(), line0: 0, line1: b.lines - 1, track0: st.track, track1: st.track };
+  };
+  const selectBlock = () => {
+    const s = song(), b = block();
+    if (s && b) st.sel = { block: blockNo(), line0: 0, line1: b.lines - 1, track0: 0, track1: s.tracks - 1 };
+  };
+  /** the position before / after in the sequence (the cursor's line stays when it fits) */
+  const goPos = (d: number) => {
+    const s = song();
+    if (!s) return;
+    const to = Math.max(0, Math.min(s.sequence.length - 1, st.seq + d));
+    if (to === st.seq) return;
+    unselect();
+    run(`med pos ${hex(to)} ${hex(st.line)}`);
+  };
   /** what an operation works on: the selection, or the cell under the cursor */
   const target = (): Selection => st.sel && st.sel.block === blockNo() ? st.sel : { block: blockNo(), line0: st.line, line1: st.line, track0: st.track, track1: st.track };
   const advance = () => moveLine(st.step);
@@ -332,7 +387,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (y >= inner.y + inner.h) break;
       x += ui.button(x, y, t(label), () => {}, { cmd, tip: tip ? t(tip) : undefined }) + 1;
     }
-    ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
+    // the keys, said on hover (the guide has them all)
+    ui.hit({ x: inner.x, y: inner.y, w: inner.w, h: waveH }, { tip: t("the keys play it · alt ←→ another instrument · alt B the block · med sample -h") });
   };
 
   /** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
@@ -370,7 +426,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       x += ui.button(x, inner.y, name, () => {}, { cmd: `med ${sk.cmd} ${n} preset ${name}`, quiet: !on }) + 1;
     }
     const top = inner.y + 2;
-    const h = Math.max(1, inner.h - 3);
+    const h = Math.max(1, inner.h - 2);
     const colW = 36;
     const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
     const perCol = Math.ceil(PARAMS.length / cols);
@@ -386,11 +442,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       ui.button(x0 + 19, y, "‹", () => ((st.synthRow = i), nudge(i, -1)), { quiet: !on });
       ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
       ui.button(x0 + 32, y, "›", () => ((st.synthRow = i), nudge(i, 1)), { quiet: !on });
-      ui.hit({ x: x0, y, w: 18, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1) });
-      ui.hit({ x: x0 + 22, y, w: 10, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1) });
+      const tip = t("the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)");
+      ui.hit({ x: x0, y, w: 18, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1), tip });
+      ui.hit({ x: x0 + 22, y, w: 10, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1), tip });
       if (on && focused) ui.tint({ x: x0, y, w: 18, h: 1 }, undefined, c.highlight);
     });
-    ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
   };
 
   /** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
@@ -444,11 +500,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     st.drumRow = Math.max(0, Math.min(11, st.drumRow));
     st.drumCol = Math.max(0, Math.min(3, st.drumCol));
     // too low for twelve rows: they scroll with the cursor
-    const rows = Math.max(1, inner.h - 4);
+    const rows = Math.max(1, inner.h - 3);
     const scroll = Math.max(0, Math.min(12 - rows, st.drumRow - rows + 1));
     kit.drums.forEach((d, i) => {
       const y = inner.y + 3 + i - scroll;
-      if (y < inner.y + 3 || y >= inner.y + inner.h - 1) return;
+      if (y < inner.y + 3 || y >= inner.y + inner.h) return;
       const on = i === st.drumRow;
       ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
       ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
@@ -463,11 +519,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           ui.text(cx + 3, y, text.padStart(5), { fg: sel ? c.accent : c.fg });
           ui.button(cx + 8, y, "›", () => ((st.drumRow = i), (st.drumCol = k), nudgeKit(i, k, 1)), { quiet: !sel });
         } else ui.text(cx, y, text.padStart(5), { fg: sel ? c.accent : c.fg, bg: sel ? c.highlight : undefined });
-        ui.hit({ x: cx + (wide ? 3 : 0), y, w: 5, h: 1 }, { onClick: () => ((st.drumRow = i), (st.drumCol = k)), onWheel: (dl: number) => nudgeKit(i, k, dl < 0 ? 1 : -1) });
+        ui.hit({ x: cx + (wide ? 3 : 0), y, w: 5, h: 1 }, { onClick: () => ((st.drumRow = i), (st.drumCol = k)), onWheel: (dl: number) => nudgeKit(i, k, dl < 0 ? 1 : -1), tip: t("←→ a setting · ⇧←→ or the wheel: change it") });
       });
-      ui.hit({ x: x0, y, w: 15, h: 1 }, { onClick: () => (st.drumRow = i) });
+      ui.hit({ x: x0, y, w: 15, h: 1 }, { onClick: () => (st.drumRow = i), tip: t("one drum a note (the keys play them) · ↑↓ a drum") });
     });
-    ui.text(inner.x + 1, inner.y + inner.h - 1, t("keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it"), { fg: c.subtle }, inner.w - 2);
   };
 
   /** a track's new name, asked in a window (the command does it) */
@@ -574,46 +629,74 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const s = st.song;
       const now = engine.current();
       if (engine.playing) ui.animate(16);
-      // follow the song as it's heard
-      if (now) {
+      // follow the song as it's heard (unless follow is off: the cursor stays where you edit)
+      if (now && st.follow && dragTop === null) {
         st.seq = now.seq;
         st.line = now.line;
       }
-      // ── the top line ──
+      // ── the top line: the name, then the state and the settings, each one clickable (a tip says what and its key) ──
       const name = s ? s.title || st.path.split("/").pop() || "" : "";
       let x = ui.text(r.x + 1, r.y, "BreakerMED", { fg: c.accent, attrs: BOLD });
       x = ui.text(x + 1, r.y, "β", { fg: c.warning });
       if (s) {
         const f = s.flags;
         const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-        // the state: playing, stopped, or stopped in edit mode (red: typing writes in the block)
-        const state = engine.playing ? (engine.mode === "block" ? "▶ BLOCK" : "▶ SONG") : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
-        // the song's settings, the least useful left out first when the line is short
-        const parts: [number, string][] = [
-          [0, `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})`],
-          [3, `${t("speed")} ${hex(s.speed)}`],
-          [2, `${t("oct")} ${st.octave + 1}`],
-          [4, `${t("step")} ${st.step}`],
-          [6, s.format],
-          [5, engine.paula ? "PAULA" : "SMOOTH"],
-          ...(s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`] as [number, string]] : []),
-          // the autosave: when the last copy of the changes was written
-          ...(st.editor?.dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate
-            ? [[2, `✓ ${t("autosaved")} ${new Date(st.autosave.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`] as [number, string]]
-            : st.autosave?.error
-              ? [[2, t("autosave off")] as [number, string]]
-              : []),
-        ];
-        const space = r.w - 2 - (x - r.x) - state.length - 6;
+        const hm = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const tempo = s.tempoMode === "spd" ? `SPD ${s.tempo} (${bpm.toFixed(0)} BPM)` : `${s.tempo} BPM${Math.round(bpm) !== s.tempo ? ` (${bpm.toFixed(0)})` : ""}`;
+        const dirty = !!st.editor?.dirty;
+        // [what's dropped first when the line is short (higher first), the label, its style, what a click / the wheel do]
+        type Part = { k: number; label: string; style: { fg?: number; bg?: number; attrs?: number }; hit: Parameters<UI["hit"]>[1] };
+        const parts: Part[] = [];
+        const wheel = (cmd: (d: number) => string | null) => (d: number) => {
+          const line = cmd(d < 0 ? 1 : -1);
+          if (line) run(line);
+        };
+        if (engine.playing)
+          parts.push({ k: -1, label: `■ ▶ ${engine.mode === "block" ? t("BLOCK") : t("SONG")}`, style: { fg: c.success, attrs: BOLD }, hit: { cmd: "med stop", tip: t("playing · click or space: stop") } });
+        else {
+          parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${hex(st.seq)} ${hex(st.line)}`, tip: t("play the song from the cursor · enter (⇧enter: this block, again and again)") } });
+          parts.push({ k: -1, label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"), style: st.edit ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: c.fg }, hit: { cmd: `med edit ${st.edit ? "off" : "on"}`, tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block") } });
+        }
+        // the mix's level while playing: a bar of 6, and LIM when the limiter takes more than 1 dB
+        const m = engine.master?.() ?? null;
+        if (m) {
+          meterPeak = Math.max(m.peak, meterPeak * 0.85);
+          meterLim = m.limitDb > 1 ? 12 : Math.max(0, meterLim - 1);
+          const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
+          const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
+          parts.push({ k: 1, label: `${"▮".repeat(n)}${"▯".repeat(6 - n)}${meterLim ? " LIM" : ""}`, style: { fg: meterLim ? c.warning : c.success }, hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") } });
+        } else (meterPeak = 0), (meterLim = 0);
+        parts.push({ k: 0, label: tempo, style: { fg: c.fg }, hit: { cmd: "med screen song", tip: t("the tempo · the wheel changes it · click: the SONG screen"), onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`) } });
+        parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
+        parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: t("the octave the keys play · alt ↑↓ or F1–F8 · the wheel"), onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
+        parts.push({ k: 4, label: `${t("step")} ${st.step}`, style: { fg: c.muted }, hit: { tip: t("lines the cursor moves after a note · alt 0–9 · the wheel"), onWheel: (d) => (st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1)))), onClick: () => {} } });
+        parts.push({ k: 5, label: engine.paula ? t("stepped") : t("smooth"), style: { fg: c.muted }, hit: { cmd: `med paula ${engine.paula ? "off" : "on"}`, tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga") } });
+        if (s.echo) parts.push({ k: 1, label: `${t("echo")} ${s.echo.ms}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("the echo on the whole mix (ms) · click: the SONG screen") } });
+        parts.push({ k: 2, label: st.follow ? t("follow") : t("follow off"), style: { fg: st.follow ? c.muted : c.warning }, hit: { cmd: `med follow ${st.follow ? "off" : "on"}`, tip: st.follow ? t("the cursor follows the song as it plays · click or alt F: it stays where you edit") : t("the cursor stays where you edit while the song plays · click or alt F: follow it") } });
+        if (st.metronome) parts.push({ k: 3, label: t("click"), style: { fg: c.accent }, hit: { cmd: "med click off", tip: t("the metronome: a click on each beat while playing · click: off") } });
+        // saved, or the autosave's copy
+        if (!dirty && st.savedAt) parts.push({ k: 2, label: `✓ ${t("saved")} ${hm(st.savedAt)}`, style: { fg: c.success }, hit: { tip: st.path } });
+        else if (dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate) parts.push({ k: 2, label: `✓ ${t("autosaved")} ${hm(st.autosave.lastAt)}`, style: { fg: c.muted }, hit: { cmd: "med save", tip: t("a copy of the changes is in songs/.recovery/ · click or ⌘S: save the song") } });
+        else if (st.autosave?.error) parts.push({ k: 2, label: t("autosave off"), style: { fg: c.warning }, hit: { cmd: "med autosave on", tip: st.autosave.error } });
+        const width = (list: Part[]) => list.reduce((n, p) => n + p.label.length + 2, 0);
         let shown = parts;
-        const width = (list: [number, string][]) => list.reduce((n, [, p]) => n + p.length + 2, 0);
-        for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter(([k]) => k < drop);
-        const rest = shown.length ? `  ${shown.map(([, p]) => p).join("  ")}` : "";
-        const rx = rest ? ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted }) : r.x + r.w - 1;
-        const sx = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: engine.playing ? c.success : c.muted });
-        // the song's name in what's left between, a space each side
+        const space = r.w - 2 - (x - r.x) - 12;
+        for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter((p) => p.k < drop);
+        let px = r.x + r.w - 1 - width(shown) + 2;
+        const sx = px;
+        for (const p of shown) {
+          const end = ui.text(px, r.y, p.label, p.style);
+          ui.hit({ x: px, y: r.y, w: p.label.length, h: 1 }, p.hit);
+          px = end + 2;
+        }
+        // the song's name in what's left between, a ● while it has changes not saved
         const room = sx - (x + 2) - 1;
-        if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
+        if (room >= 3) {
+          let nx = x + 2;
+          if (dirty) nx = ui.text(nx, r.y, "● ", { fg: c.warning });
+          ui.text(nx, r.y, truncate(name, room - (dirty ? 2 : 0)), { fg: c.fg }, room - (dirty ? 2 : 0));
+          ui.hit({ x: x + 2, y: r.y, w: Math.min(room, name.length + (dirty ? 2 : 0)), h: 1 }, { cmd: dirty ? "med save" : "med screen song", tip: `${st.path}${dirty ? ` · ${t("changes not saved · click or ⌘S: save")}` : ""}` });
+        }
       }
       if (!s || st.home) {
         // no song (or the page was closed): the logo and START (or the guide, which needs no song)
@@ -659,9 +742,6 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const b = s.blocks[bn];
       const inner = ui.box(right, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`, focused });
       if (!b) return;
-      // the edit mode, said where you look: on the block's frame
-      const badge = engine.playing ? ` ${t("space: stop")} ` : st.edit ? ` ● ${t("EDIT")} · ${t("space: stop editing")} ` : ` ${t("space: edit mode")} `;
-      if (right.w > badge.length + 30) ui.textRight(right.x + right.w - 2, right.y, badge, st.edit && !engine.playing ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: engine.playing ? c.success : c.warning });
       const chords = !!s.chordColumn;
       if (!chords && st.col === CHORD_COL) st.col = CMD_COL;
       const cw = cellW(b.pages, chords) + 1;
@@ -671,23 +751,29 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (st.track >= firstTrack + fits) firstTrack = st.track - fits + 1;
       firstTrack = Math.max(0, Math.min(firstTrack, Math.max(0, s.tracks - fits)));
       // the page's own click area first: the cells and headers drawn after it win (the last one registered)
-      ui.hit(inner, { onWheel: (d) => moveLine(Math.sign(d) * 2) });
-      // track headers
+      ui.hit(inner, { onWheel: (d) => moveLine(Math.sign(d) * 2), ...drag });
+      // track headers: ■ mutes (lit while the track sounds), the name moves the cursor there
+      const level = engine.levels?.() ?? null;
       for (let k = 0; k < fits && firstTrack + k < s.tracks; k++) {
         const tr = firstTrack + k;
         const muted = engine.muted.has(tr);
         const hx = inner.x + numW + k * cw;
         const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
-        ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, { fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle, attrs: tr === st.track ? BOLD : 0 }, cw - 1);
-        ui.hit({ x: hx, y: inner.y, w: cw - 1, h: 1 }, {
+        const here = tr === st.track;
+        const lit = level ? Math.min(1, (level[tr] ?? 0) * 1.6) : 0;
+        ui.text(hx, inner.y, muted ? "M" : "■", { fg: muted ? c.warning : lit > 0.02 ? mix(c.subtle, c.success, 0.35 + lit * 0.65) : c.subtle, attrs: muted ? BOLD : 0 });
+        ui.hit({ x: hx, y: inner.y, w: 1, h: 1 }, { cmd: `med mute ${tr + 1}`, tip: muted ? t("muted · click: unmute · right-click: solo, rename") : t("mute · right-click: solo, rename"), ...drag });
+        ui.text(hx + 2, inner.y, truncate(name, cw - 3), { fg: muted ? c.subtle : here ? c.accent : c.muted, attrs: here ? BOLD : 0 }, cw - 3);
+        ui.hit({ x: hx + 2, y: inner.y, w: cw - 3, h: 1 }, {
           onClick: () => (st.track = tr),
           onDouble: () => void rename(tr),
-          tip: t("double-click: rename · right-click: mute, solo"),
+          tip: t("click: the cursor goes there · double-click: rename · right-click: mute, solo"),
           menu: () => [
             { label: t("rename…"), run: () => void rename(tr) },
             { label: muted ? t("unmute") : t("mute"), cmd: `med mute ${tr + 1}` },
             { label: t("solo"), cmd: `med solo ${tr + 1}` },
           ],
+          ...drag,
         });
       }
       // tracks off to the side: ‹ and › with how many, a click goes there
@@ -701,34 +787,48 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         ui.textRight(inner.x + inner.w, inner.y, label, { fg: c.accent, attrs: BOLD });
         ui.hit({ x: inner.x + inner.w - label.length, y: inner.y, w: label.length, h: 1 }, { onClick: () => (st.track = firstTrack + fits), tip: t("more tracks to the right") });
       }
-      // the lines: the cursor's line in the middle
+      // the lines: the cursor's line in the middle, or a view that scrolls at its edges (med view)
       const rows = inner.h - 1;
       const mid = Math.floor(rows / 2);
-      geo = { x: inner.x, y: inner.y + 1, w: inner.w, h: rows, numW, cw, top: st.line - mid, fits };
+      let top: number;
+      if (dragTop !== null) top = dragTop;
+      else if (st.view === "edges") {
+        const margin = Math.min(2, Math.floor(rows / 4));
+        if (st.line < viewTop + margin) viewTop = st.line - margin;
+        if (st.line > viewTop + rows - 1 - margin) viewTop = st.line - rows + 1 + margin;
+        viewTop = Math.max(0, Math.min(viewTop, Math.max(0, b.lines - rows)));
+        top = viewTop;
+      } else top = st.line - mid;
+      geo = { x: inner.x, y: inner.y + 1, w: inner.w, h: rows, numW, cw, top, fits };
       const sel = st.sel && st.sel.block === bn ? st.sel : null;
+      // follow off: the line heard, lit on its own (the cursor stays where you edit)
+      const heard = now && !st.follow && s.sequence[now.seq] === bn ? now.line : -1;
       for (let k = 0; k < rows; k++) {
-        const line = st.line - mid + k;
+        const line = top + k;
         const y = inner.y + 1 + k;
         if (line < 0 || line >= b.lines) continue;
         const here = line === st.line;
         const beat = line % Math.max(1, s.lpb) === 0;
-        const bg = here ? (engine.playing ? mix(c.panel, c.accent, 0.28) : st.edit ? mix(c.panel, c.error, 0.22) : c.highlight) : beat ? c.panelAlt : undefined;
+        const bg = here ? (engine.playing && st.follow ? mix(c.panel, c.accent, 0.28) : st.edit ? mix(c.panel, c.error, 0.22) : c.highlight) : line === heard ? mix(c.panel, c.success, 0.22) : beat ? c.panelAlt : undefined;
         if (bg !== undefined) ui.fill({ x: inner.x, y, w: inner.w, h: 1 }, { bg });
-        ui.text(inner.x, y, hex(line, 3), { fg: here ? c.accent : beat ? c.muted : c.faint, bg });
+        ui.text(inner.x, y, hex(line, 3), { fg: here ? c.accent : beat ? c.muted : c.subtle, bg });
         for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
           const tr = firstTrack + j;
           const cell = b.cells[line][tr];
           const cx = inner.x + numW + j * cw;
+          // a muted track: dimmer, still readable (and editable)
           const dim = engine.muted.has(tr);
+          const ink = (on: number) => (dim ? c.muted : on);
+          const empty = c.subtle;
           const inSel = !!sel && line >= sel.line0 && line <= sel.line1 && tr >= sel.track0 && tr <= sel.track1;
           const cbg = inSel ? mix(c.panel, c.accentAlt, 0.35) : bg;
           if (inSel) ui.fill({ x: cx, y, w: cw - 1, h: 1 }, { bg: cbg });
-          let xx = ui.text(cx, y, noteName(cell.note), { fg: dim ? c.faint : cell.note === NOTE_OFF ? c.warning : cell.note ? c.fg : c.faint, bg: cbg, attrs: cell.note ? BOLD : 0 });
-          xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", { fg: dim ? c.faint : cell.inst ? c.accent : c.faint, bg: cbg });
-          if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", { fg: dim ? c.faint : cell.chord ? c.warning : c.faint, bg: cbg });
+          let xx = ui.text(cx, y, noteName(cell.note), { fg: cell.note === NOTE_OFF ? ink(c.warning) : cell.note ? ink(c.fg) : empty, bg: cbg, attrs: cell.note && !dim ? BOLD : 0 });
+          xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", { fg: cell.inst ? ink(c.accent) : empty, bg: cbg });
+          if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", { fg: cell.chord ? ink(c.warning) : empty, bg: cbg });
           for (let p = 0; p < b.pages; p++) {
             const has = cell.cmd[p] || cell.val[p];
-            xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", { fg: dim ? c.faint : has ? c.accentAlt : c.faint, bg: cbg });
+            xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", { fg: has ? ink(c.accentAlt) : empty, bg: cbg });
           }
           if (here && tr === st.track && focused) ui.tint({ x: cx + colX(st.col, chords), y, w: colW(st.col), h: 1 }, c.bg, st.edit ? c.error : c.accent);
           ui.hit({ x: cx, y, w: cw - 1, h: 1 }, {
@@ -739,14 +839,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
               st.track = tr;
               if (at) st.col = at.col;
               anchor = { line, track: tr };
+              // the view stays put while the mouse drags from here
+              dragTop = top;
+              dragEnd = null;
             },
-            onDrag: (m) => {
-              const at = cellAt(m.x, m.y);
-              if (!at || !anchor) return;
-              st.line = at.line;
-              st.track = at.track;
-              st.sel = { block: bn, line0: Math.min(anchor.line, at.line), line1: Math.max(anchor.line, at.line), track0: Math.min(anchor.track, at.track), track1: Math.max(anchor.track, at.track) };
-            },
+            ...drag,
             onWheel: (d) => moveLine(Math.sign(d) * 2),
             menu: () => cellMenu(line, tr),
           });
@@ -757,6 +854,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     onKey(k: KeyInput) {
       const s = st.song;
       const e = ed();
+      dragDone(); // a key ends a drag the deck never let go of
       // ? (or alt G): the guide; on it, the arrows read it
       const help = (k.key === "?" || (k.key === "/" && k.shift) || (k.code === "Slash" && k.shift)) && !k.ctrl && !k.meta;
       if (help || (k.alt && k.code === "KeyG")) return toggleGuide(), true;
@@ -767,7 +865,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       }
       if (!s || st.home) return start.key(k);
       // ⌘S save · ⌘⇧S save as… (Ctrl on Windows and Linux)
-      if (k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
+      if ((k.ctrl || k.meta) && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
       // SONG and EXPORT: their own arrows and ⏎; the piano keys only play there
       if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
         if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
@@ -782,7 +880,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       }
       if (!s || !e) return false;
       // ⌘Z / ⌘⇧Z: the block's own history
-      if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
+      if ((k.ctrl || k.meta) && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
+      // F1–F8: the octave (ProTracker, OctaMED)
+      const fn = /^F([1-8])$/.exec(k.code);
+      if (fn && !k.alt && !k.ctrl && !k.meta) return (st.octave = +fn[1] - 1), true;
+      // ⌘←→ (ctrl on Windows, Linux): the position before / after · alt PgUp PgDn too
+      if ((k.ctrl || k.meta) && !k.alt && (k.key === "left" || k.key === "right")) return goPos(k.key === "left" ? -1 : 1), true;
       if (k.alt) {
         const digit = /^Digit(\d)$/.exec(k.code);
         if (digit) return (st.step = +digit[1]), true;
@@ -799,8 +902,14 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyC": return copy(), true;
           case "KeyX": return cut(), true;
           case "KeyV": return paste(), true;
+          // transpose: alt PgUp / PgDn (the same on every keyboard) · alt Q / A by place too (QWERTY's letters)
+          case "PageUp":
           case "KeyQ": return transpose(k.shift ? 12 : 1), true;
+          case "PageDown":
           case "KeyA": return transpose(k.shift ? -12 : -1), true;
+          case "KeyF": return run(`med follow ${st.follow ? "off" : "on"}`), true;
+          case "KeyL": return selectTrack(), true;
+          case "KeyK": return selectBlock(), true;
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
         }
         return false;
@@ -841,6 +950,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         case "end": return moveLine(9999), true;
         case "left": return unselect(), moveCol(-1), true;
         case "right": return unselect(), moveCol(1), true;
+        // tab, ⇧tab: the next track, the one before (its note column)
+        case "tab": return unselect(), (st.track = (st.track + (k.shift ? s.tracks - 1 : 1)) % s.tracks), (st.col = 0), true;
+        case "scrolllock": return run(`med follow ${st.follow ? "off" : "on"}`), true;
         // they write: in edit mode only (off, the keys only play)
         case "delete":
           if (!st.edit) return true;

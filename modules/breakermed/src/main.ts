@@ -39,6 +39,10 @@ export function activate(ib: IcebreakerAPI): void {
   // you silence it from the deck (`audio stop`, the ♪ in the status bar): the song stops, not only its notes
   ib.audio.onStop?.(() => engine?.silence());
   void ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
+  // the page's own settings (med view, med follow, med click)
+  void ib.storage.get("view", "center").then((v) => (st.view = v === "edges" ? "edges" : "center"));
+  void ib.storage.get("follow", true).then((v) => (st.follow = v !== false));
+  void ib.storage.get("metronome", false).then((v) => engine && (engine.metronome = st.metronome = v === true));
 
   registerCommands(ib, engine, st);
   ib.apps.register({

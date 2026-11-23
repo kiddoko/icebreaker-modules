@@ -79,6 +79,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       const was = st.path;
       st.path = dir;
       st.editor!.dirty = false;
+      st.savedAt = Date.now();
+      ib.ui.notify(`BreakerMED: saved · ${dir}`, "success");
       // saved: the autosave's copies of it are no use now
       await st.autosave?.forget(was);
       await st.autosave?.forget(dir);
@@ -86,6 +88,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       return;
     }
     for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
+    ib.ui.notify(`BreakerMED: saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
     ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
   };
   const writeOut = async (path: string, w: { bytes: Uint8Array; warnings: string[] }) => {
@@ -235,6 +238,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med mute <track> · med solo <track>   (again: back)",
       "med paula on|off           stepped like the Amiga (on), or smooth",
       "med edit on|off            typing writes in the block (space on the page)",
+      "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
+      "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
+      "med click on|off           the metronome: a click on each beat while playing",
       "med step <0–9>             lines the cursor moves after a note",
       "med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
       "med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
@@ -298,7 +304,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             let path = rest.join(" ");
             if (!path) {
               const songs = await find();
-              if (!songs.length) return ctx.err("no song in songs/ (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
+              if (!songs.length) {
+                // said on the page too (START's "open" did nothing visible before)
+                st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
+                ib.ui.notify(`BreakerMED: ${st.error}`, "warning");
+                return ctx.err(`med open: ${st.error}\n`), 1;
+              }
               const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
               if (i === null) return 1;
               path = songs[i];
@@ -412,8 +423,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const seq = nums[0] !== undefined ? parseInt(nums[0], 16) : st.seq;
             const line = nums[1] !== undefined ? parseInt(nums[1], 16) : nums[0] !== undefined ? 0 : st.line;
             if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
-            st.seq = seq;
-            st.line = line;
+            // follow off: the cursor stays where you edit
+            if (st.follow) (st.seq = seq), (st.line = line);
             await engine.play(mode, { seq, line });
             return 0;
           }
@@ -453,6 +464,28 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             engine.paula = rest[0] === "on" ? true : rest[0] === "off" ? false : !engine.paula;
             await ib.storage.set("paula", engine.paula);
             ctx.out(engine.paula ? "PAULA: stepped, gritty, like the Amiga\n" : "SMOOTH: interpolated\n");
+            return 0;
+          }
+          case "view": {
+            // the block's view: the cursor's line in the middle, or a view that scrolls at its edges
+            const v = rest[0] === "center" || rest[0] === "centre" ? "center" : rest[0] === "edges" ? "edges" : rest[0] === undefined ? null : "bad";
+            if (v === "bad") return ctx.err("med view center|edges (the cursor's line in the middle, or a view that scrolls at its edges)\n"), 1;
+            if (v) (st.view = v), await ib.storage.set("view", v);
+            ctx.out(st.view === "center" ? "view: the cursor's line in the middle (ProTracker)\n" : "view: scrolls at its edges (OctaMED)\n");
+            return 0;
+          }
+          case "follow": {
+            st.follow = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.follow;
+            await ib.storage.set("follow", st.follow);
+            ctx.out(st.follow ? "follow: the cursor follows the song as it plays\n" : "follow off: the cursor stays where you edit, the line heard is lit\n");
+            return 0;
+          }
+          case "click":
+          case "metronome": {
+            st.metronome = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.metronome;
+            engine.metronome = st.metronome;
+            await ib.storage.set("metronome", st.metronome);
+            ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome off\n");
             return 0;
           }
           case "edit": {
