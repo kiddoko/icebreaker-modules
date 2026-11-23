@@ -81,7 +81,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       st.path = dir;
       st.editor!.dirty = false;
       st.savedAt = Date.now();
-      ib.ui.notify(`BreakerMED: saved · ${dir}`, "success");
+      ib.ui.notify(`saved · ${dir}`, "success");
       // saved: the autosave's copies of it are no use now
       await st.autosave?.forget(was);
       await st.autosave?.forget(dir);
@@ -89,7 +89,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       return;
     }
     for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
-    ib.ui.notify(`BreakerMED: saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
+    ib.ui.notify(`saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
     ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
   };
   const writeOut = async (path: string, w: { bytes: Uint8Array; warnings: string[] }) => {
@@ -163,15 +163,16 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     if (!st.song || !st.editor?.dirty) return true;
     await st.autosave?.flush();
     if (force) return true;
-    const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
-    const pick = await ib.ui.choose(`“${name}”: changes not saved`, [
+    // a song never saved has no file name worth saying (every new one is "untitled.bmed")
+    const name = !hasHome() ? "this new song" : `“${st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop()}”`;
+    const pick = await ib.ui.choose(`${name}: changes not saved`, [
       { label: "save them first" },
       { label: "don't save (the autosave keeps a copy: med recover)" },
       { label: "cancel: keep the song" },
     ]);
     if (pick === 0) return (await saveSafely(ctx, null)) === 0;
     if (pick === 1) return true;
-    ctx.err(`med ${what}: “${name}” has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
+    ctx.err(`med ${what}: ${name} has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
     return false;
   };
 
@@ -183,6 +184,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     // each step of the history: the page again, and a copy soon (the autosave)
     st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
     st.autosave?.reset();
+    st.savedAt = 0;
     st.sel = null;
     st.col = 0;
     st.path = path;
@@ -329,7 +331,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               if (!songs.length) {
                 // said on the page too (START's "open" did nothing visible before)
                 st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
-                ib.ui.notify(`BreakerMED: ${st.error}`, "warning");
+                ib.ui.notify(st.error, "warning");
                 return ctx.err(`med open: ${st.error}\n`), 1;
               }
               const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));

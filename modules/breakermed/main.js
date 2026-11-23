@@ -6725,6 +6725,10 @@ function makeApp(ib, engine, st) {
 		];
 	};
 	instList.onActivate = (i) => preview(st.octave * 12, i);
+	instList.tipOf = (i) => {
+		const ins = st.song?.instruments[i];
+		return ins && ins.kind !== "empty" ? `${ins.name}${/ \(placeholder\)$/.test(ins.name) ? ` · ${t("computed until someone records it (med pack)")}` : ""}` : void 0;
+	};
 	/** first track shown (the page scrolls sideways when they don't fit) */
 	let firstTrack = 0;
 	/** where the block was drawn (mouse → cell) */
@@ -6733,7 +6737,7 @@ function makeApp(ib, engine, st) {
 	/** while the mouse drags a selection: the view stays put (the line under the mouse is the one drawn) */
 	let dragTop = null;
 	/** the master meter, held a little between frames */
-	let meterPeak = 0, meterLim = 0;
+	let meterPeak = 0, meterAt = 0, limUntil = 0;
 	/** the first line on screen when the view scrolls at the edges */
 	let viewTop = 0;
 	/** a drag, whichever hit of the block gets the moves (the deck sends them to the hit where it started) */
@@ -7529,8 +7533,11 @@ function makeApp(ib, engine, st) {
 				}
 				const m = engine.master?.() ?? null;
 				if (m) {
-					meterPeak = Math.max(m.peak, meterPeak * .85);
-					meterLim = m.limitDb > 1 ? 12 : Math.max(0, meterLim - 1);
+					const ms = performance.now();
+					meterPeak = Math.max(m.peak, meterPeak * 10 ** (-12 * Math.max(0, ms - meterAt) / 2e4));
+					meterAt = ms;
+					if (m.limitDb > 1) limUntil = ms + 1500;
+					const meterLim = ms < limUntil;
 					const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
 					const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
 					parts.push({
@@ -7539,7 +7546,7 @@ function makeApp(ib, engine, st) {
 						style: { fg: meterLim ? c.warning : c.success },
 						hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") }
 					});
-				} else meterPeak = 0, meterLim = 0;
+				} else meterPeak = 0, limUntil = 0;
 				parts.push({
 					k: 0,
 					label: tempo,
@@ -7767,8 +7774,9 @@ function makeApp(ib, engine, st) {
 					name: ""
 				};
 				const empty = ins.kind === "empty";
-				const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-				const label = ins.name || (empty ? i >= s.instruments.length ? `· ${t("free")}` : "·" : t("(no name)"));
+				const placeholder = / \(placeholder\)$/.test(ins.name);
+				const tag = placeholder ? "◌" : ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+				const label = (placeholder ? ins.name.replace(/ \(placeholder\)$/, "") : ins.name) || (empty ? i >= s.instruments.length ? `· ${t("free")}` : "·" : t("(no name)"));
 				ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, {
 					fg: sel ? c.accent : empty ? c.faint : c.fg,
 					attrs: sel ? BOLD : 0
@@ -7787,8 +7795,9 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "guide") return guide.draw(ui, right, focused);
 			const bn = blockNo();
 			const b = s.blocks[bn];
+			const playingAt = now && !st.follow ? ` · ▶ ${hex(s.sequence[now.seq] ?? 0, 3) === hex(bn, 3) ? "" : `${t("block")} ${hex(s.sequence[now.seq] ?? 0, 3)} `}${hex(now.line, 3)}` : "";
 			const inner = ui.box(right, {
-				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`,
+				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}${playingAt}`,
 				focused
 			});
 			if (!b) return;
@@ -7917,16 +7926,17 @@ function makeApp(ib, engine, st) {
 				if (line < 0 || line >= b.lines) continue;
 				const here = line === st.line;
 				const beat = line % Math.max(1, s.lpb) === 0;
-				const bg = here ? engine.playing && st.follow ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : line === heard ? mix(c.panel, c.success, .22) : beat ? c.panelAlt : void 0;
+				const bg = here ? engine.playing && st.follow ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : line === heard ? mix(c.panel, c.success, .4) : beat ? c.panelAlt : void 0;
 				if (bg !== void 0) ui.fill({
 					x: inner.x,
 					y,
 					w: inner.w,
 					h: 1
 				}, { bg });
-				ui.text(inner.x, y, hex(line, 3), {
-					fg: here ? c.accent : beat ? c.muted : c.subtle,
-					bg
+				ui.text(inner.x, y, line === heard ? "▶" + hex(line, 2) : hex(line, 3), {
+					fg: line === heard ? c.success : here ? c.accent : beat ? c.muted : c.subtle,
+					bg,
+					attrs: line === heard ? BOLD : 0
 				});
 				for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
 					const tr = firstTrack + j;
@@ -10967,14 +10977,14 @@ function registerCommands(ib, engine, st) {
 			st.path = dir;
 			st.editor.dirty = false;
 			st.savedAt = Date.now();
-			ib.ui.notify(`BreakerMED: saved · ${dir}`, "success");
+			ib.ui.notify(`saved · ${dir}`, "success");
 			await st.autosave?.forget(was);
 			await st.autosave?.forget(dir);
 			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
 			return;
 		}
 		for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
-		ib.ui.notify(`BreakerMED: saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
+		ib.ui.notify(`saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
 		ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
 	};
 	const writeOut = async (path, w) => {
@@ -11045,15 +11055,15 @@ function registerCommands(ib, engine, st) {
 		if (!st.song || !st.editor?.dirty) return true;
 		await st.autosave?.flush();
 		if (force) return true;
-		const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
-		const pick = await ib.ui.choose(`“${name}”: changes not saved`, [
+		const name = !hasHome() ? "this new song" : `“${st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop()}”`;
+		const pick = await ib.ui.choose(`${name}: changes not saved`, [
 			{ label: "save them first" },
 			{ label: "don't save (the autosave keeps a copy: med recover)" },
 			{ label: "cancel: keep the song" }
 		]);
 		if (pick === 0) return await saveSafely(ctx, null) === 0;
 		if (pick === 1) return true;
-		ctx.err(`med ${what}: “${name}” has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
+		ctx.err(`med ${what}: ${name} has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
 		return false;
 	};
 	/** this song is the one on the page now */
@@ -11063,6 +11073,7 @@ function registerCommands(ib, engine, st) {
 		st.editor = new Editor(song);
 		st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
 		st.autosave?.reset();
+		st.savedAt = 0;
 		st.sel = null;
 		st.col = 0;
 		st.path = path;
@@ -11299,7 +11310,7 @@ function registerCommands(ib, engine, st) {
 							const songs = await find();
 							if (!songs.length) {
 								st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
-								ib.ui.notify(`BreakerMED: ${st.error}`, "warning");
+								ib.ui.notify(st.error, "warning");
 								return ctx.err(`med open: ${st.error}\n`), 1;
 							}
 							const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
@@ -12108,7 +12119,7 @@ function activate(ib) {
 		path: st.path,
 		playing: !!engine?.playing
 	}));
-	st.autosave.onError = (m) => ib.ui.notify(`BreakerMED: autosave off — ${m} (med autosave on to try again)`, "warning");
+	st.autosave.onError = (m) => ib.ui.notify(`autosave off — ${m} (med autosave on to try again)`, "warning");
 	st.autosave.load().then(() => ib.ui.redraw());
 	engine.onChange = () => ib.ui.redraw();
 	ib.audio.onStop?.(() => engine?.silence());
@@ -12540,6 +12551,7 @@ var FR = {
 	"unused": "inutilisé(s)",
 	"use another block…": "choisir un autre bloc…",
 	"which block?": "quel bloc ?",
-	"←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer"
+	"←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer",
+	"computed until someone records it (med pack)": "calculé en attendant que quelqu'un l'enregistre (med pack)"
 };
 export { activate, deactivate };

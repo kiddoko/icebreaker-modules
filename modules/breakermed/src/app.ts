@@ -220,6 +220,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     ];
   };
   instList.onActivate = (i) => preview(st.octave * 12, i);
+  instList.tipOf = (i) => {
+    const ins = st.song?.instruments[i];
+    return ins && ins.kind !== "empty" ? `${ins.name}${/ \(placeholder\)$/.test(ins.name) ? ` · ${t("computed until someone records it (med pack)")}` : ""}` : undefined;
+  };
   /** first track shown (the page scrolls sideways when they don't fit) */
   let firstTrack = 0;
   /** where the block was drawn (mouse → cell) */
@@ -228,7 +232,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   /** while the mouse drags a selection: the view stays put (the line under the mouse is the one drawn) */
   let dragTop: number | null = null;
   /** the master meter, held a little between frames */
-  let meterPeak = 0, meterLim = 0;
+  let meterPeak = 0, meterAt = 0, limUntil = 0;
   /** the first line on screen when the view scrolls at the edges */
   let viewTop = 0;
   /** a drag, whichever hit of the block gets the moves (the deck sends them to the hit where it started) */
@@ -711,14 +715,19 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           parts.push({ k: -1, label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"), style: st.edit ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: c.fg }, hit: { cmd: `med edit ${st.edit ? "off" : "on"}`, tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block") } });
         }
         // the mix's level while playing: a bar of 6, and LIM when the limiter takes more than 1 dB
+        // by the clock, not by the frame: the page may draw far more often than the sound is computed
         const m = engine.master?.() ?? null;
         if (m) {
-          meterPeak = Math.max(m.peak, meterPeak * 0.85);
-          meterLim = m.limitDb > 1 ? 12 : Math.max(0, meterLim - 1);
+          const ms = performance.now();
+          // the peak falls 12 dB a second; a new one replaces it at once
+          meterPeak = Math.max(m.peak, meterPeak * 10 ** ((-12 * Math.max(0, ms - meterAt)) / 20000));
+          meterAt = ms;
+          if (m.limitDb > 1) limUntil = ms + 1500; // LIM stays lit 1.5 s after the limiter worked
+          const meterLim = ms < limUntil;
           const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
           const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
           parts.push({ k: 1, label: `${"▮".repeat(n)}${"▯".repeat(6 - n)}${meterLim ? " LIM" : ""}`, style: { fg: meterLim ? c.warning : c.success }, hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") } });
-        } else (meterPeak = 0), (meterLim = 0);
+        } else (meterPeak = 0), (limUntil = 0);
         parts.push({ k: 0, label: tempo, style: { fg: c.fg }, hit: { cmd: "med screen song", tip: t("the tempo · the wheel changes it · click: the SONG screen"), onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`) } });
         parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
         parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: t("the octave the keys play · alt ↑↓ · the wheel"), onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
@@ -790,8 +799,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       instList.render(ui, instBox, false, (i, row, sel) => {
         const ins = s.instruments[i] ?? { kind: "empty", name: "" };
         const empty = ins.kind === "empty";
-        const tag = ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
-        const label = ins.name || (empty ? (i >= s.instruments.length ? `· ${t("free")}` : "·") : t("(no name)"));
+        // a pack sound nobody has recorded yet: ◌ and its name (the list is narrow; the full name in the tip)
+        const placeholder = / \(placeholder\)$/.test(ins.name);
+        const tag = placeholder ? "◌" : ins.kind === "chip" ? "▚" : ins.kind === "synth" || ins.kind === "analog" || ins.kind === "fm" ? "∿" : ins.kind === "drums" ? "▪" : ins.kind === "hybrid" ? "≈" : "";
+        const label = (placeholder ? ins.name.replace(/ \(placeholder\)$/, "") : ins.name) || (empty ? (i >= s.instruments.length ? `· ${t("free")}` : "·") : t("(no name)"));
         ui.text(row.x, row.y, `${hex(i + 1)} ${tag}${label}`, { fg: sel ? c.accent : empty ? c.faint : c.fg, attrs: sel ? BOLD : 0 }, row.w);
       });
 
@@ -806,7 +817,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       // ── the block ──
       const bn = blockNo();
       const b = s.blocks[bn];
-      const inner = ui.box(right, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`, focused });
+      // follow off, playing: where the song is, said on the frame (the line heard may be off screen)
+      const playingAt = now && !st.follow ? ` · ▶ ${hex(s.sequence[now.seq] ?? 0, 3) === hex(bn, 3) ? "" : `${t("block")} ${hex(s.sequence[now.seq] ?? 0, 3)} `}${hex(now.line, 3)}` : "";
+      const inner = ui.box(right, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}${playingAt}`, focused });
       if (!b) return;
       const chords = !!s.chordColumn;
       if (!chords && st.col === CHORD_COL) st.col = CMD_COL;
@@ -875,9 +888,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         if (line < 0 || line >= b.lines) continue;
         const here = line === st.line;
         const beat = line % Math.max(1, s.lpb) === 0;
-        const bg = here ? (engine.playing && st.follow ? mix(c.panel, c.accent, 0.28) : st.edit ? mix(c.panel, c.error, 0.22) : c.highlight) : line === heard ? mix(c.panel, c.success, 0.22) : beat ? c.panelAlt : undefined;
+        const bg = here ? (engine.playing && st.follow ? mix(c.panel, c.accent, 0.28) : st.edit ? mix(c.panel, c.error, 0.22) : c.highlight) : line === heard ? mix(c.panel, c.success, 0.4) : beat ? c.panelAlt : undefined;
         if (bg !== undefined) ui.fill({ x: inner.x, y, w: inner.w, h: 1 }, { bg });
-        ui.text(inner.x, y, hex(line, 3), { fg: here ? c.accent : beat ? c.muted : c.subtle, bg });
+        ui.text(inner.x, y, line === heard ? "▶" + hex(line, 2) : hex(line, 3), { fg: line === heard ? c.success : here ? c.accent : beat ? c.muted : c.subtle, bg, attrs: line === heard ? BOLD : 0 });
         for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
           const tr = firstTrack + j;
           const cell = b.cells[line][tr];
