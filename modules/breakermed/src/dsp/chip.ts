@@ -22,6 +22,9 @@
  * The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
  */
 import { PRESET_LEVELS } from "./levels";
+
+/** how much lower the chip presets sit than the other synths (dB) */
+export const CHIP_TRIM_DB = 3;
 import { adsr, C3_HZ, C3_RATE, type Adsr } from "./analog";
 import { findIn, nudgeIn, sanitizeWith, setIn, showIn, type Param } from "./params";
 import type { NoteStart, Voice } from "./voice";
@@ -155,7 +158,8 @@ export const CHIP_PRESETS: Record<string, (p: ChipParams) => void> = {
 export function chipPreset(name?: string): ChipParams {
   const p = defaultChip();
   CHIP_PRESETS[name ?? ""]?.(p);
-  p.level = PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0;
+  // 3 dB under the other synths: a chip voice is all peak (one alone kept the limiter working)
+  p.level = (PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0) - CHIP_TRIM_DB;
   return structuredClone(p);
 }
 

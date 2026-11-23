@@ -50,6 +50,8 @@ export interface ExportOptions {
   tail?: number;
   /** peak at -0.3 dB */
   normalize?: boolean;
+  /** the limiter (and DC blocker) on the mix: on for a master, off for stems (they then add up to the mix) */
+  limit?: boolean;
 }
 
 /** what a format can do (`quality`: only for MP3, M4A, OGG, Opus; "" = the default) */
@@ -102,6 +104,7 @@ export async function encodeLossy(audio: Encoder, pcm: Pcm, format: LossyFormat,
 /** The song as sound: once through, plus its tail. `onProgress(0…1)`; it yields now and then. */
 export async function renderSong(song: Song, o: ExportOptions, onProgress?: (done: number) => void): Promise<Pcm> {
   const r = new Renderer(song, o.rate, o.paula);
+  r.limit = o.limit !== false;
   const muted = new Set<number>(o.muted ?? []);
   if (o.solo?.length) for (let t = 0; t < song.tracks; t++) if (!o.solo.includes(t)) muted.add(t);
   r.play(0, 0, { muted });

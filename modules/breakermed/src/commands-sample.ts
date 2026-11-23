@@ -3,6 +3,8 @@
  * as commands (the INSTRUMENT screen's buttons run these). Every change goes
  * through the editor: ⌘Z / `med undo` brings the sound back.
  */
+import { PACK, PACK_DIR } from "./pack";
+import { placeholderFor } from "./placeholder";
 import type { IcebreakerAPI, ShellContext } from "./icebreaker";
 import type { Engine } from "./engine";
 import type { State } from "./app";
@@ -63,9 +65,19 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
           }
         };
         await walk("songs", 0); // the module sees only songs/
-        if (!found.length) return ctx.err("no sound file in the vault (drop a .wav, .aif, .mp3… in it)\n"), 1;
-        const i = await ib.ui.choose("LOAD A SOUND", found.map((p) => ({ label: p })));
+        // and the starter pack's sounds nobody has recorded yet: computed placeholders
+        const missing = PACK.filter((p) => !found.includes(`${PACK_DIR}/${p.file}`));
+        const labels = [...found, ...missing.map((p) => `pack: ${p.file.split("/").pop()!.replace(/\.wav$/, "")} (placeholder) · ${p.what}`)];
+        const i = await ib.ui.choose(found.length ? "LOAD A SOUND" : "LOAD A SOUND (none in songs/ yet: the pack's placeholders)", labels.map((label) => ({ label })));
         if (i === null) return 1;
+        if (i >= found.length) {
+          const p = missing[i - found.length];
+          const ins = placeholderFor(p);
+          e.addInstruments([ins], n);
+          st.inst = n;
+          ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name}: computed, until someone records ${p.file} (SOUND_DESIGN.md)\n`);
+          return 0;
+        }
         file = found[i];
       } else file = ctx.resolve(file);
       const bytes = await ib.vault.readBytes(file);

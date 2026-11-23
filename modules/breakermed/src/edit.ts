@@ -442,6 +442,28 @@ export class Editor {
     this.shape("sequence", () => this.song.sequence.splice(pos, 1));
   }
 
+  /** take a block out of the song (one in no position only): the blocks after it move down a number */
+  blockDelete(block: number): boolean {
+    const s = this.song;
+    if (s.blocks.length <= 1 || !s.blocks[block] || s.sequence.includes(block)) return false;
+    this.shape("delete block", () => {
+      s.blocks.splice(block, 1);
+      s.sequence = s.sequence.map((b) => (b > block ? b - 1 : b));
+    });
+    return true;
+  }
+
+  /** a position moved one place up (-1) or down (+1) */
+  seqMove(pos: number, d: -1 | 1): boolean {
+    const n = this.song.sequence.length, to = pos + d;
+    if (pos < 0 || pos >= n || to < 0 || to >= n) return false;
+    this.shape("sequence", () => {
+      const q = this.song.sequence;
+      [q[pos], q[to]] = [q[to], q[pos]];
+    });
+    return true;
+  }
+
   /** which block a position plays */
   seqSet(pos: number, block: number): void {
     if (!this.song.blocks[block] || pos < 0 || pos >= this.song.sequence.length) return;

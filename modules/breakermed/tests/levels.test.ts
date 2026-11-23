@@ -8,7 +8,9 @@ import { PRESET_LEVELS } from "../src/dsp/levels";
 /** the loudness every preset is matched to: its loudest 100 ms, in dB, at full volume */
 export const TARGET_DB = -9;
 /** hats sit lower in a mix: 6 dB under the rest */
-const targetOf = (id: string) => TARGET_DB - (id.includes("hat") ? 6 : 0);
+/** the chip presets 3 dB under (0.12: one chip voice alone pushed the limiter all the time) */
+const targetOf = (id: string) => TARGET_DB - (id.includes("hat") ? 6 : 0) - (id.startsWith("chip:") ? CHIP_TRIM_DB : 0);
+const CHIP_TRIM_DB = 3;
 const R = 24000;
 
 /** an instrument's loudest 100 ms (RMS, dB), one C-3 held 0.6 s then released */

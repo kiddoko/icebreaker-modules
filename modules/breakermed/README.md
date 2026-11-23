@@ -28,8 +28,16 @@ keyboard, the mouse and a gamepad.
 With no song, the page shows the logo and **START**: **N** new song · **O** open · **D** demo ·
 **?** guide · **C** a chiptune song · **S** the sampler (a click, the letter, or the arrows and ⏎).
 
-**Space** turns the **edit mode** on and off: the block's frame says "● EDIT", the cursor's line
-turns red, and the keys write notes. **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
+**Space** (or a click on **edit** in the top line) turns the **edit mode** on and off: "edit"
+becomes a red "● EDIT", the cursor's line turns red, and the keys write notes. Off, the keys only
+play: delete and ⌫ change nothing either.
+
+The **top line** is made of buttons, each with a tip on hover: **▶ play** (■ while it plays: stop),
+**edit**, the **tempo** and the **speed** (the wheel changes them, a click opens SONG), the octave
+and the step (the wheel), **stepped / smooth** (the sound, like the Amiga's Paula or interpolated),
+the echo, **follow**, the **metronome**, and "✓ saved 23:21" (a ● before the song's name while it
+has changes not saved). While it plays: the mix's **level** (▮▮▮▯▯▯) and **LIM** when the limiter
+turns it down. **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
 how to start, the edit mode, the keys, a cell's columns, every effect command in hex, the sampler.
 
 Five screens on the right, by their tabs or **alt B / I / S / E** and **?**:
@@ -50,25 +58,37 @@ every **alt** combination (alt + arrows too, on Mac, Windows and Linux), like an
 
 ```
 enter        play the song from the cursor      ⇧ enter    play the block, again and again
+tab          the next track                     ⇧ alt ← →  the position before · after
+alt F        follow the song while it plays, or not (scroll lock too): off, the cursor stays where you edit
 space        stop (playing) · edit mode on / off (stopped: a red ● EDIT, typing writes in the block)
 ↑ ↓ ← →      the cursor (← → column by column)  PgUp PgDn Home End   jump
 the keys     a piano: Z S X D C V… an octave, Q 2 W 3 E… the next (by their place: AZERTY works)
-             in edit mode they write the note and the instrument; ` (left of 1) writes a note off
+             in edit mode they write the note and the instrument; ` (left of 1), 1 or caps lock: a note off
 0–9 A–F      the instrument / command columns, digit by digit (edit mode)
 alt ↑ ↓      the piano's octave                 alt ← →    the instrument it plays
 alt 0–9      the edit step: lines the cursor moves after a note
-delete       clear the column (or the selection)   ⌫ delete the line (⇧: in every track)
+delete       clear the column (or the selection)   ⌫ delete the line (⇧: in every track) — edit mode only
 alt enter    insert a line (⇧: in every track)
 ⇧ + arrows   select (a drag with the mouse too) alt C / X / V   copy · cut · paste
-alt Q / A    transpose up / down a semitone (⇧: an octave)
+alt L · alt K   select the track · the whole block
+alt PgUp / PgDn transpose up / down a semitone (⇧: an octave), the same on every keyboard (alt Q / A too)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps): notes, blocks, instruments, the song's settings
              (tempo, swing, echo…), mutes; a setting nudged step by step is one undo
 alt B I S E  the screens: BLOCK · INSTRUMENT · SONG · EXPORT
 chord column    one digit, 1–F (when the song has chords: see Chords)
-mouse        click a cell, drag to select, the wheel scrolls, right-click: a menu (copy, paste,
-             transpose, lines, play from here); a track's name mutes it; a position plays from it
+mouse        click a cell, drag to select (the view holds still; at the frame's edge it scrolls), the
+             wheel scrolls, right-click: a menu (copy, paste, transpose, lines, play from here);
+             a track's ■ mutes it (it lights while the track plays); a click on its name moves the
+             cursor there, a double-click renames it, a right-click: mute, solo, rename
+sequence     a click goes there, a double-click plays from it; ‹ › or the wheel on the block number:
+             another block; drag a position to move it; right-click: use another block…, move up /
+             down, insert; "+1 block unused" under it: add those blocks, or delete them
 gamepad      the cross moves, A plays / stops
 ```
+
+**The view**: the cursor's line stays in the middle of the block (ProTracker's way, the default);
+`med view edges` makes the view scroll only when the cursor nears its edges (OctaMED's), `med view
+center` brings it back.
 
 ## The `med` command
 
@@ -78,7 +98,9 @@ med open [file]             a song of the vault (no file: choose one)
 med ls                      the songs in the vault
 med demo                    a little song of ours, to try it right away
 med new [tracks] [--empty]  a new song from the template: 8 named tracks (up to 16), drums, synths, a bar
+                            (new, open, demo: a song with changes asks first · --force: no question)
 med save [file]             my-song.bmed (ours, the default) · song.mod · song.med (for other trackers)
+                            a song never saved asks for its name; another song's file asks before replacing it
 med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>
 med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]
 med play [song|block] [position] [line]
@@ -87,9 +109,12 @@ med pos <position> [line]
 med mute <track> · med solo <track>
 med paula on|off            stepped like the Amiga (on, the default), or smooth
 med edit on|off · med step <0–9>
+med view center|edges · med follow on|off · med click on|off   the view, follow, the metronome
 med note <line> <track> <C-3|^^^|---> [instrument] [command]   (line in hex, track from 1)
-med block new [lines] · med block copy · med block lines <n>
-med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>
+med block                   the blocks: their length, the positions that play them (or "not in the sequence")
+med block new [lines] · med block copy · med block lines <n> · med block rm <block>
+med seq                     the sequence: position → block
+med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <pos> up|down
 med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>
 med chord <line> <track> <0–F> · med chords …   (see Chords)
 med echo off | normal|cross [ms] [depth]       (see The echo)
@@ -100,15 +125,24 @@ med effects                 every command, one line each
 med info                    the song's settings and instruments
 ```
 
+Every command says what it did ("tempo 118 BPM", "position 02 → block 001"), and an error names
+what's wrong ("track 9: the song has 4", "instrument 7F: they are 01–3F").
+
 ## Saving
 
 **save** and **save as…** at the end of the tabs row (also in the right-click menu and on START
-after the page was closed), `med save`, `med saveas`. On the page ⌘S saves and ⌘⇧S saves as, once
-the deck hands those keys to modules (ICEBREAKER 0.6.0 keeps ⌘/Ctrl keys but ⌘Z for itself).
+after the page was closed), `med save`, `med saveas`. On the page ⌘S saves and ⌘⇧S saves as
+(ICEBREAKER 0.6.2 hands them to the page). **A save never writes over another song without
+asking**: a song never saved asks for its name (its title, or a free "untitled 2"), and a file that
+holds another song asks before it's replaced. Saved, a note says where, and the top line says
+"✓ saved 23:21". **new, open, demo** and **recover** never replace a song with changes without
+asking either: save them first, don't save (the autosave writes its copy first: `med recover`
+finds it), or cancel. From a script, add `--force`.
 Songs go in `songs/`: the module may only read and write that folder (`vault:read:songs/`,
 `vault:write:songs/`).
 
-Closing the page stops the song; opening it again shows START, with **L continue “…”**.
+Closing the page stops the song; opening it again shows START (even when it was closed on the
+guide), with **L continue “…”**. START's **O open…** says so on the page when songs/ has no song yet.
 
 ## Autosave
 
@@ -131,6 +165,9 @@ the sequence, the instruments and every block line by line, the way the page sho
 sound card's), and writes **WAV** (16 or 24 bits, or 32-bit float), **AIFF** (32-bit float as
 AIFF-C) or **FLAC** (16 / 24 bits, lossless, our own encoder). `--stems` adds **each track on its
 own** (`<name> stems/01 lead.wav`…), `--only-stems` only those, `--tracks 1,3` the ones you say.
+The stems are taken **before the mix's limiter**, so together they add up to the mix (the master
+has the limiter: it never clips). The EXPORT screen starts on **master** only.
+A DC blocker (a 10 Hz high-pass) takes out any offset before the limiter.
 Muted tracks stay muted; the end rings out for `--tail` seconds, then fades; 16 bits get a little
 dither.
 
@@ -158,7 +195,9 @@ screen sets it too. `.bmed` keeps it.
 
 `med new` starts from a template: 8 named tracks (kick, snare, hats, bass, lead, pad, chords, fx), a
 drum machine, an analog bass, lead and pad, an FM e-piano, and a bar written four times, so ⏎ plays
-something at once. `med new 12` gives 12 tracks; `med new --empty` a blank page with the demo's samples.
+something at once. Kick, snare and bass sit in the middle (hats a little right, lead left, pad and
+chords apart), the kick on top of the mix; `--chip` keeps its four tracks near the middle (the NES
+is mono). `med new 12` gives 12 tracks; `med new --empty` a blank page with the demo's samples.
 
 ## Chords
 
@@ -192,8 +231,10 @@ the note written (`med save` says so); `med bounce` keeps a chord's sound as a s
 
 `med sampler` (or START's **S**, a free instrument's "sampler · load a sound…", the menus) loads a
 sound of the vault into a free instrument. `med pack` lists the **starter sound pack**: sampled
-sounds recorded by people, placeholders until someone makes them ([SOUND_DESIGN.md](SOUND_DESIGN.md)
-says which, and how); `med pack load <name>` loads one.
+sounds recorded by people ([SOUND_DESIGN.md](SOUND_DESIGN.md) says which, and how). Until someone
+records one, it loads as a **computed placeholder** ("kick-acoustic (placeholder)", made from our
+drum machine and synths), so the pack is never empty: `med pack load <name>`, or the sampler's list,
+which offers the pack's sounds when songs/ has none of its own.
 
 alt I shows the instrument (alt B the block again): its sound in braille dots, and a button a
 tool. Each runs a `med sample` command (the LOG shows it, ⌘Z undoes it):
@@ -251,7 +292,8 @@ med fm <n|.> new [preset] · preset <name> · set <setting> <value> · show · s
 
 ## The chip synth (chiptune)
 
-One instrument, the sound chips of old consoles and home computers, a mode a chip. Everything is
+One instrument, the sound chips of old consoles and home computers, a mode a chip. Its presets sit
+3 dB under the other synths: a chip voice is all peak, and one alone kept the limiter working. Everything is
 computed from how the chips worked (clocks, period registers, few-bit DACs, noise shift registers):
 no sample or ROM from any machine.
 

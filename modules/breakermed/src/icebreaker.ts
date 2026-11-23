@@ -123,6 +123,9 @@ export interface ListView<T> {
   onSelect?: (item: T, index: number) => void;
   cmdOf?: (item: T) => string | undefined;
   menuOf?: (item: T, index: number) => MenuEntry[];
+  /** drag a row onto another (ICEBREAKER's lists): `target` the row it was dropped on */
+  onDrop?: (item: T, target: T | undefined) => void;
+  tipOf?: (item: T) => string | undefined;
   select(i: number): void;
   render(ui: UI, r: Rect, focused: boolean, drawRow: (item: T, row: Rect, selected: boolean, index: number) => void): void;
 }

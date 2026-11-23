@@ -50,9 +50,18 @@ export class Renderer {
   private tickLeft = 0;
   /** the mix's last stage: loud, never clipping */
   private readonly limiter: Limiter;
-  /** the limiter on (tests of the echo or the mix turn it off to measure them) */
+  /** the mix's last stage on: the DC blocker and the limiter (tests of the echo or the mix turn it off to measure them) */
   limit = true;
   private carry = 0;
+  /** the metronome: a click on each beat (live only: an export never has it) */
+  metronome = false;
+  private click = { left: 0, phase: 0, step: 0, gain: 0 };
+  /** a DC blocker a side, before the limiter (a ~10 Hz high-pass: no offset in the mix) */
+  private dc = { xl: 0, yl: 0, xr: 0, yr: 0, k: 0 };
+  /** each track's last note: when (frame) and how loud (0–1), for the page's meters */
+  hits: { frame: number; vol: number }[] = [];
+  /** the mix after the limiter: its peak and the limiter's least gain since the page last asked */
+  meter = { peak: 0, gain: 1 };
 
   constructor(
     readonly song: Song,
@@ -60,6 +69,7 @@ export class Renderer {
     public paula = true,
   ) {
     this.limiter = new Limiter(rate);
+    this.dc.k = 1 - (2 * Math.PI * 10) / rate;
     // a Butterworth low-pass (two poles) at 3275 Hz, the LED filter's corner
     const w = Math.tan((Math.PI * Math.min(3275, rate * 0.45)) / rate);
     const n = 1 / (1 + Math.SQRT2 * w + w * w);
@@ -94,6 +104,8 @@ export class Renderer {
     this.chordSteps = [];
     this.previews = [];
     this.echoL = this.echoR = null;
+    this.dc = { xl: 0, yl: 0, xr: 0, yr: 0, k: this.dc.k };
+    this.click.left = 0;
   }
 
   private stopAll(): void {
@@ -145,11 +157,49 @@ export class Renderer {
       if (this.song.flags.filter) this.filter(left, right, at, at + span);
       if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
       else if (this.echoL) this.echoL = this.echoR = null; // off: the next echo starts clean
-      if (this.limit) this.limiter.process(left, right, at, at + span);
+      if (this.limit) {
+        this.dcBlock(left, right, at, at + span);
+        const g = this.limiter.process(left, right, at, at + span);
+        if (g < this.meter.gain) this.meter.gain = g;
+      }
+      if (this.click.left > 0) this.clickInto(left, right, at, at + span);
+      for (let i = at; i < at + span; i++) {
+        const a = Math.max(Math.abs(left[i]), Math.abs(right[i]));
+        if (a > this.meter.peak) this.meter.peak = a;
+      }
       at += span;
       this.tickLeft -= span;
     }
     this.frame += n;
+  }
+
+  /** y = x − x₁ + k·y₁ on each side: takes out an offset (DC) a sound may have, and nothing one can hear */
+  private dcBlock(left: Float32Array, right: Float32Array, from: number, to: number): void {
+    const d = this.dc;
+    let { xl, yl, xr, yr } = d;
+    for (let i = from; i < to; i++) {
+      const l = left[i], r = right[i];
+      yl = l - xl + d.k * yl;
+      xl = l;
+      yr = r - xr + d.k * yr;
+      xr = r;
+      left[i] = yl;
+      right[i] = yr;
+    }
+    Object.assign(d, { xl, yl, xr, yr });
+  }
+
+  /** the metronome's click: 25 ms of a sine, higher on the bar's first beat */
+  private clickInto(left: Float32Array, right: Float32Array, from: number, to: number): void {
+    const c = this.click;
+    const len = Math.round(this.rate * 0.025);
+    for (let i = from; i < to && c.left > 0; i++, c.left--) {
+      const env = c.left / len;
+      const x = Math.sin(c.phase) * c.gain * env * env;
+      c.phase += c.step;
+      left[i] += x;
+      right[i] += x;
+    }
   }
 
   /** OctaMED's echo: a delay line a side, fed back softer each time (cross: from one side to the other) */
@@ -209,7 +259,14 @@ export class Renderer {
   private tick(at: number): void {
     const p = this.player!;
     const t = p.step();
-    if (t.line) this.marks.push({ frame: this.frame + at, ...t.line });
+    if (t.line) {
+      this.marks.push({ frame: this.frame + at, ...t.line });
+      const lpb = Math.max(1, this.song.lpb);
+      if (this.metronome && t.line.line % lpb === 0) {
+        const bar = t.line.line % (lpb * 4) === 0;
+        this.click = { left: Math.round(this.rate * 0.025), phase: 0, step: (2 * Math.PI * (bar ? 1760 : 1320)) / this.rate, gain: bar ? 0.35 : 0.22 };
+      }
+    }
     for (const e of t.events) this.apply(e);
     if (t.ended) {
       this.ended = true;
@@ -247,6 +304,8 @@ export class Renderer {
         v.start({ instrument, rate: e.rate ?? 8363, offset: e.offset ?? 0 });
         this.voices[e.voice] = v;
       }
+      // the page's meter: this track just played a note, this loud
+      this.hits[e.voice] = { frame: this.frame, vol: Math.max(0, Math.min(1, (this.song.trackVolume[e.voice] ?? 64) / 64)) };
       // the chord: the old one's notes let go (or ring on), the new one's start with the note
       for (const old of this.chordVoices[e.voice] ?? []) {
         if (!old.on || !old.rings) continue;
