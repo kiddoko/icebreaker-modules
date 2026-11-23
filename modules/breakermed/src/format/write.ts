@@ -5,7 +5,7 @@
  * (`warnings`): more tracks than ProTracker reads, blocks that aren't 64 lines,
  * commands a .mod hasn't got, synths…
  */
-import { withSynthsBaked } from "../dsp/bake";
+import { withAmigaRates, withSynthsBaked } from "../dsp/bake";
 import { NOTE_OFF, periodOf, ptBpmOf, type Song } from "../song";
 import { floatsToS16be, floatsToS8, Writer } from "./bytes";
 
@@ -55,11 +55,22 @@ export function medToMod(song: Song, cmd: number, v: number): [number, number] |
   }
 }
 
+/** what an old format can't keep of the sounds: their own rate, the vintage mode */
+function ratesAndVintage(song: Song): string[] {
+  const out: string[] = [];
+  const rated = song.instruments.filter((i) => i.rate && i.data.length).length;
+  if (rated) out.push(`${rated} sound(s) at their own rate written at the Amiga's (.bmed keeps them as they are)`);
+  const vintage = song.instruments.filter((i) => i.vintage).length;
+  if (vintage) out.push(`the vintage mode of ${vintage} instrument(s) isn't written: their plain sound is (.bmed and the exports keep it)`);
+  return out;
+}
+
 const hasChords = (s: Song) => s.blocks.some((b) => b.cells.some((row) => row.some((c) => c.chord && c.note && c.note !== NOTE_OFF)));
 
 export function writeMod(original: Song): Written {
   const warnings: string[] = [];
-  const { song, baked, drums, lost } = withSynthsBaked(original);
+  const { song, baked, drums, lost } = withSynthsBaked(withAmigaRates(original));
+  warnings.push(...ratesAndVintage(original));
   if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (a .mod holds samples only)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);
@@ -156,7 +167,8 @@ export function writeMod(original: Song): Written {
 
 export function writeMed(original: Song): Written {
   const warnings: string[] = [];
-  const { song, baked, drums, lost } = withSynthsBaked(original);
+  const { song, baked, drums, lost } = withSynthsBaked(withAmigaRates(original));
+  warnings.push(...ratesAndVintage(original));
   if (baked) warnings.push(`${baked} synth(s) written as a sample of their C-3 (OctaMED can't play our synth)`);
   if (drums) warnings.push(`the drum machine: ${drums} drum(s) written as samples of their own`);
   if (lost) warnings.push(`${lost} drum note(s) left out: no free instrument`);

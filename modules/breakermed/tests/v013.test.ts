@@ -354,3 +354,82 @@ describe("0.13 P4: LIM lights from 3 dB of reduction", () => {
     expect(d.draw().screen().split("\n")[0]).not.toMatch(/LIM/);
   });
 });
+
+describe("0.13 D4: a sound keeps its own rate", () => {
+  it("C-3 plays a 48 kHz sound at 48 kHz; .bmed keeps the rate; .mod gets the Amiga's", async () => {
+    const { SampleVoice } = await import("../src/dsp/voice");
+    const { PAULA_CLOCK, newSong, emptyInstrument } = await import("../src/song");
+    const { writeBmed, readBmed } = await import("../src/format/bmed");
+    const { withAmigaRates } = await import("../src/dsp/bake");
+    const { HQ_RATE } = await import("../src/sampler");
+    const ins = { ...emptyInstrument(), kind: "sample" as const, rate: 48000, data: Float32Array.from({ length: 4800 }, (_, i) => i / 4800) };
+    const v = new SampleVoice(48000);
+    v.paula = true;
+    v.start({ instrument: ins, rate: PAULA_CLOCK / 214, offset: 0 });
+    v.set(PAULA_CLOCK / 214, 1, 0);
+    const L = new Float32Array(100), R = new Float32Array(100);
+    v.render(L, R, 0, 100);
+    expect(L[99]).toBeCloseTo(99 / 4800, 4); // one frame of the sound a frame out: its own rate
+    const s = newSong(1);
+    s.instruments = [ins];
+    const files = writeBmed(s);
+    const back = await readBmed(files.find((f) => f.path === "song.json")!.data as string, async (p) => files.find((f) => f.path === p)!.data as Uint8Array);
+    expect(back.instruments[0].rate).toBe(48000);
+    const old = withAmigaRates(s).instruments[0];
+    expect(old.rate).toBeUndefined();
+    expect(old.transpose).toBe(12);
+    expect(old.data.length).toBeCloseTo((4800 * HQ_RATE) / 48000, -1);
+  });
+});
+
+describe("0.13 D4: the vintage mode", () => {
+  it("amiga: 8 bits and the note's own rate; akai: 12 bits at its rate; off: the sound as it was", async () => {
+    const { voiceFor } = await import("../src/dsp/voice");
+    const { emptyInstrument } = await import("../src/song");
+    const sine = Float32Array.from({ length: 48000 }, (_, i) => 0.9 * Math.sin((2 * Math.PI * 1000 * i) / 48000));
+    const base = { ...emptyInstrument(), kind: "sample" as const, rate: 48000, data: sine };
+    const play = (vintage?: { kind: "amiga" | "akai"; rate?: number }, rate = 3546895 / 214) => {
+      const v = voiceFor({ ...base, ...(vintage ? { vintage } : {}) }, 48000, false);
+      v.start({ instrument: base, rate, offset: 0 });
+      v.set(rate, 1, 0);
+      const L = new Float32Array(4800), R = new Float32Array(4800);
+      v.render(L, R, 0, 4800);
+      return L;
+    };
+    const plain = play();
+    const amiga = play({ kind: "amiga" });
+    const akai = play({ kind: "akai" });
+    const diff = (a: Float32Array, b: Float32Array) => a.reduce((m, x, i) => Math.max(m, Math.abs(x - b[i])), 0);
+    expect(diff(plain, amiga)).toBeGreaterThan(0.05);
+    expect(diff(plain, akai)).toBeGreaterThan(0.01);
+    // off: exactly the sound before (no wrapper)
+    expect(voiceFor(base, 48000, false).constructor.name).toBe("SampleVoice");
+  });
+  it("med vintage <n> amiga|akai [rate]|off: undoable, saved in the song, said on the INSTRUMENT screen; alt R goes round", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    expect(await d.med("med vintage 01 amiga")).toBe(0);
+    expect(d.st.song!.instruments[0].vintage).toEqual({ kind: "amiga" });
+    expect(await d.med("med vintage 01 akai 26000")).toBe(0);
+    expect(d.st.song!.instruments[0].vintage).toEqual({ kind: "akai", rate: 26000 });
+    expect(await d.med("med vintage 01 akai 99")).toBe(1);
+    await d.med("med undo");
+    expect(d.st.song!.instruments[0].vintage).toEqual({ kind: "amiga" });
+    await d.med("med vintage 01 off");
+    expect(d.st.song!.instruments[0].vintage).toBeUndefined();
+    d.st.inst = 0;
+    d.press(alt("KeyR"));
+    expect(d.st.song!.instruments[0].vintage?.kind).toBe("amiga");
+    d.press(alt("KeyR"));
+    expect(d.st.song!.instruments[0].vintage?.kind).toBe("akai");
+    d.st.screen = "instrument";
+    expect(d.draw().screen()).toMatch(/vintage/);
+    d.press(alt("KeyR"));
+    expect(d.st.song!.instruments[0].vintage).toBeUndefined();
+    d.answers.push("songs/v.bmed");
+    await d.med("med vintage 02 akai");
+    await d.med("med save");
+    const json = JSON.parse(d.files.get("songs/v.bmed/song.json") as string);
+    expect(json.instruments[1].vintage).toEqual({ kind: "akai" });
+  });
+});

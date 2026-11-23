@@ -14,6 +14,7 @@ import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
+import { AKAI_RATE, AKAI_RATES, VINTAGE_KINDS, VINTAGE_SAID, type VintageKind, type VintageSettings } from "./dsp/vintage";
 import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
 import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, lineNo, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
@@ -604,6 +605,25 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!(n >= 1 && n <= 8)) return ctx.err("med octave 1–8 (the piano's bottom row)\n"), 1;
             st.octave = n - 1;
             ctx.out(`octave ${n}: the keys' bottom row is C-${n}\n`);
+            return 0;
+          }
+          case "vintage": {
+            // med vintage [<n|.>] [amiga | akai [rate] | off]: an instrument heard through an old machine (dsp/vintage.ts)
+            const s = need();
+            const [which, kind, rateS] = rest;
+            const n = which === undefined || which === "." ? st.inst : parseInt(which, 16) - 1;
+            const usage = `med vintage <01–3F|.> amiga | akai [${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz] | off`;
+            if (!(n >= 0 && n < Math.min(63, s.instruments.length))) return ctx.err(`med vintage: instrument ${(which ?? "?").toUpperCase()}: the song has 01–${hex(Math.max(1, s.instruments.length))} · ${usage}\n`), 1;
+            const ins = s.instruments[n];
+            const said = (v: VintageSettings | undefined) => (v ? `${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? AKAI_RATE} Hz)` : ""}` : "off: the sound as it is");
+            if (kind === undefined) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
+            if (kind !== "off" && !VINTAGE_KINDS.includes(kind as VintageKind)) return ctx.err(`med vintage: "${kind}"? ${usage}\n`), 1;
+            const rate = rateS !== undefined ? parseInt(rateS, 10) : undefined;
+            if (rateS !== undefined && (kind !== "akai" || !(rate! >= AKAI_RATES[0] && rate! <= AKAI_RATES[1]))) return ctx.err(`med vintage: a rate is for akai only, ${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz\n`), 1;
+            if (ins.kind === "empty") return ctx.err(`med vintage: instrument ${hex(n + 1)} is empty\n`), 1;
+            const next: VintageSettings | undefined = kind === "off" ? undefined : { kind: kind as VintageKind, ...(rate !== undefined ? { rate } : {}) };
+            st.editor!.instrument(n, "vintage", (i) => (next ? (i.vintage = next) : delete i.vintage));
+            ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(next)}\n`);
             return 0;
           }
           case "ins": {

@@ -223,7 +223,18 @@ export interface Instrument {
   drums?: import("./dsp/drums").DrumKit;
   /** the chip synth's settings (kind "chip") */
   chip?: import("./dsp/chip").ChipParams;
+  /**
+   * a sample's own rate: C-3 plays `data` at this many frames a second (a sound
+   * loaded at 48 kHz stays 48 kHz). None: the Amiga's way (C-3 = 16 574 Hz, the
+   * transpose says the octave). .mod / .med get the Amiga's way when saved.
+   */
+  rate?: number;
+  /** the vintage mode: heard through an Amiga's Paula or an old Akai sampler (dsp/vintage.ts) */
+  vintage?: import("./dsp/vintage").VintageSettings;
 }
+
+/** a sample's frames a second when C-3 plays it (its own rate, or the Amiga's and its transpose) */
+export const heardRate = (i: Pick<Instrument, "rate" | "transpose">) => (i.rate ?? PAULA_CLOCK / 214) * 2 ** (i.transpose / 12);
 
 export function emptyCell(pages = 1): Cell {
   return { note: 0, inst: 0, cmd: new Array(pages).fill(0), val: new Array(pages).fill(0) };

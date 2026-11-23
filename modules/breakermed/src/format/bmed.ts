@@ -11,6 +11,7 @@
  * chords later) lives here; .med and .mod stay for sharing with other trackers.
  */
 import { cleanEcho, DEFAULT_CHORDS, MAX_STRUM_MS, emptyCell, emptyInstrument, hex, MAX_CHORD_NOTES, newBlock, NOTE_NAMES, NOTE_OFF, amigaPan, type Instrument, type Song, type TempoMode } from "../song";
+import { cleanVintage, type VintageSettings } from "../dsp/vintage";
 import { readWav, writeWav } from "./wav";
 import { sanitizeAnalog, type AnalogParams } from "../dsp/analog";
 import { sanitizeKit, type DrumKit } from "../dsp/drums";
@@ -52,6 +53,10 @@ interface InstrumentJson {
   chip?: ChipParams;
   /** a drum machine's kit */
   drums?: DrumKit;
+  /** a sample's own rate (Hz at C-3); none: the Amiga's way */
+  rate?: number;
+  /** the vintage mode */
+  vintage?: VintageSettings;
 }
 
 /** a note as text: "C-3", "^^^" (off), "---" (none); past octave 9, "N7F" (hex) */
@@ -79,15 +84,18 @@ function parseNoteText(s: string): number {
 export function writeBmed(song: Song, written?: (path: string, data: Float32Array) => boolean): SongFile[] {
   const files: SongFile[] = [];
   const sampleRate = 8363; // a sample has no rate of its own in a tracker: its notes give the pitch
-  const wav = (path: string, data: Float32Array) => {
-    if (!written?.(path, data)) files.push({ path, data: writeWav({ rate: sampleRate, channels: [data] }, 16) });
+  // a sound with its own rate is written at that rate (a WAV that opens anywhere as it sounds)
+  const wav = (path: string, data: Float32Array, rate = sampleRate) => {
+    if (!written?.(path, data)) files.push({ path, data: writeWav({ rate: Math.round(rate), channels: [data] }, 16) });
     return path;
   };
   const instruments: InstrumentJson[] = song.instruments.map((ins, i) => {
     const n = String(i + 1).padStart(2, "0");
     const j: InstrumentJson = { name: ins.name, kind: ins.kind, loopStart: ins.loopStart, loopLength: ins.loopLength, volume: ins.volume };
-    if (ins.kind !== "empty" && ins.data.length) j.file = wav(`samples/${n}.wav`, ins.data);
-    if (ins.right?.length) j.right = wav(`samples/${n}-right.wav`, ins.right);
+    if (ins.kind !== "empty" && ins.data.length) j.file = wav(`samples/${n}.wav`, ins.data, ins.rate);
+    if (ins.right?.length) j.right = wav(`samples/${n}-right.wav`, ins.right, ins.rate);
+    if (ins.rate) j.rate = ins.rate;
+    if (ins.vintage) j.vintage = { ...ins.vintage };
     if (ins.waves?.length) j.waves = ins.waves.map((w, k) => wav(`samples/${n}-wave${k}.wav`, w));
     if (ins.pingPong) j.pingPong = true;
     if (ins.gain !== 1) j.gain = ins.gain;
@@ -176,6 +184,9 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
     ins.hold = num(ij.hold, 0, 0, 255);
     ins.decay = num(ij.decay, 0, 0, 255);
     ins.bits16 = !!ij.bits16;
+    if (typeof ij.rate === "number" && ij.rate >= 1000 && ij.rate <= 192000) ins.rate = ij.rate;
+    const vintage = cleanVintage(ij.vintage);
+    if (vintage) ins.vintage = vintage;
     if (Array.isArray(ij.volTable)) (ins.volTable = ij.volTable), (ins.waveTable = ij.waveTable ?? []), (ins.volSpeed = ij.volSpeed), (ins.waveSpeed = ij.waveSpeed);
     if (ins.kind === "analog") ins.synth = sanitizeAnalog(ij.synth);
     else if (ins.kind === "drums") ins.drums = sanitizeKit(ij.drums);

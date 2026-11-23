@@ -77,12 +77,14 @@ describe("breakerMED: reading sounds", () => {
     expect(s.channels[0][0]).toBe(0.5);
   });
 
-  it("an imported sound becomes mono at the HQ rate, an octave up (C-3 plays it as recorded)", async () => {
+  it("an imported sound becomes mono and keeps its own rate (0.13, D4: C-3 plays it as recorded)", async () => {
     const wav = writeWav({ rate: 44100, channels: [new Float32Array(44100).fill(0.5), new Float32Array(44100).fill(-0.5)] }, 16);
     const ins = await readSample(wav, "drums/kick.wav");
     expect(ins.name).toBe("kick");
-    expect(ins.transpose).toBe(12);
-    expect(ins.data.length).toBeCloseTo(HQ_RATE, -2);
+    expect(ins.transpose).toBe(0);
+    expect(ins.rate).toBe(44100);
+    expect(ins.data.length).toBe(44100);
+    expect((await readSample(wav, "k.wav", undefined, true)).data.length).toBeCloseTo(HQ_RATE / 2, -2);
     expect(Math.abs(ins.data[100])).toBeLessThan(1e-3); // left and right averaged
   });
 });

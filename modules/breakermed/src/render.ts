@@ -311,8 +311,9 @@ export class Renderer {
       } else {
         // what was playing on the track rings on (a synth's release, a drum's tail), then the new note
         if (old?.on && old.rings) {
-          if (!(old instanceof DrumVoice)) old.stop(); // a synth releases; a drum rings out as it is
-          if (old instanceof DrumVoice && instrument.kind === "drums" && old.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) old.kill();
+          const was = coreOf(old);
+          if (!(was instanceof DrumVoice)) old.stop(); // a synth releases; a drum rings out as it is
+          if (was instanceof DrumVoice && instrument.kind === "drums" && was.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) (old as Voice & { kill?: () => void }).kill ? (old as Voice & { kill: () => void }).kill() : was.kill();
           if (old.on && this.tails.length < 32) this.tails.push(old);
         }
         const v = voiceFor(instrument, this.rate, this.paula) as Voice & { instrument?: unknown };
@@ -325,14 +326,15 @@ export class Renderer {
       // the chord: the old one's notes let go (or ring on), the new one's start with the note
       for (const old of this.chordVoices[e.voice] ?? []) {
         if (!old.on || !old.rings) continue;
-        if (!(old instanceof DrumVoice || (old instanceof Strummed && old.inner instanceof DrumVoice))) old.stop();
+        if (!(coreOf(old) instanceof DrumVoice)) old.stop();
         if (old.on && this.tails.length < 32) this.tails.push(old);
       }
       let steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
       // a chip with its arpeggio on plays the chord itself, one note after the other (the chiptune way)
       const main = this.voices[e.voice];
-      if (steps.length && main instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
-        main.arpeggio(steps);
+      const chip = coreOf(main);
+      if (steps.length && chip instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
+        chip.arpeggio(steps);
         steps = [];
       }
       this.chordSteps[e.voice] = steps;
@@ -360,6 +362,13 @@ export class Renderer {
     v.set(s.lastRate, s.lastVol * k, s.lastPan);
     chord.forEach((cv, i) => cv.set(s.lastRate! * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol! * k, s.lastPan!));
   }
+}
+
+/** the voice inside its wrappers (a strum, the vintage mode): what kind of sound it is */
+export function coreOf(v: Voice | null | undefined): Voice | null | undefined {
+  let x = v;
+  while (x && "inner" in x && (x as { inner?: Voice }).inner) x = (x as { inner: Voice }).inner;
+  return x;
 }
 
 /** A chord's note that starts `wait` frames late (a strum): silent until then, the same voice after. */

@@ -34,10 +34,11 @@ import { nudgeIn, showIn } from "./dsp/params";
 import { settingsOf, synthOf, type SynthKind } from "./synths";
 import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, drumKit, nudgeDrum } from "./dsp/drums";
 import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "./screens";
+import { VINTAGE_SAID } from "./dsp/vintage";
 import { describe, makeGuide } from "./guide";
 import { makeStart } from "./start";
 import type { Autosave } from "./autosave";
-import { chordsOf, hex, lineNo, MAX_NOTE, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
+import { chordsOf, heardRate, hex, lineNo, MAX_NOTE, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
   song: Song | null;
@@ -384,6 +385,14 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const ins = s.instruments[st.inst];
     const n = hex(st.inst + 1);
     const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
+    // the vintage mode, on the frame's top right: a click (or alt R) goes round off → amiga → akai (D4)
+    if (ins && ins.kind !== "empty") {
+      const v = ins.vintage;
+      const label = v ? `◆ ${t("vintage")} ${v.kind}${v.kind === "akai" && v.rate ? ` ${Math.round(v.rate / 100) / 10} kHz` : ""}` : `${t("vintage")} ${t("off")}`;
+      const next = !v ? "amiga" : v.kind === "amiga" ? "akai" : "off";
+      const bx = r.x + r.w - label.length - 4;
+      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt R")}: ${next}` });
+    }
     const sk = synthOf(ins);
     if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
     if (ins?.kind === "drums" && ins.drums) return drawDrums(ui, inner, focused);
@@ -429,8 +438,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       cells.forEach((bits, k) => bits && ui.text(inner.x + 1 + cx, inner.y + k, String.fromCharCode(0x2800 + bits), { fg: inLoop ? c.accentAlt : c.accent }));
     }
     let y = inner.y + waveH;
-    const secs = d.length / (16574 * (ins.transpose >= 12 ? 2 : 1));
-    ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
+    const secs = d.length / heardRate(ins);
+    ui.text(inner.x + 1, y++, `${d.length} ${t("frames")} · ~${secs.toFixed(2)} s ${t("at C-3")}${ins.rate ? ` · ${(ins.rate / 1000).toFixed(1)} kHz` : ""} · vol ${ins.volume} · fine ${ins.finetune} · ${t("transpose")} ${ins.transpose}${ins.loopLength ? ` · ${t("loop")} ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ↔" : ""}` : ""}${s.flags.filter ? ` · ${t("LED filter")}` : ""}`, { fg: c.muted }, inner.w - 2);
     y++;
     const tools: [string, string, string][] = [
       ["load…", `med sample ${n} load`, "replace this sound with a file in songs/"],
@@ -1042,6 +1051,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyN": return unselect(), run(`med seq new ${hex(st.seq)}`), true;
           case "KeyD": return unselect(), run(`med seq copy ${hex(st.seq)}`), true;
           case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${hex(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
+          // the vintage mode of the instrument the keys play: off → amiga → akai → off (D4)
+          case "KeyR": {
+            const ins = s.instruments[st.inst];
+            if (!ins || ins.kind === "empty") return ib.ui.notify(t("an empty instrument: nothing to make vintage"), "warning"), true;
+            const next = !ins.vintage ? "amiga" : ins.vintage.kind === "amiga" ? "akai" : "off";
+            return run(`med vintage ${hex(st.inst + 1)} ${next}`), true;
+          }
           case "KeyL": return selectTrack(), true;
           case "KeyK": return selectBlock(), true;
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
