@@ -471,12 +471,12 @@ describe("0.13 Windows bench (61d6e29)", () => {
     await settle();
     expect(d.st.song!.instruments[0].vintage?.kind).toBe("akai");
   });
-  it("the shell's lines dodge the deck's own '{n} tracks' (it made them '8 morceaux')", async () => {
+  // 0.13.1: the deck reads the module's own table first since ICEBREAKER 0.7.2 (« 8 pistes »):
+  // med new's line has its numbers first again (tests/v0131.test.ts); med tracks still says "tracks: 4"
+  it("med tracks says 'tracks: 4'", async () => {
     const d = makeDeck();
     await d.med("med new");
     await d.med("med tracks 4");
-    expect(d.log).not.toMatch(/(^|· )\d+ tracks?( ·|\n)/m);
-    expect(d.log).toMatch(/tracks 8 ·/);
     expect(d.log).toMatch(/tracks: 4\n/);
   });
   it("⇧Space and ⇧Tab are written whole (the deck's keycaps took '⇧s' of '⇧space')", async () => {

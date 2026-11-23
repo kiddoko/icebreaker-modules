@@ -19,7 +19,7 @@
  *   delete clear · ⌫ delete the line · alt ⏎ / insert a line (⇧: in every track)
  *   alt ↑↓ octave · alt ←→ instrument · alt 0–9 edit step · alt L / K select the track / block
  *   alt C / X / V copy cut paste · alt PgUp / PgDn (alt Q / A) transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
- *   alt M mute · ⇧alt M solo · alt N / D / ⌫ the sequence · alt F follow · alt Y vintage · ⌘S ⌘⇧S save
+ *   alt M mute · ⇧alt M solo · alt N / D / ⌫ the sequence · alt F follow · alt T vintage · ⌘S ⌘⇧S save
  *   the chord column (when the song has chords): one digit, 1–F of the song's table
  *
  * The tabs over the right side (or alt B / I / S / E): the BLOCK; the INSTRUMENT
@@ -140,6 +140,8 @@ export const sameSettings = (a: unknown, b: unknown) => stable(a) === stable(b);
 
 export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
+  // a song never named is "untitled" in its file; on the page it's said in the deck's language
+  const shownTitle = (title: string) => (/^untitled( \d+)?$/i.test(title) ? title.replace(/^untitled/i, t("untitled")) : title);
   const run = (line: string) => void ib.shell.run(line);
   const seqList = new ListView<number>();
   const instList = new ListView<number>();
@@ -377,13 +379,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const ins = s.instruments[st.inst];
     const n = hex(st.inst + 1);
     const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
-    // the vintage mode, on the frame's top right: a click (or alt Y) goes round off → amiga → akai (D4)
+    // the vintage mode, on the frame's top right: a click (or alt T) goes round off → amiga → akai (D4)
     if (ins && ins.kind !== "empty") {
       const v = ins.vintage;
       const label = v ? `◆ ${t("vintage")} ${v.kind}${v.kind === "akai" && v.rate ? ` ${Math.round(v.rate / 100) / 10} kHz` : ""}` : `${t("vintage")} ${t("off")}`;
       const next = !v ? "amiga" : v.kind === "amiga" ? "akai" : "off";
       const bx = r.x + r.w - label.length - 4;
-      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt Y")}: ${next}` });
+      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt T")}: ${next}` });
     }
     const sk = synthOf(ins);
     if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
@@ -689,7 +691,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       await a?.flush();
       // a song never saved: "this new song" (0.12.2), like med new / open
       const fresh = !st.path.startsWith("songs/");
-      const name = fresh ? t("this new song") : `“${st.song.title || st.path.split("/").pop() || "untitled"}”`;
+      const name = fresh ? t("this new song") : `“${shownTitle(st.song.title || st.path.split("/").pop() || "untitled")}”`;
       const pick = await ib.ui.choose(`${t("save the changes to")} ${name}?`, [{ label: t("save") }, { label: t("don't save") }, { label: t("cancel: back to the song") }]);
       if (pick === 0) return (await ib.shell.run("med save")) === 0;
       if (pick === 1) {
@@ -712,7 +714,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (st.screen === "instrument") {
         const ins = st.song.instruments[st.inst];
         const keys = ins?.kind === "drums" ? t("↑↓ a drum · ←→ a setting · ⇧←→ its value") : synthOf(ins) ? t("↑↓ a setting · ←→ its value") : t("alt ←→ another instrument");
-        return `${where} · ${t("the keys play it")} · ${keys} · alt B ${t("the block")}`;
+        const vintage = ins && ins.kind !== "empty" ? ` · alt T ${t("vintage")}` : "";
+        return `${where} · ${t("the keys play it")} · ${keys}${vintage} · alt B ${t("the block")}`;
       }
       const transport = engine.playing
         ? st.edit ? `● ${t("rec")} · ${t("space")} ${t("stop")}` : `${t("space")} ${t("stop")}`
@@ -732,7 +735,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         st.line = now.line;
       }
       // ── the top line: the name, then the state and the settings, each one clickable (a tip says what and its key) ──
-      const name = s ? s.title || st.path.split("/").pop() || "" : "";
+      const name = s ? shownTitle(s.title || st.path.split("/").pop() || "") : "";
       let x = ui.text(r.x + 1, r.y, "BreakerMED", { fg: c.accent, attrs: BOLD });
       x = ui.text(x + 1, r.y, "β", { fg: c.warning });
       if (s) {
@@ -806,7 +809,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         // no song (or the page was closed): the logo and START (or the guide, which needs no song)
         const page = { x: r.x, y: r.y + 1, w: r.w, h: r.h - 1 };
         if (st.screen !== "guide") lookRescue();
-        start.setSong(s ? { title: s.title || st.path.split("/").pop() || "untitled", dirty: !!st.editor?.dirty } : null);
+        start.setSong(s ? { title: shownTitle(s.title || st.path.split("/").pop() || "untitled"), dirty: !!st.editor?.dirty } : null);
         return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
       }
       clampCursor();
@@ -818,7 +821,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       seqList.items = s.sequence.map((_, i) => i);
       if (seqList.selected !== st.seq) seqList.select(st.seq);
       // its columns, and the blocks no position plays (a click: add or delete them)
-      ui.text(seqBox.x, seqBox.y, "pos    block", { fg: c.subtle });
+      ui.text(seqBox.x, seqBox.y, t("pos    block"), { fg: c.subtle }, seqBox.w);
       const free = s.blocks.length - new Set(s.sequence).size;
       const listBox = { x: seqBox.x, y: seqBox.y + 1, w: seqBox.w, h: Math.max(1, seqBox.h - 1 - (free > 0 ? 1 : 0)) };
       seqList.render(ui, listBox, false, (i, row, sel) => {
@@ -1045,8 +1048,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyD": return unselect(), run(`med seq copy ${dec(st.seq)}`), true;
           case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${dec(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
           // the vintage mode of the instrument the keys play: off → amiga → akai → off (D4)
-          // alt Y everywhere; alt R too where nothing takes it first (on Windows the GPU overlays,
-          // NVIDIA's and AMD's, keep Alt+R for themselves: the page never gets it)
+          // alt T: the same key in the same place on QWERTY, QWERTZ and AZERTY, and no GPU overlay
+          // takes it. 0.13.0's alt Y / alt R didn't reach the page on Windows: AMD's and NVIDIA's
+          // overlays keep Alt+R and Alt+Z, and on a QWERTZ keyboard the Y key sits on KeyZ. They
+          // still work where they arrive (a Mac), unsaid.
+          case "KeyT":
           case "KeyY":
           case "KeyR": {
             const ins = s.instruments[st.inst];

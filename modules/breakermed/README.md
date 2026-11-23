@@ -21,7 +21,7 @@ It reads and writes **.bmed** (its own: a folder that keeps everything), **.med*
 - **`vault:write:songs/`**: it saves your songs in `songs/` (`med save`, and the autosave's copies in `songs/.recovery/`).
 - Nothing online, no account, no AI. ICEBREAKER **0.6.0** or later (on an older deck it says so and
   stays off) · **0.6.2** hands ⌘S and tab to the page · **0.7.0** F1–F8, ⌘←→, ⇧Tab and an autosave
-  that never asks. MP3 / M4A / OGG / Opus exports need the encoder pack (below).
+  that never asks · **0.7.2** its shell lines in French with its own words ("8 pistes"). MP3 / M4A / OGG / Opus exports need the encoder pack (below).
 
 > **Beta.** Everything below works and was tested on macOS and Windows; it may still have rough
 > edges. Tell us what breaks (the deck's Issues on GitHub).
@@ -85,7 +85,7 @@ alt L · alt K   select the track · the whole block
 alt PgUp / PgDn transpose up / down a semitone (⇧: an octave), the same on every keyboard (alt Q / A too)
 alt M · ⇧ alt M   mute the cursor's track · solo it (again: back)
 alt N · alt D · alt ⌫   a new block after this position · a copy of this block after it · remove the position
-alt Y        the instrument's vintage mode: off → amiga → akai (alt R too, where Windows lets it through; see Vintage)
+alt T        the instrument's vintage mode: off → amiga → akai (the same key on QWERTY, QWERTZ, AZERTY; see Vintage)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps): notes, blocks, instruments, the song's settings
              (tempo, swing, echo…), mutes; the cursor goes where it changed back; one field typed is one undo
 ⌘S · ⌘⇧S     save · save as…
@@ -137,7 +137,7 @@ med key <C-3> [instrument]   hear a note (nothing is written: the piano's keys d
 med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page
 med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>
 med paula on|off           stepped like the Amiga (on), or smooth
-med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt Y)
+med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt T)
 med edit on|off            typing writes in the block (space on the page)
 med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges
 med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)
@@ -317,7 +317,7 @@ med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8
 
 ## Vintage
 
-Any instrument (a sound, a synth, a kit) can be heard through an old machine: **alt Y** (or the
+Any instrument (a sound, a synth, a kit) can be heard through an old machine: **alt T** (or the
 "vintage" button at the top right of the INSTRUMENT screen) goes off → amiga → akai → off, and
 `med vintage <n> amiga | akai [rate] | off` does it from the shell. Only the sound changes: the
 instrument's frames, its notes and the song stay as they are (off: exactly the sound before).
@@ -328,6 +328,10 @@ instrument's frames, its notes and the song stay as they are (off: exactly the s
 - **akai** — an S900 / S950-style sampler: 12 bits at a fixed, lower rate (22 050 Hz by default,
   `med vintage 01 akai 15000` for more grit, 7 500–40 000), no anti-alias filter in front, a gentle
   2-pole after it.
+
+Why T (0.13.0 had Y, and R before it): on Windows, AMD's and NVIDIA's overlays keep
+Alt+R and Alt+Z for themselves, and on a Swiss or German QWERTZ keyboard the key marked Y is where
+QWERTY has its Z; T is the same key in the same place on QWERTY, QWERTZ and AZERTY.
 
 `.bmed` keeps it, and the WAV / FLAC / MP3… exports are what you hear. `.mod` and `.med` can't hold
 it: they get the plain sound (`med save` says so).

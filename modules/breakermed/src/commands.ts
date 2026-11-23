@@ -57,7 +57,7 @@ export const USAGE: string[] = [
   "med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page",
   "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
   "med paula on|off           stepped like the Amiga (on), or smooth",
-  "med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt Y)",
+  "med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt T)",
   "med edit on|off            typing writes in the block (space on the page)",
   "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
   "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
@@ -293,7 +293,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     st.error = "";
     await engine.load(song);
     const len = songLength(song);
-    ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · tracks ${song.tracks} · blocks ${song.blocks.length} · positions ${song.sequence.length} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+    // the numbers first, each word in the singular for one: the deck reads "8 tracks" with this module's
+    // own table first (ICEBREAKER 0.7.2: « 8 pistes », not its music's « 8 morceaux »)
+    const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+    const title = /^untitled( \d+)?$/i.test(song.title) ? song.title.replace(/^untitled/i, t("untitled")) : song.title || path;
+    const used = song.instruments.filter((i) => i.kind !== "empty").length;
+    ctx.out(`${fmt.green("♫")} ${title}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · ${count(song.tracks, "track")} · ${count(song.blocks.length, "block")} · ${count(song.sequence.length, "position")} · ${count(used, "instrument")} · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
   };
 
   /** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */

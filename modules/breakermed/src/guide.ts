@@ -176,7 +176,7 @@ export const GUIDE: GuidePart[] = [
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
       ["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
-      ["alt Y · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
+      ["alt T · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
     ],
   },
   {
@@ -207,7 +207,10 @@ export function makeGuide(ib: IcebreakerAPI) {
     const all = lines();
     height = Math.max(1, inner.h - 1);
     scroll = Math.max(0, Math.min(scroll, all.length - height));
-    const keyW = Math.min(22, Math.max(10, Math.floor(inner.w / 3)));
+    // the keys' column as wide as its widest key once the deck has said it (⌘⇧S is Ctrl+Shift+S on
+    // Windows: it was cut to « Ctrl+Sh… »), up to 40% of the guide
+    const widest = Math.max(...all.map((row) => ("keys" in row ? [...t(row.keys)].length : 0)));
+    const keyW = Math.max(10, Math.min(widest + 1, Math.floor(inner.w * 0.4)));
     for (let k = 0; k < height && scroll + k < all.length; k++) {
       const row = all[scroll + k], y = inner.y + k;
       if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", { fg: c.accent, attrs: BOLD }, inner.w - 2);
