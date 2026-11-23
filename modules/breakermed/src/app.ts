@@ -37,7 +37,7 @@ import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "
 import { describe, makeGuide } from "./guide";
 import { makeStart } from "./start";
 import type { Autosave } from "./autosave";
-import { chordsOf, hex, lineNo, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
+import { chordsOf, hex, lineNo, MAX_NOTE, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
   song: Song | null;
@@ -99,6 +99,15 @@ export function undoRedo(st: State, redo: boolean): string | null {
   if (!s || !e) return null;
   const had = s.instruments[st.inst] && s.instruments[st.inst].kind !== "empty";
   const label = redo ? e.redo() : e.undo();
+  // the cursor goes to what changed back (I9): its line and track, at a position playing that block
+  const at = label ? e.lastSpot : null;
+  if (at && s.blocks[at.block]) {
+    if (s.sequence[st.seq] !== at.block) {
+      const pos = s.sequence.indexOf(at.block);
+      if (pos >= 0) st.seq = pos;
+    }
+    if (s.sequence[st.seq] === at.block) (st.line = at.line), (st.track = Math.min(s.tracks - 1, at.track));
+  }
   const now = s.instruments[st.inst];
   if (had && (!now || now.kind === "empty")) {
     let k = Math.min(st.inst, s.instruments.length - 1);
@@ -146,9 +155,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       { label: t("move down"), cmd: `med seq move ${hex(i)} down`, disabled: i >= n - 1 },
       "-",
       { label: t("add a position after it, same block"), cmd: `med seq add ${hex(s?.sequence[i] ?? 0, 3)}` },
-      { label: t("insert a new block here"), cmd: `med seq new ${hex(i)}` },
-      { label: t("insert a copy of this block"), cmd: `med seq copy ${hex(i)}` },
-      { label: t("remove this position"), cmd: `med seq rm ${hex(i)}`, danger: true, disabled: n <= 1 },
+      { label: t("a new block after it"), hint: "alt N", cmd: `med seq new ${hex(i)}` },
+      { label: t("a copy of this block after it"), hint: "alt D", cmd: `med seq copy ${hex(i)}` },
+      { label: t("remove this position"), hint: "alt ⌫", cmd: `med seq rm ${hex(i)}`, danger: true, disabled: n <= 1 },
     ];
   };
   seqList.tipOf = () => t("click: go there · double-click: play from here · wheel on the block: another block · drag: move it · right-click: more");
@@ -363,7 +372,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (!cmd && !val) return k.kind === "cmd" || k.kind === "val" ? ` · ${t("a command: 4 hex digits (? the list)")}` : "";
     return ` · ${describe(cmd, val, s, t)}`;
   };
-  const transpose = (semis: number) => ed()?.transpose(target(), semis);
+  const transpose = (semis: number) => {
+    if (ed() && !ed()!.transpose(target(), semis)) ib.ui.notify(t("a note would go past C-1…B-9: nothing moved"), "warning");
+  };
   const say = (label: string | null, what: string) => ib.ui.notify(label ? `${what}: ${t(label)}` : t("nothing to undo"));
 
   /** The INSTRUMENT screen: the sound drawn in braille dots (the loop lit), what it is, a button a tool. */
@@ -621,7 +632,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     "-",
     { label: t("insert a line"), hint: "alt ⏎", cmd: "med line insert" },
     { label: t("delete the line"), hint: "⌫ (edit mode)", cmd: "med line delete" },
-    { label: t("mute / unmute this track"), cmd: `med mute ${track + 1}` },
+    { label: t("mute / unmute this track"), hint: "alt M", cmd: `med mute ${track + 1}` },
+    { label: t("solo this track"), hint: "⇧ alt M", cmd: `med solo ${track + 1}` },
     { label: st.edit ? t("edit mode off") : t("edit mode on"), hint: "space", cmd: `med edit ${st.edit ? "off" : "on"}` },
     { label: st.follow ? t("follow the song: off") : t("follow the song: on"), hint: "alt F", cmd: `med follow ${st.follow ? "off" : "on"}` },
     { label: st.metronome ? t("metronome off") : t("metronome on"), cmd: `med click ${st.metronome ? "off" : "on"}` },
@@ -750,11 +762,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           // the peak falls 12 dB a second; a new one replaces it at once
           meterPeak = Math.max(m.peak, meterPeak * 10 ** ((-12 * Math.max(0, ms - meterAt)) / 20000));
           meterAt = ms;
-          if (m.limitDb > 1) limUntil = ms + 1500; // LIM stays lit 1.5 s after the limiter worked
+          if (m.limitDb > 3) limUntil = ms + 1500; // LIM stays lit 1.5 s after the limiter worked
           const meterLim = ms < limUntil;
           const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
           const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
-          parts.push({ k: 1, label: `${"▮".repeat(n)}${"▯".repeat(6 - n)}${meterLim ? " LIM" : ""}`, style: { fg: meterLim ? c.warning : c.success }, hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") } });
+          parts.push({ k: 1, label: `${"▮".repeat(n)}${"▯".repeat(6 - n)}${meterLim ? " LIM" : ""}`, style: { fg: meterLim ? c.warning : c.success }, hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down 3 dB or more, so it never clips") } });
         } else (meterPeak = 0), (limUntil = 0);
         parts.push({ k: 0, label: tempo, style: { fg: c.fg }, hit: { cmd: "med screen song", tip: t("the tempo · the wheel changes it · click: the SONG screen"), onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`) } });
         parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
@@ -985,6 +997,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (k.key === "enter" && !k.alt) return run(`med play ${k.shift ? "block" : "song"} ${hex(st.seq)}`), true;
       if (k.key === "space") {
         if (engine.playing) run("med stop");
+        // a long sound ringing from a key: space silences it first (I5)
+        else if (!k.shift && engine.hush()) return true;
         // ⇧space: from the cursor's line (OctaMED's "continue")
         else if (k.shift) run(`med play song ${hex(st.seq)} ${st.line}`);
         else run(`med edit ${st.edit ? "off" : "on"}`);
@@ -1023,6 +1037,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "PageDown":
           case "KeyA": return transpose(k.shift ? -12 : -1), true;
           case "KeyF": return run(`med follow ${st.follow ? "off" : "on"}`), true;
+          // mute / solo the cursor's track, the sequence (D3): what the mouse and med do, by key
+          case "KeyM": return run(`med ${k.shift ? "solo" : "mute"} ${st.track + 1}`), true;
+          case "KeyN": return unselect(), run(`med seq new ${hex(st.seq)}`), true;
+          case "KeyD": return unselect(), run(`med seq copy ${hex(st.seq)}`), true;
+          case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${hex(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
           case "KeyL": return selectTrack(), true;
           case "KeyK": return selectBlock(), true;
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
@@ -1080,6 +1099,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           if (st.sel) e.clearSelection(st.sel), unselect();
           else e.clear(blockNo(), st.line, st.track, st.col), advance();
           return true;
+        // insert (PC keyboards): a line, like alt ⏎ — in edit mode, like delete
+        case "insert":
+          if (!st.edit) return true;
+          e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
+          return true;
         case "backspace":
           if (!st.edit) return true;
           e.deleteLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
@@ -1111,7 +1135,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       if (semi !== null) {
         if (k.repeat) return true;
         preview(st.octave * 12 + semi);
-        if (st.edit && kind === "note") typeNote(st.octave * 12 + semi + 1);
+        if (st.edit && kind === "note") {
+          const note = st.octave * 12 + semi + 1;
+          // the top row in octave 8 reaches past B-9: not written (P5)
+          if (note > MAX_NOTE) ib.ui.notify(t("B-9 is the highest note"), "warning");
+          else typeNote(note);
+        }
         return true;
       }
       return false;

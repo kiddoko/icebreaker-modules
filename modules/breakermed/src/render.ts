@@ -37,7 +37,7 @@ export class Renderer {
   ended = false;
   private player: Player | null = null;
   private voices: (Voice | null)[] = [];
-  private previews: { voice: Voice; until: number; released?: boolean }[] = [];
+  private previews: { voice: Voice; inst: number; until: number; released?: boolean }[] = [];
   /** voices still releasing after their track moved on (a synth's tail) */
   private tails: Voice[] = [];
   /** each track's chord: the extra voices over its note, and their intervals */
@@ -96,6 +96,16 @@ export class Renderer {
   }
 
   /** Everything quiet now: no song, no note ringing, no echo (the deck silenced us). */
+  /** what the keys play, let go (space when stopped) */
+  hush(): void {
+    for (const p of this.previews) if (p && !p.released) (p.voice.stop(), (p.released = true));
+  }
+
+  /** a key still ringing */
+  get ringing(): boolean {
+    return this.previews.some((p) => p && !p.released && p.voice.on);
+  }
+
   silence(): void {
     this.player = null;
     this.voices = [];
@@ -127,16 +137,22 @@ export class Renderer {
     return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on)) || this.echoing();
   }
 
-  /** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
-  preview(inst: number, rate: number, seconds = 0.6): void {
+  /**
+   * A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the
+   * deck). Unsaid: a sample with no loop plays to its end (30 s at most), a looped one or a
+   * synth 1.5 s, a drum rings out. A new key on the same instrument stops its last one.
+   */
+  preview(inst: number, rate: number, seconds?: number): void {
     const instrument = this.song.instruments[inst];
     if (!instrument || instrument.kind === "empty") return;
     if (instrument.kind === "drums") seconds = 10; // a drum isn't held: it rings out on its own
+    seconds ??= instrument.kind === "sample" && !instrument.loopLength && instrument.data.length ? Math.min(30, instrument.data.length / Math.max(1, rate)) : 1.5;
+    for (const p of this.previews) if (p && p.inst === inst && !p.released) (p.voice.stop(), (p.released = true));
     const slot = this.nextPreview++ % PREVIEWS;
     const voice = voiceFor(instrument, this.rate, this.paula);
     voice.start({ instrument, rate, offset: 0 });
     voice.set(rate, PREVIEW_GAIN * instrument.gain * (instrument.volume / 64), 0);
-    this.previews[slot] = { voice, until: this.frame + Math.round(seconds * this.rate) };
+    this.previews[slot] = { voice, inst, until: this.frame + Math.round(seconds * this.rate) };
   }
 
   /** The next `n` frames, added into left / right (they start at zero). */

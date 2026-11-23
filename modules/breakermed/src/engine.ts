@@ -92,6 +92,13 @@ export class Engine {
     this.r?.silence();
   }
 
+  /** the keys' notes let go (space, stopped) · true: something was ringing */
+  hush(): boolean {
+    const was = !!this.r?.ringing;
+    this.r?.hush();
+    return was;
+  }
+
   /** The line being heard now (null when stopped). */
   current(): Position | null {
     const r = this.r;

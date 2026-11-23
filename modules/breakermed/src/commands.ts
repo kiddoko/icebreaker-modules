@@ -72,14 +72,18 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     else if (/\.(med|mmd1)$/i.test(p)) ({ warnings } = await writeOut(p, writeMed(s)));
     else {
       const dir = /\.bmed$/i.test(p) ? p : `${p}.bmed`;
-      await ib.vault.mkdir(`${dir}/samples`).catch(() => {});
-      for (const f of writeBmed(s)) {
+      // the song's folder and song.json first: the deck's first question names the song, not samples/ (P9)
+      const files = writeBmed(s).sort((a, b) => (a.path === "song.json" ? -1 : b.path === "song.json" ? 1 : 0));
+      await ib.vault.mkdir(dir).catch(() => {});
+      let samples = false;
+      for (const f of files) {
+        if (f.path.startsWith("samples/") && !samples) (samples = true), await ib.vault.mkdir(`${dir}/samples`).catch(() => {});
         if (typeof f.data === "string") await ib.vault.write(`${dir}/${f.path}`, f.data);
         else await ib.vault.writeBytes(`${dir}/${f.path}`, f.data);
       }
       const was = st.path;
       st.path = dir;
-      st.editor!.dirty = false;
+      st.editor!.markSaved();
       st.savedAt = Date.now();
       ib.ui.notify(`saved · ${dir}`, "success");
       // saved: the autosave's copies of it are no use now
@@ -202,7 +206,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
   const recover = async (ctx: ShellContext, rec: Recovery) => {
     const song = await st.autosave!.read(rec);
     await adopt(ctx, song, rec.path);
-    st.editor!.dirty = true;
+    st.editor!.markUnsaved();
     ctx.out(`${fmt.green("↺")} recovered the autosaved ${rec.title} (${new Date(rec.at).toLocaleString()}) · med save keeps it\n`);
   };
 
@@ -649,7 +653,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             } else {
               const n = parseInt(rest[0] ?? "", 10);
               if (!(n >= -48 && n <= 48 && n !== 0)) return ctx.err("med transpose <±1–48 semitones> (12: an octave)\n"), 1;
-              e.transpose(sel, n);
+              if (!e.transpose(sel, n)) return ctx.err(`med transpose: a note would go past C-1…B-9 — nothing moved\n`), 1;
               ctx.out(`transposed ${n > 0 ? "+" : ""}${n} · ${size}\n`);
             }
             return 0;

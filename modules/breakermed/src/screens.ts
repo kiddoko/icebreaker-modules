@@ -113,7 +113,11 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
       { label: t("title"), value: () => s.title || "—", activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (set("title", (x) => (x.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60)), false), ib.ui.redraw())) },
       {
         label: t("tempo"),
-        value: () => `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix).toFixed(0)})`,
+        value: () => {
+          // the BPM heard in brackets only when it isn't the number shown (P6)
+          const bpm = Math.round(ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix));
+          return s.tempoMode === "spd" ? `SPD ${s.tempo} (${bpm} BPM)` : `${s.tempo} BPM${bpm !== s.tempo ? ` (${bpm})` : ""}`;
+        },
         nudge: (d, big) => set("tempo", (x) => (x.tempo = clamp(x.tempo + d * (big ? 10 : 1), 1, 255))),
       },
       { label: t("speed"), value: () => `${s.speed} ${t("ticks a line")}`, nudge: (d) => set("speed", (x) => (x.speed = clamp(x.speed + d, 1, 32))) },

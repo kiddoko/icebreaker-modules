@@ -274,11 +274,14 @@ export function amigaPan(tracks: number, width = 0.6): number[] {
 }
 
 /** "C-3", "D#1", "---", "^^^" (note off) */
+/** the highest note a cell holds: B-9 (C-1 is 1) */
+export const MAX_NOTE = 108;
+
 export function noteName(n: number): string {
   if (!n) return "---";
   if (n === NOTE_OFF) return "^^^";
-  const i = n - 1;
-  return `${NOTE_NAMES[i % 12]}${Math.floor(i / 12) + 1}`.slice(0, 3);
+  const i = Math.min(n, MAX_NOTE) - 1; // past B-9 there's no 3-letter name (P5): the top one
+  return `${NOTE_NAMES[i % 12]}${Math.floor(i / 12) + 1}`;
 }
 
 /** a line number, in decimal like OctaMED's (the commands' values stay hex): 000, 063, 1024 */

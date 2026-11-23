@@ -220,3 +220,137 @@ describe("0.13 P12: the two 0.12.2 questions", () => {
     expect(d.asked.at(-1)).toMatch(/^save the changes to this new song\?/);
   });
 });
+
+describe("0.13 D3: mute, solo and the sequence by key", () => {
+  it("alt M mutes the cursor's track, ⇧alt M solos it; alt N / alt D / alt ⌫ shape the sequence", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    d.st.track = 2;
+    d.press(alt("KeyM"));
+    await settle();
+    expect(d.engine.muted.has(2)).toBe(true);
+    d.press(alt("KeyM", { shift: true }));
+    await settle();
+    expect([...d.engine.muted].sort()).toEqual([0, 1, 3, 4, 5, 6, 7]);
+    const blocks = d.st.song!.blocks.length;
+    d.press(alt("KeyN"));
+    await settle();
+    expect(d.st.song!.sequence.length).toBe(2);
+    expect(d.st.song!.blocks.length).toBe(blocks + 1);
+    d.press(alt("KeyD"));
+    await settle();
+    expect(d.st.song!.sequence.length).toBe(3);
+    d.press(key("backspace", { code: "Backspace", alt: true }));
+    await settle();
+    expect(d.st.song!.sequence.length).toBe(2);
+  });
+  it("insert (edit mode): a line, like alt ⏎", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med edit on");
+    const first = JSON.stringify(d.st.song!.blocks[0].cells[0][0]);
+    d.press(key("insert", { code: "Insert" }));
+    expect(JSON.stringify(d.st.song!.blocks[0].cells[1][0])).toBe(first);
+  });
+});
+
+describe("0.13 I5: a key plays the whole sound", () => {
+  it("a sample with no loop: to its end; a synth 1.5 s; a new key cuts the last one", async () => {
+    const { Renderer } = await import("../src/render");
+    const d = makeDeck();
+    await d.med("med new");
+    const s = d.st.song!;
+    s.instruments[0] = { ...s.instruments[0], kind: "sample", data: new Float32Array(48000 * 9).fill(0.5), loopLength: 0, loopStart: 0 };
+    const r = new Renderer(s, 48000, false);
+    r.preview(0, 48000);
+    const prev = (r as unknown as { previews: { until: number; released?: boolean }[] }).previews;
+    expect(prev[0].until).toBe(48000 * 9);
+    r.preview(0, 48000);
+    expect(prev[0].released).toBe(true);
+    expect(r.ringing).toBe(true);
+    r.hush();
+    expect(prev[1].released).toBe(true);
+  });
+});
+
+describe("0.13 I9: undo goes where it undid; an instrument number is one undo", () => {
+  it("two digits typed are one step; undo brings the cursor back to the cell", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med edit on");
+    d.st.line = 5; d.st.track = 3; d.st.col = 1;
+    const before = d.st.song!.blocks[0].cells[5][3].inst;
+    d.press(key("1", { code: "Digit1" }));
+    d.press(key("2", { code: "Digit2" }));
+    expect(d.st.song!.blocks[0].cells[5][3].inst).toBe(0x12);
+    d.st.line = 40; d.st.track = 0;
+    d.press(key("z", { code: "KeyZ", meta: true }));
+    expect(d.st.song!.blocks[0].cells[5][3].inst).toBe(before);
+    expect([d.st.line, d.st.track]).toEqual([5, 3]);
+  });
+});
+
+describe("0.13 P5 / P7 / P8 / P9", () => {
+  it("P5: no note past B-9 is written, B-9 reads B-9", async () => {
+    const { noteName } = await import("../src/song");
+    expect(noteName(108)).toBe("B-9");
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med edit on");
+    d.st.octave = 7; d.st.line = 1;
+    const before = JSON.stringify(d.st.song!.blocks[0].cells[1][0]);
+    d.press(key("i", { code: "KeyI" })); // the top row's highest key: past B-9 in octave 8
+    expect(JSON.stringify(d.st.song!.blocks[0].cells[1][0])).toBe(before);
+  });
+  it("P7: undoing back to the saved song: no ● any more", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    d.answers.push("songs/a.bmed");
+    await d.med("med save");
+    await d.med("med note 3 1 C-3 01");
+    expect(d.st.editor!.dirty).toBe(true);
+    await d.med("med undo");
+    expect(d.st.editor!.dirty).toBe(false);
+    await d.med("med redo");
+    expect(d.st.editor!.dirty).toBe(true);
+  });
+  it("P8: transposing past the range moves nothing", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med note 0 1 B-9 01");
+    await d.med("med note 1 1 C-3 01");
+    d.st.sel = { block: 0, line0: 0, line1: 1, track0: 0, track1: 0 };
+    expect(await d.med("med transpose 1")).toBe(1);
+    expect(d.st.song!.blocks[0].cells[1][0].note).toBe(25);
+  });
+  it("P9: the first thing written is the song's folder, then song.json", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    const order: string[] = [];
+    const v = d.ib.vault as unknown as Record<string, (p: string, x?: unknown) => Promise<void>>;
+    for (const k of ["mkdir", "write", "writeBytes"]) {
+      const f = v[k];
+      v[k] = (p, x) => (order.push(p), f(p, x));
+    }
+    d.answers.push("songs/b.bmed");
+    await d.med("med save");
+    expect(order.slice(0, 2)).toEqual(["songs/b.bmed", "songs/b.bmed/song.json"]);
+  });
+  it("P6: the SONG screen says the BPM once when it is the same", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    d.st.screen = "song";
+    expect(d.draw().screen()).not.toMatch(/(\d+) BPM \(\1\)/);
+  });
+});
+
+describe("0.13 P4: LIM lights from 3 dB of reduction", () => {
+  it("2 dB: not lit", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med play");
+    const r = (d.engine as unknown as { r: { meter: { peak: number; gain: number } } }).r;
+    r.meter = { peak: 0.89, gain: 10 ** (-2 / 20) };
+    expect(d.draw().screen().split("\n")[0]).not.toMatch(/LIM/);
+  });
+});
