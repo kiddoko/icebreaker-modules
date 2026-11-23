@@ -54,7 +54,7 @@ export function describe(cmd: number, v: number, song: Pick<Song, "tempoMode" | 
       case 0x07: return `${t("tremolo")} ${t("speed")} ${x} ${t("depth")} ${y}`;
       case 0x09: return v > 0 && v <= 0x20 ? `${t("speed")}: ${v} ${t("ticks a line")}` : `${t("speed")}: ${t("01–20 only")}`;
       case 0x0a: case 0x0d: return x ? `${t("volume up")} ${x} ${t("a tick")}` : `${t("volume down")} ${y} ${t("a tick")}`;
-      case 0x0b: return `${t("jump to position")} ${n2(v)}`;
+      case 0x0b: return `${t("jump to position")} ${v}`;
       case 0x0c: {
         const vol = song.flags.vol7bit ? ((v & 0x7f) + 1) >> 1 : song.flags.volHex ? Math.min(64, v & 0x7f) : v < 0x99 ? Math.min(64, x * 10 + y) : 64;
         return `${t("volume")} ${vol} ${t("of 64")}`;
@@ -142,7 +142,7 @@ export const GUIDE: GuidePart[] = [
     title: "MOVING AROUND",
     rows: [
       ["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines · home / end: the block's first / last line"],
-      ["the line numbers", "in decimal, like OctaMED (the commands' values are hex)"],
+      ["the numbers", "lines, positions and blocks in decimal, like OctaMED (the commands' values are hex)"],
       ["the wheel on the block", "2 lines a notch"],
       ["tab · ⇧tab", "the next track · the one before (←→ walk the columns into the next one too)"],
       ["⌘←→ · ⇧ alt ←→", "the position before · after in the sequence"],

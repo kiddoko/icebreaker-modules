@@ -563,7 +563,7 @@ const FR: Record<string, string> = {
   "● REC: the keys record where the song is": "● REC : les touches enregistrent là où en est le morceau",
   "says the command under the cursor in words (0C20 · volume 32 of 64)": "dit en mots la commande sous le curseur (0C20 · volume 32 sur 64)",
   "the cursor · 16 lines · home / end: the block's first / last line": "le curseur · 16 lignes · début / fin : la première / dernière ligne du bloc",
-  "in decimal, like OctaMED (the commands' values are hex)": "en décimal, comme OctaMED (les valeurs des commandes sont en hexa)",
+  "lines, positions and blocks in decimal, like OctaMED (the commands' values are hex)": "lignes, positions et blocs en décimal, comme OctaMED (les valeurs des commandes sont en hexa)",
   "2 lines a notch": "2 lignes par cran",
   "the next track · the one before (←→ walk the columns into the next one too)": "la piste suivante · la précédente (←→ parcourent aussi les colonnes jusqu'à la suivante)",
   "the position before · after in the sequence": "la position d'avant · d'après dans la séquence",

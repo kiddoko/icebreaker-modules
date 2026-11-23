@@ -16,7 +16,7 @@ import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
 import { AKAI_RATE, AKAI_RATES, VINTAGE_KINDS, VINTAGE_SAID, type VintageKind, type VintageSettings } from "./dsp/vintage";
 import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
-import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, lineNo, MAX_TRACKS, newSong, NOTE_OFF, noteName, PAULA_CLOCK, periodOf, trackName, type Song } from "./song";
+import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, dec, hex, lineNo, MAX_TRACKS, newSong, NOTE_OFF, noteName, PAULA_CLOCK, periodOf, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
@@ -302,16 +302,16 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     return n >= 1 && n <= s.tracks ? n - 1 : `track ${n}: the song has ${s.tracks}`;
   };
   const posArg = (s: Song, v: string | undefined): number | string => {
-    const n = parseInt(v ?? "", 16);
-    return /^[0-9a-f]+$/i.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").toUpperCase().padStart(2, "0")}: the sequence has ${hex(0)}–${hex(s.sequence.length - 1)}`;
+    const n = parseInt(v ?? "", 10);
+    return /^\d+$/.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").padStart(3, "0")}: the sequence has ${dec(0)}–${dec(s.sequence.length - 1)}`;
   };
   const blockArg = (s: Song, v: string | undefined): number | string => {
-    const n = parseInt(v ?? "", 16);
-    return /^[0-9a-f]+$/i.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").toUpperCase().padStart(3, "0")}: the song has ${hex(0, 3)}–${hex(s.blocks.length - 1, 3)}`;
+    const n = parseInt(v ?? "", 10);
+    return /^\d+$/.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").padStart(3, "0")}: the song has ${dec(0)}–${dec(s.blocks.length - 1)}`;
   };
   /** the sequence, one position a line, the cursor's marked */
   const seqList = (s: Song) =>
-    `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${hex(i)}  ${hex(b, 3)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
+    `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${dec(i)}  ${dec(b)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
 
   const need = (): Song => {
     if (!st.song) throw new Error("no song loaded (med new · med open <file> · med demo)");
@@ -348,7 +348,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "": {
             if (!st.song) return ctx.out(`${fmt.dim("no song loaded")} · med new · med open <file> · med demo · med ls\n`), 0;
             const s = st.song;
-            ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${hex(st.seq)} · block ${hex(s.sequence[st.seq] ?? 0, 3)} · line ${lineNo(st.line)}\n`);
+            ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${dec(st.seq)} · block ${dec(s.sequence[st.seq] ?? 0)} · line ${lineNo(st.line)}\n`);
             return 0;
           }
           case "ls": {
@@ -478,16 +478,17 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const s = need();
             const mode = rest[0] === "block" ? "block" : "song";
             // a word that is neither a mode nor a number: refused (it used to play the song)
-            const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^[0-9a-f]+$/i.test(x));
+            const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^\d+$/.test(x));
             if (odd !== undefined) return ctx.err(`med play: "${odd}"? med play [song|block] [position] [line]\n`), 1;
             const nums = rest.filter((x, i) => !(i === 0 && (x === "song" || x === "block")));
-            const seq = nums[0] !== undefined ? parseInt(nums[0], 16) : st.seq;
+            if (nums.some((x) => !/^\d+$/.test(x))) return ctx.err(`med play: positions and lines are decimal (med play song 2 16)\n`), 1;
+            const seq = nums[0] !== undefined ? parseInt(nums[0], 10) : st.seq;
             const line = nums[1] !== undefined ? parseInt(nums[1], 10) : nums[0] !== undefined ? 0 : st.line;
-            if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
+            if (seq >= s.sequence.length) return ctx.err(`med: position ${dec(seq)} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
             // follow off: the cursor stays where you edit
             if (st.follow) (st.seq = seq), (st.line = line);
             await engine.play(mode, { seq, line });
-            ctx.out(`▶ playing the ${mode} from position ${hex(seq)}, line ${lineNo(line)}\n`);
+            ctx.out(`▶ playing the ${mode} from position ${dec(seq)}, line ${lineNo(line)}\n`);
             return 0;
           }
           case "stop":
@@ -496,13 +497,13 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             return 0;
           case "pos": {
             const s = need();
-            const seq = parseInt(rest[0] ?? "0", 16);
-            if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${(rest[0] ?? "?").toUpperCase()} isn't in the sequence (00–${hex(s.sequence.length - 1)})\n`), 1;
+            const seq = /^\d+$/.test(rest[0] ?? "0") ? parseInt(rest[0] ?? "0", 10) : -1;
+            if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${rest[0] ?? "?"} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
             st.seq = seq;
             st.line = rest[1] ? parseInt(rest[1], 10) || 0 : 0;
             if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
             if (engine.playing) await engine.play(engine.mode ?? "song", { seq: st.seq, line: st.line });
-            ctx.out(`position ${hex(st.seq)} → block ${hex(s.sequence[st.seq], 3)} · line ${lineNo(st.line)}\n`);
+            ctx.out(`position ${dec(st.seq)} → block ${dec(s.sequence[st.seq])} · line ${lineNo(st.line)}\n`);
             return 0;
           }
           case "mute":
@@ -879,25 +880,25 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (what === undefined) {
               // the blocks: their length, and which positions play them
               ctx.out(s.blocks.map((b, i) => {
-                const at = s.sequence.flatMap((x, k) => (x === i ? [hex(k)] : []));
-                return `${i === s.sequence[st.seq] ? "▸" : " "}${hex(i, 3)}  ${String(b.lines).padStart(4)} lines${b.name ? ` · ${b.name}` : ""}${at.length ? fmt.dim(` · positions ${at.join(" ")}`) : fmt.dim(unused)}`;
+                const at = s.sequence.flatMap((x, k) => (x === i ? [dec(k)] : []));
+                return `${i === s.sequence[st.seq] ? "▸" : " "}${dec(i)}  ${String(b.lines).padStart(4)} lines${b.name ? ` · ${b.name}` : ""}${at.length ? fmt.dim(` · positions ${at.join(" ")}`) : fmt.dim(unused)}`;
               }).join("\n") + "\n");
             } else if (what === "new") {
               const n = e.newBlock(rest[1] ? parseInt(rest[1], 10) || 64 : s.blocks[s.sequence[st.seq]]?.lines ?? 64);
-              ctx.out(`block ${hex(n, 3)}${unused}\n`);
-            } else if (what === "copy") ctx.out(`block ${hex(e.cloneBlock(s.sequence[st.seq]), 3)}${unused}\n`);
+              ctx.out(`block ${dec(n)}${unused}\n`);
+            } else if (what === "copy") ctx.out(`block ${dec(e.cloneBlock(s.sequence[st.seq]))}${unused}\n`);
             else if (what === "lines") {
               const n = parseInt(rest[1] ?? "", 10);
               if (!(n >= 1 && n <= 3200)) return ctx.err(`med block lines: ${rest[1] ?? "?"} — a block has 1–3200 lines\n`), 1;
               e.setLines(s.sequence[st.seq], n);
-              ctx.out(`block ${hex(s.sequence[st.seq], 3)}: ${n} line${n === 1 ? "" : "s"}\n`);
+              ctx.out(`block ${dec(s.sequence[st.seq])}: ${n} line${n === 1 ? "" : "s"}\n`);
             } else if (what === "rm") {
-              const n = blockArg(s, rest[1] ?? hex(s.sequence[st.seq], 3));
+              const n = blockArg(s, rest[1] ?? String(s.sequence[st.seq]));
               if (typeof n === "string") return ctx.err(`med block rm: ${n}\n`), 1;
-              const at = s.sequence.flatMap((x, k) => (x === n ? [hex(k)] : []));
-              if (at.length) return ctx.err(`med block rm: block ${hex(n, 3)} plays at position${at.length > 1 ? "s" : ""} ${at.join(" ")} (take it out of the sequence first)\n`), 1;
+              const at = s.sequence.flatMap((x, k) => (x === n ? [dec(k)] : []));
+              if (at.length) return ctx.err(`med block rm: block ${dec(n)} plays at position${at.length > 1 ? "s" : ""} ${at.join(" ")} (take it out of the sequence first)\n`), 1;
               if (!e.blockDelete(n)) return ctx.err("med block rm: a song keeps one block at least\n"), 1;
-              ctx.out(`deleted block ${hex(n, 3)} (⌘Z: back)${n < s.blocks.length ? " · the blocks after it moved down a number" : ""}\n`);
+              ctx.out(`deleted block ${dec(n)} (⌘Z: back)${n < s.blocks.length ? " · the blocks after it moved down a number" : ""}\n`);
             } else return ctx.err("med block [new [lines] | copy | lines <n> | rm <block>]\n"), 1;
             return 0;
           }
@@ -906,7 +907,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const e = st.editor!;
             const [what, a, b] = rest;
             if (what === undefined) return ctx.out(seqList(s)), 0;
-            const pos = a !== undefined ? parseInt(a, 16) : st.seq;
+            const pos = a !== undefined ? parseInt(a, 10) : st.seq;
             // a position or a block that isn't there: said
             if (["rm", "set", "copy", "move"].includes(what) && a !== undefined) {
               const p = posArg(s, a);
@@ -916,11 +917,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               const bk = blockArg(s, what === "set" ? b : a);
               if (typeof bk === "string") return ctx.err(`med seq ${what}: ${bk}\n`), 1;
             }
-            const said = (p: number) => ctx.out(`position ${hex(p)} → block ${hex(s.sequence[p], 3)}\n`);
+            const said = (p: number) => ctx.out(`position ${dec(p)} → block ${dec(s.sequence[p])}\n`);
             if (what === "move") {
               const d = b === "up" ? -1 : b === "down" ? 1 : 0;
               if (!d) return ctx.err("med seq move <position> up|down\n"), 1;
-              if (!e.seqMove(pos, d)) return ctx.err(`med seq move: position ${hex(pos)} is already at the ${d < 0 ? "top" : "bottom"}\n`), 1;
+              if (!e.seqMove(pos, d)) return ctx.err(`med seq move: position ${dec(pos)} is already at the ${d < 0 ? "top" : "bottom"}\n`), 1;
               st.seq = pos + d;
               said(st.seq);
               return 0;
@@ -936,9 +937,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             } else if (what === "rm") {
               if (s.sequence.length <= 1) return ctx.err("med seq rm: the sequence keeps one position at least\n"), 1;
               e.seqDelete(pos);
-              ctx.out(`removed position ${hex(pos)}\n`);
-            } else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 16)), said(pos);
-            else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 16)), said(s.sequence.length - 1);
+              ctx.out(`removed position ${dec(pos)}\n`);
+            } else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 10)), said(pos);
+            else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 10)), said(s.sequence.length - 1);
             else return ctx.err("med seq [new|copy|rm [position] · set <position> <block> · add <block> · move <position> up|down]\n"), 1;
             if (what === "new" || what === "copy") said(st.seq);
             st.seq = Math.max(0, Math.min(s.sequence.length - 1, st.seq));

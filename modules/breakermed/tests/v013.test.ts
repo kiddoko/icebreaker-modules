@@ -86,20 +86,20 @@ describe("0.13 D1: ⏎ plays from the top of the block, ⇧⏎ loops it, ⇧spac
     d.st.line = 20;
     d.press(key("enter"));
     await settle();
-    expect(d.log).toMatch(/\$ med play song 00\n/);
+    expect(d.log).toMatch(/\$ med play song 000\n/);
     expect(d.engine.mode).toBe("song");
     expect(d.engine.current()?.line).toBe(0);
     await d.med("med stop");
     d.st.line = 20;
     d.press(key("enter", { shift: true }));
     await settle();
-    expect(d.log).toMatch(/\$ med play block 00\n/);
+    expect(d.log).toMatch(/\$ med play block 000\n/);
     expect(d.engine.mode).toBe("block");
     await d.med("med stop");
     d.st.line = 20;
     d.press(key("space", { shift: true }));
     await settle();
-    expect(d.log).toMatch(/\$ med play song 00 20\n/);
+    expect(d.log).toMatch(/\$ med play song 000 20\n/);
     expect(d.engine.current()?.line).toBe(20);
   });
   it("⏎ again while it plays: the block heard starts over", async () => {
@@ -187,7 +187,7 @@ describe("0.13 P2 / P3: the commands answer, and refuse what they don't know", (
     await d.med("med block lines 1");
     expect(d.log).toMatch(/: 1 line\n/);
     expect(await d.med("med pos 5")).toBe(1);
-    expect(d.log).toMatch(/position 5 isn't in the sequence \(00–00\)/);
+    expect(d.log).toMatch(/position 5 isn.t in the sequence \(000–000\)/);
     await d.med("med undo");
     await d.med("med undo");
     await d.med("med undo");
@@ -431,5 +431,30 @@ describe("0.13 D4: the vintage mode", () => {
     await d.med("med save");
     const json = JSON.parse(d.files.get("songs/v.bmed/song.json") as string);
     expect(json.instruments[1].vintage).toEqual({ kind: "akai" });
+  });
+});
+
+describe("0.13 D2 (all of it): positions and block numbers in decimal too", () => {
+  it("the sequence, the block's frame and the commands use decimal; a song file keeps plain numbers", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    for (let i = 0; i < 11; i++) await d.med("med seq new");
+    expect(d.st.song!.sequence.length).toBe(12);
+    // position 10 is the eleventh (decimal, not hex 0x10 = 16)
+    expect(await d.med("med pos 10")).toBe(0);
+    expect(d.st.seq).toBe(10);
+    expect(d.log).toMatch(/position 010 → block 010/);
+    const ui = d.draw(120, 40);
+    expect(ui.find("BLOCK 010")).toBeTruthy();
+    expect(ui.texts.some((t) => t.s === "011")).toBe(true); // the sequence list
+    await d.med("med seq set 11 2");
+    expect(d.st.song!.sequence[11]).toBe(2);
+    expect(await d.med("med play song 1A")).toBe(1); // hex is refused, not misread
+    await d.med("med play block 11 12");
+    expect(d.engine.current()?.seq).toBe(11);
+    d.answers.push("songs/dec.bmed");
+    await d.med("med save");
+    const json = JSON.parse(d.files.get("songs/dec.bmed/song.json") as string);
+    expect(json.sequence[11]).toBe(2);
   });
 });

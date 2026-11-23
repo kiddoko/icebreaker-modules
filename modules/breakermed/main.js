@@ -229,6 +229,8 @@ function noteName(n) {
 }
 /** a line number, in decimal like OctaMED's (the commands' values stay hex): 000, 063, 1024 */
 var lineNo = (v, digits = 3) => String(v).padStart(digits, "0");
+/** a position of the sequence, or a block's number: decimal too, three digits (000, 012) */
+var dec = (v) => String(v).padStart(3, "0");
 var hex = (v, digits = 2) => v.toString(16).toUpperCase().padStart(digits, "0");
 /** The Amiga's clock (PAL): a period of P plays PAULA_CLOCK / P frames a second. */
 var PAULA_CLOCK = 3546895;
@@ -6455,7 +6457,7 @@ function describe(cmd, v, song, t = (s) => s) {
 			case 9: return v > 0 && v <= 32 ? `${t("speed")}: ${v} ${t("ticks a line")}` : `${t("speed")}: ${t("01–20 only")}`;
 			case 10:
 			case 13: return x ? `${t("volume up")} ${x} ${t("a tick")}` : `${t("volume down")} ${y} ${t("a tick")}`;
-			case 11: return `${t("jump to position")} ${n2(v)}`;
+			case 11: return `${t("jump to position")} ${v}`;
 			case 12: {
 				const vol = song.flags.vol7bit ? (v & 127) + 1 >> 1 : song.flags.volHex ? Math.min(64, v & 127) : v < 153 ? Math.min(64, x * 10 + y) : 64;
 				return `${t("volume")} ${vol} ${t("of 64")}`;
@@ -6535,7 +6537,7 @@ var GUIDE = [
 		title: "MOVING AROUND",
 		rows: [
 			["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines · home / end: the block's first / last line"],
-			["the line numbers", "in decimal, like OctaMED (the commands' values are hex)"],
+			["the numbers", "lines, positions and blocks in decimal, like OctaMED (the commands' values are hex)"],
 			["the wheel on the block", "2 lines a notch"],
 			["tab · ⇧tab", "the next track · the one before (←→ walk the columns into the next one too)"],
 			["⌘←→ · ⇧ alt ←→", "the position before · after in the sequence"],
@@ -6929,15 +6931,15 @@ function makeApp(ib, engine, st) {
 	const run = (line) => void ib.shell.run(line);
 	const seqList = new ListView();
 	const instList = new ListView();
-	seqList.cmdOf = (i) => `med pos ${hex(i)}`;
-	seqList.onActivate = (i) => run(`med play song ${hex(i)}`);
+	seqList.cmdOf = (i) => `med pos ${dec(i)}`;
+	seqList.onActivate = (i) => run(`med play song ${dec(i)}`);
 	seqList.menuOf = (i) => {
 		const s = st.song;
 		const n = s?.sequence.length ?? 0;
 		return [
 			{
 				label: t("play from here"),
-				cmd: `med play song ${hex(i)}`
+				cmd: `med play song ${dec(i)}`
 			},
 			"-",
 			{
@@ -6947,38 +6949,38 @@ function makeApp(ib, engine, st) {
 			},
 			{
 				label: t("the next block"),
-				cmd: `med seq set ${hex(i)} ${hex(Math.min((s?.blocks.length ?? 1) - 1, (s?.sequence[i] ?? 0) + 1), 3)}`,
+				cmd: `med seq set ${dec(i)} ${dec(Math.min((s?.blocks.length ?? 1) - 1, (s?.sequence[i] ?? 0) + 1))}`,
 				disabled: !s || (s.sequence[i] ?? 0) >= s.blocks.length - 1
 			},
 			{
 				label: t("move up"),
-				cmd: `med seq move ${hex(i)} up`,
+				cmd: `med seq move ${dec(i)} up`,
 				disabled: i === 0
 			},
 			{
 				label: t("move down"),
-				cmd: `med seq move ${hex(i)} down`,
+				cmd: `med seq move ${dec(i)} down`,
 				disabled: i >= n - 1
 			},
 			"-",
 			{
 				label: t("add a position after it, same block"),
-				cmd: `med seq add ${hex(s?.sequence[i] ?? 0, 3)}`
+				cmd: `med seq add ${dec(s?.sequence[i] ?? 0)}`
 			},
 			{
 				label: t("a new block after it"),
 				hint: "alt N",
-				cmd: `med seq new ${hex(i)}`
+				cmd: `med seq new ${dec(i)}`
 			},
 			{
 				label: t("a copy of this block after it"),
 				hint: "alt D",
-				cmd: `med seq copy ${hex(i)}`
+				cmd: `med seq copy ${dec(i)}`
 			},
 			{
 				label: t("remove this position"),
 				hint: "alt ⌫",
-				cmd: `med seq rm ${hex(i)}`,
+				cmd: `med seq rm ${dec(i)}`,
 				danger: true,
 				disabled: n <= 1
 			}
@@ -6989,34 +6991,34 @@ function makeApp(ib, engine, st) {
 		if (to === void 0 || to === from) return;
 		(async () => {
 			const d = to > from ? 1 : -1;
-			for (let p = from; p !== to; p += d) await ib.shell.run(`med seq move ${hex(p)} ${d > 0 ? "down" : "up"}`);
+			for (let p = from; p !== to; p += d) await ib.shell.run(`med seq move ${dec(p)} ${d > 0 ? "down" : "up"}`);
 		})();
 	};
 	/** a position plays another block: the list of blocks, the unused ones said */
 	const useBlock = async (pos) => {
 		const s = st.song;
 		if (!s) return;
-		const opts = s.blocks.map((b, i) => ({ label: `${hex(i, 3)}  ${b.lines} ${t("lines")}${b.name ? ` · ${b.name}` : ""}${s.sequence.includes(i) ? "" : ` · ${t("not in the sequence")}`}` }));
-		const pick = await ib.ui.choose(`${t("position")} ${hex(pos)}: ${t("which block?")}`, opts, { selected: s.sequence[pos] });
-		if (pick !== null) run(`med seq set ${hex(pos)} ${hex(pick, 3)}`);
+		const opts = s.blocks.map((b, i) => ({ label: `${dec(i)}  ${b.lines} ${t("lines")}${b.name ? ` · ${b.name}` : ""}${s.sequence.includes(i) ? "" : ` · ${t("not in the sequence")}`}` }));
+		const pick = await ib.ui.choose(`${t("position")} ${dec(pos)}: ${t("which block?")}`, opts, { selected: s.sequence[pos] });
+		if (pick !== null) run(`med seq set ${dec(pos)} ${dec(pick)}`);
 	};
 	/** the blocks no position plays: add one to the sequence, or delete it */
 	const unusedBlocks = async () => {
 		const s = st.song;
 		if (!s) return;
 		const free = s.blocks.flatMap((_, i) => s.sequence.includes(i) ? [] : [i]);
-		const opts = free.flatMap((i) => [{ label: `${t("add block")} ${hex(i, 3)} ${t("at the end of the sequence")}` }, { label: `${t("delete block")} ${hex(i, 3)}` }]);
+		const opts = free.flatMap((i) => [{ label: `${t("add block")} ${dec(i)} ${t("at the end of the sequence")}` }, { label: `${t("delete block")} ${dec(i)}` }]);
 		const pick = await ib.ui.choose(t("blocks in no position"), opts);
 		if (pick === null) return;
 		const b = free[Math.floor(pick / 2)];
-		run(pick % 2 ? `med block rm ${hex(b, 3)}` : `med seq add ${hex(b, 3)}`);
+		run(pick % 2 ? `med block rm ${dec(b)}` : `med seq add ${dec(b)}`);
 	};
 	/** one block more or less at a position (the wheel, ‹ ›) */
 	const nudgeBlock = (pos, d) => {
 		const s = st.song;
 		if (!s) return;
 		const b = Math.max(0, Math.min(s.blocks.length - 1, (s.sequence[pos] ?? 0) + d));
-		if (b !== s.sequence[pos]) run(`med seq set ${hex(pos)} ${hex(b, 3)}`);
+		if (b !== s.sequence[pos]) run(`med seq set ${dec(pos)} ${dec(b)}`);
 	};
 	const screens = makeScreens(ib, engine, st);
 	/** this page (State.page says which one is on screen) */
@@ -7182,7 +7184,7 @@ function makeApp(ib, engine, st) {
 		const to = Math.max(0, Math.min(s.sequence.length - 1, st.seq + d));
 		if (to === st.seq) return;
 		unselect();
-		run(`med pos ${hex(to)} ${st.line}`);
+		run(`med pos ${dec(to)} ${st.line}`);
 	};
 	/** what an operation works on: the selection, or the cell under the cursor */
 	const target = () => st.sel && st.sel.block === blockNo() ? st.sel : {
@@ -7649,7 +7651,7 @@ function makeApp(ib, engine, st) {
 	const menuEntries = (line, track) => [
 		{
 			label: t("play from here"),
-			run: () => run(`med play song ${hex(st.seq)} ${line}`)
+			run: () => run(`med play song ${dec(st.seq)} ${line}`)
 		},
 		"-",
 		{
@@ -7905,7 +7907,7 @@ function makeApp(ib, engine, st) {
 						label: `▶ ${t("play")}`,
 						style: { fg: c.success },
 						hit: {
-							cmd: `med play song ${hex(st.seq)}`,
+							cmd: `med play song ${dec(st.seq)}`,
 							tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧space from the cursor")
 						}
 					});
@@ -8105,7 +8107,7 @@ function makeApp(ib, engine, st) {
 			});
 			seqList.items = s.sequence.map((_, i) => i);
 			if (seqList.selected !== st.seq) seqList.select(st.seq);
-			ui.text(seqBox.x, seqBox.y, "pos  block", { fg: c.subtle });
+			ui.text(seqBox.x, seqBox.y, "pos    block", { fg: c.subtle });
 			const free = s.blocks.length - new Set(s.sequence).size;
 			const listBox = {
 				x: seqBox.x,
@@ -8116,16 +8118,16 @@ function makeApp(ib, engine, st) {
 			seqList.render(ui, listBox, false, (i, row, sel) => {
 				const bn = s.sequence[i];
 				const b = s.blocks[bn];
-				ui.text(row.x, row.y, hex(i), {
+				ui.text(row.x, row.y, dec(i), {
 					fg: sel ? c.accent : c.muted,
 					attrs: sel ? BOLD : 0
 				});
-				const bx = row.x + 3;
+				const bx = row.x + 4;
 				if (sel) ui.button(bx, row.y, "‹", () => nudgeBlock(i, -1), {
 					quiet: true,
 					tip: t("the block before")
 				});
-				ui.text(bx + 3, row.y, hex(bn, 3), {
+				ui.text(bx + 3, row.y, dec(bn), {
 					fg: sel ? c.accent : c.fg,
 					attrs: sel ? BOLD : 0
 				});
@@ -8136,7 +8138,7 @@ function makeApp(ib, engine, st) {
 					h: 1
 				}, {
 					onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1),
-					onClick: () => run(`med pos ${hex(i)}`),
+					onClick: () => run(`med pos ${dec(i)}`),
 					tip: t("the block this position plays · the wheel: another · right-click: use block…, move")
 				});
 				if (sel) ui.button(bx + 6, row.y, "›", () => nudgeBlock(i, 1), {
@@ -8187,9 +8189,9 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "guide") return guide.draw(ui, right, focused);
 			const bn = blockNo();
 			const b = s.blocks[bn];
-			const playingAt = now && !st.follow ? ` · ▶ ${hex(s.sequence[now.seq] ?? 0, 3) === hex(bn, 3) ? "" : `${t("block")} ${hex(s.sequence[now.seq] ?? 0, 3)} `}${lineNo(now.line)}` : "";
+			const playingAt = now && !st.follow ? ` · ▶ ${dec(s.sequence[now.seq] ?? 0) === dec(bn) ? "" : `${t("block")} ${dec(s.sequence[now.seq] ?? 0)} `}${lineNo(now.line)}` : "";
 			const inner = ui.box(right, {
-				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${lineNo(st.line)}/${lineNo((b?.lines ?? 1) - 1)}${playingAt}`,
+				title: `${t("BLOCK")} ${dec(bn)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${lineNo(st.line)}/${lineNo((b?.lines ?? 1) - 1)}${playingAt}`,
 				focused
 			});
 			if (!b) return;
@@ -8415,11 +8417,11 @@ function makeApp(ib, engine, st) {
 				const semi = k.key === "space" ? null : pianoKey(k.code);
 				if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
 			}
-			if (k.key === "enter" && !k.alt) return run(`med play ${k.shift ? "block" : "song"} ${hex(st.seq)}`), true;
+			if (k.key === "enter" && !k.alt) return run(`med play ${k.shift ? "block" : "song"} ${dec(st.seq)}`), true;
 			if (k.key === "space") {
 				if (engine.playing) run("med stop");
 				else if (!k.shift && engine.hush()) return true;
-				else if (k.shift) run(`med play song ${hex(st.seq)} ${st.line}`);
+				else if (k.shift) run(`med play song ${dec(st.seq)} ${st.line}`);
 				else run(`med edit ${st.edit ? "off" : "on"}`);
 				return true;
 			}
@@ -8461,9 +8463,9 @@ function makeApp(ib, engine, st) {
 					case "KeyA": return transpose(k.shift ? -12 : -1), true;
 					case "KeyF": return run(`med follow ${st.follow ? "off" : "on"}`), true;
 					case "KeyM": return run(`med ${k.shift ? "solo" : "mute"} ${st.track + 1}`), true;
-					case "KeyN": return unselect(), run(`med seq new ${hex(st.seq)}`), true;
-					case "KeyD": return unselect(), run(`med seq copy ${hex(st.seq)}`), true;
-					case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${hex(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
+					case "KeyN": return unselect(), run(`med seq new ${dec(st.seq)}`), true;
+					case "KeyD": return unselect(), run(`med seq copy ${dec(st.seq)}`), true;
+					case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${dec(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
 					case "KeyR": {
 						const ins = s.instruments[st.inst];
 						if (!ins || ins.kind === "empty") return ib.ui.notify(t("an empty instrument: nothing to make vintage"), "warning"), true;
@@ -8578,7 +8580,7 @@ function makeApp(ib, engine, st) {
 				case "right": return moveCol(1), true;
 				case "page-up": return moveLine(-16), true;
 				case "page-down": return moveLine(16), true;
-				case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)}`), true;
+				case "confirm": return run(engine.playing ? "med stop" : `med play song ${dec(st.seq)}`), true;
 				case "item-next": {
 					const s = st.song;
 					if (!s || st.home || st.screen !== "block") return false;
@@ -11656,15 +11658,15 @@ function registerCommands(ib, engine, st) {
 		return n >= 1 && n <= s.tracks ? n - 1 : `track ${n}: the song has ${s.tracks}`;
 	};
 	const posArg = (s, v) => {
-		const n = parseInt(v ?? "", 16);
-		return /^[0-9a-f]+$/i.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").toUpperCase().padStart(2, "0")}: the sequence has ${hex(0)}–${hex(s.sequence.length - 1)}`;
+		const n = parseInt(v ?? "", 10);
+		return /^\d+$/.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").padStart(3, "0")}: the sequence has ${dec(0)}–${dec(s.sequence.length - 1)}`;
 	};
 	const blockArg = (s, v) => {
-		const n = parseInt(v ?? "", 16);
-		return /^[0-9a-f]+$/i.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").toUpperCase().padStart(3, "0")}: the song has ${hex(0, 3)}–${hex(s.blocks.length - 1, 3)}`;
+		const n = parseInt(v ?? "", 10);
+		return /^\d+$/.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").padStart(3, "0")}: the song has ${dec(0)}–${dec(s.blocks.length - 1)}`;
 	};
 	/** the sequence, one position a line, the cursor's marked */
-	const seqList = (s) => `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${hex(i)}  ${hex(b, 3)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
+	const seqList = (s) => `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${dec(i)}  ${dec(b)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
 	const need = () => {
 		if (!st.song) throw new Error("no song loaded (med new · med open <file> · med demo)");
 		return st.song;
@@ -11710,7 +11712,7 @@ function registerCommands(ib, engine, st) {
 					case "": {
 						if (!st.song) return ctx.out(`${fmt.dim("no song loaded")} · med new · med open <file> · med demo · med ls\n`), 0;
 						const s = st.song;
-						ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${hex(st.seq)} · block ${hex(s.sequence[st.seq] ?? 0, 3)} · line ${lineNo(st.line)}\n`);
+						ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${dec(st.seq)} · block ${dec(s.sequence[st.seq] ?? 0)} · line ${lineNo(st.line)}\n`);
 						return 0;
 					}
 					case "ls": {
@@ -11854,18 +11856,19 @@ function registerCommands(ib, engine, st) {
 					case "play": {
 						const s = need();
 						const mode = rest[0] === "block" ? "block" : "song";
-						const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^[0-9a-f]+$/i.test(x));
+						const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^\d+$/.test(x));
 						if (odd !== void 0) return ctx.err(`med play: "${odd}"? med play [song|block] [position] [line]\n`), 1;
 						const nums = rest.filter((x, i) => !(i === 0 && (x === "song" || x === "block")));
-						const seq = nums[0] !== void 0 ? parseInt(nums[0], 16) : st.seq;
+						if (nums.some((x) => !/^\d+$/.test(x))) return ctx.err(`med play: positions and lines are decimal (med play song 2 16)\n`), 1;
+						const seq = nums[0] !== void 0 ? parseInt(nums[0], 10) : st.seq;
 						const line = nums[1] !== void 0 ? parseInt(nums[1], 10) : nums[0] !== void 0 ? 0 : st.line;
-						if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
+						if (seq >= s.sequence.length) return ctx.err(`med: position ${dec(seq)} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
 						if (st.follow) st.seq = seq, st.line = line;
 						await engine.play(mode, {
 							seq,
 							line
 						});
-						ctx.out(`▶ playing the ${mode} from position ${hex(seq)}, line ${lineNo(line)}\n`);
+						ctx.out(`▶ playing the ${mode} from position ${dec(seq)}, line ${lineNo(line)}\n`);
 						return 0;
 					}
 					case "stop":
@@ -11874,8 +11877,8 @@ function registerCommands(ib, engine, st) {
 						return 0;
 					case "pos": {
 						const s = need();
-						const seq = parseInt(rest[0] ?? "0", 16);
-						if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${(rest[0] ?? "?").toUpperCase()} isn't in the sequence (00–${hex(s.sequence.length - 1)})\n`), 1;
+						const seq = /^\d+$/.test(rest[0] ?? "0") ? parseInt(rest[0] ?? "0", 10) : -1;
+						if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${rest[0] ?? "?"} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
 						st.seq = seq;
 						st.line = rest[1] ? parseInt(rest[1], 10) || 0 : 0;
 						if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
@@ -11883,7 +11886,7 @@ function registerCommands(ib, engine, st) {
 							seq: st.seq,
 							line: st.line
 						});
-						ctx.out(`position ${hex(st.seq)} → block ${hex(s.sequence[st.seq], 3)} · line ${lineNo(st.line)}\n`);
+						ctx.out(`position ${dec(st.seq)} → block ${dec(s.sequence[st.seq])} · line ${lineNo(st.line)}\n`);
 						return 0;
 					}
 					case "mute":
@@ -12279,25 +12282,25 @@ function registerCommands(ib, engine, st) {
 						const what = rest[0];
 						const unused = " (not in the sequence: med seq add, or a position's menu → use block)";
 						if (what === void 0) ctx.out(s.blocks.map((b, i) => {
-							const at = s.sequence.flatMap((x, k) => x === i ? [hex(k)] : []);
-							return `${i === s.sequence[st.seq] ? "▸" : " "}${hex(i, 3)}  ${String(b.lines).padStart(4)} lines${b.name ? ` · ${b.name}` : ""}${at.length ? fmt.dim(` · positions ${at.join(" ")}`) : fmt.dim(unused)}`;
+							const at = s.sequence.flatMap((x, k) => x === i ? [dec(k)] : []);
+							return `${i === s.sequence[st.seq] ? "▸" : " "}${dec(i)}  ${String(b.lines).padStart(4)} lines${b.name ? ` · ${b.name}` : ""}${at.length ? fmt.dim(` · positions ${at.join(" ")}`) : fmt.dim(unused)}`;
 						}).join("\n") + "\n");
 						else if (what === "new") {
 							const n = e.newBlock(rest[1] ? parseInt(rest[1], 10) || 64 : s.blocks[s.sequence[st.seq]]?.lines ?? 64);
-							ctx.out(`block ${hex(n, 3)}${unused}\n`);
-						} else if (what === "copy") ctx.out(`block ${hex(e.cloneBlock(s.sequence[st.seq]), 3)}${unused}\n`);
+							ctx.out(`block ${dec(n)}${unused}\n`);
+						} else if (what === "copy") ctx.out(`block ${dec(e.cloneBlock(s.sequence[st.seq]))}${unused}\n`);
 						else if (what === "lines") {
 							const n = parseInt(rest[1] ?? "", 10);
 							if (!(n >= 1 && n <= 3200)) return ctx.err(`med block lines: ${rest[1] ?? "?"} — a block has 1–3200 lines\n`), 1;
 							e.setLines(s.sequence[st.seq], n);
-							ctx.out(`block ${hex(s.sequence[st.seq], 3)}: ${n} line${n === 1 ? "" : "s"}\n`);
+							ctx.out(`block ${dec(s.sequence[st.seq])}: ${n} line${n === 1 ? "" : "s"}\n`);
 						} else if (what === "rm") {
-							const n = blockArg(s, rest[1] ?? hex(s.sequence[st.seq], 3));
+							const n = blockArg(s, rest[1] ?? String(s.sequence[st.seq]));
 							if (typeof n === "string") return ctx.err(`med block rm: ${n}\n`), 1;
-							const at = s.sequence.flatMap((x, k) => x === n ? [hex(k)] : []);
-							if (at.length) return ctx.err(`med block rm: block ${hex(n, 3)} plays at position${at.length > 1 ? "s" : ""} ${at.join(" ")} (take it out of the sequence first)\n`), 1;
+							const at = s.sequence.flatMap((x, k) => x === n ? [dec(k)] : []);
+							if (at.length) return ctx.err(`med block rm: block ${dec(n)} plays at position${at.length > 1 ? "s" : ""} ${at.join(" ")} (take it out of the sequence first)\n`), 1;
 							if (!e.blockDelete(n)) return ctx.err("med block rm: a song keeps one block at least\n"), 1;
-							ctx.out(`deleted block ${hex(n, 3)} (⌘Z: back)${n < s.blocks.length ? " · the blocks after it moved down a number" : ""}\n`);
+							ctx.out(`deleted block ${dec(n)} (⌘Z: back)${n < s.blocks.length ? " · the blocks after it moved down a number" : ""}\n`);
 						} else return ctx.err("med block [new [lines] | copy | lines <n> | rm <block>]\n"), 1;
 						return 0;
 					}
@@ -12306,7 +12309,7 @@ function registerCommands(ib, engine, st) {
 						const e = st.editor;
 						const [what, a, b] = rest;
 						if (what === void 0) return ctx.out(seqList(s)), 0;
-						const pos = a !== void 0 ? parseInt(a, 16) : st.seq;
+						const pos = a !== void 0 ? parseInt(a, 10) : st.seq;
 						if ([
 							"rm",
 							"set",
@@ -12320,11 +12323,11 @@ function registerCommands(ib, engine, st) {
 							const bk = blockArg(s, what === "set" ? b : a);
 							if (typeof bk === "string") return ctx.err(`med seq ${what}: ${bk}\n`), 1;
 						}
-						const said = (p) => ctx.out(`position ${hex(p)} → block ${hex(s.sequence[p], 3)}\n`);
+						const said = (p) => ctx.out(`position ${dec(p)} → block ${dec(s.sequence[p])}\n`);
 						if (what === "move") {
 							const d = b === "up" ? -1 : b === "down" ? 1 : 0;
 							if (!d) return ctx.err("med seq move <position> up|down\n"), 1;
-							if (!e.seqMove(pos, d)) return ctx.err(`med seq move: position ${hex(pos)} is already at the ${d < 0 ? "top" : "bottom"}\n`), 1;
+							if (!e.seqMove(pos, d)) return ctx.err(`med seq move: position ${dec(pos)} is already at the ${d < 0 ? "top" : "bottom"}\n`), 1;
 							st.seq = pos + d;
 							said(st.seq);
 							return 0;
@@ -12340,9 +12343,9 @@ function registerCommands(ib, engine, st) {
 						} else if (what === "rm") {
 							if (s.sequence.length <= 1) return ctx.err("med seq rm: the sequence keeps one position at least\n"), 1;
 							e.seqDelete(pos);
-							ctx.out(`removed position ${hex(pos)}\n`);
-						} else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 16)), said(pos);
-						else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 16)), said(s.sequence.length - 1);
+							ctx.out(`removed position ${dec(pos)}\n`);
+						} else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 10)), said(pos);
+						else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 10)), said(s.sequence.length - 1);
 						else return ctx.err("med seq [new|copy|rm [position] · set <position> <block> · add <block> · move <position> up|down]\n"), 1;
 						if (what === "new" || what === "copy") said(st.seq);
 						st.seq = Math.max(0, Math.min(s.sequence.length - 1, st.seq));
@@ -13166,7 +13169,7 @@ var FR = {
 	"● REC: the keys record where the song is": "● REC : les touches enregistrent là où en est le morceau",
 	"says the command under the cursor in words (0C20 · volume 32 of 64)": "dit en mots la commande sous le curseur (0C20 · volume 32 sur 64)",
 	"the cursor · 16 lines · home / end: the block's first / last line": "le curseur · 16 lignes · début / fin : la première / dernière ligne du bloc",
-	"in decimal, like OctaMED (the commands' values are hex)": "en décimal, comme OctaMED (les valeurs des commandes sont en hexa)",
+	"lines, positions and blocks in decimal, like OctaMED (the commands' values are hex)": "lignes, positions et blocs en décimal, comme OctaMED (les valeurs des commandes sont en hexa)",
 	"2 lines a notch": "2 lignes par cran",
 	"the next track · the one before (←→ walk the columns into the next one too)": "la piste suivante · la précédente (←→ parcourent aussi les colonnes jusqu'à la suivante)",
 	"the position before · after in the sequence": "la position d'avant · d'après dans la séquence",

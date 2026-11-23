@@ -39,7 +39,7 @@ import { VINTAGE_SAID } from "./dsp/vintage";
 import { describe, makeGuide } from "./guide";
 import { makeStart } from "./start";
 import type { Autosave } from "./autosave";
-import { chordsOf, heardRate, hex, lineNo, MAX_NOTE, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
+import { chordsOf, dec, heardRate, hex, lineNo, MAX_NOTE, noteName, NOTE_OFF, PAULA_CLOCK, periodOf, ptBpmOf, type Song } from "./song";
 
 export interface State {
   song: Song | null;
@@ -143,23 +143,23 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const run = (line: string) => void ib.shell.run(line);
   const seqList = new ListView<number>();
   const instList = new ListView<number>();
-  seqList.cmdOf = (i) => `med pos ${hex(i)}`;
-  seqList.onActivate = (i) => run(`med play song ${hex(i)}`);
+  seqList.cmdOf = (i) => `med pos ${dec(i)}`;
+  seqList.onActivate = (i) => run(`med play song ${dec(i)}`);
   seqList.menuOf = (i) => {
     const s = st.song;
     const n = s?.sequence.length ?? 0;
     return [
-      { label: t("play from here"), cmd: `med play song ${hex(i)}` },
+      { label: t("play from here"), cmd: `med play song ${dec(i)}` },
       "-",
       { label: t("use another block…"), hint: "wheel · ‹ ›", run: () => void useBlock(i) },
-      { label: t("the next block"), cmd: `med seq set ${hex(i)} ${hex(Math.min((s?.blocks.length ?? 1) - 1, (s?.sequence[i] ?? 0) + 1), 3)}`, disabled: !s || (s.sequence[i] ?? 0) >= s.blocks.length - 1 },
-      { label: t("move up"), cmd: `med seq move ${hex(i)} up`, disabled: i === 0 },
-      { label: t("move down"), cmd: `med seq move ${hex(i)} down`, disabled: i >= n - 1 },
+      { label: t("the next block"), cmd: `med seq set ${dec(i)} ${dec(Math.min((s?.blocks.length ?? 1) - 1, (s?.sequence[i] ?? 0) + 1))}`, disabled: !s || (s.sequence[i] ?? 0) >= s.blocks.length - 1 },
+      { label: t("move up"), cmd: `med seq move ${dec(i)} up`, disabled: i === 0 },
+      { label: t("move down"), cmd: `med seq move ${dec(i)} down`, disabled: i >= n - 1 },
       "-",
-      { label: t("add a position after it, same block"), cmd: `med seq add ${hex(s?.sequence[i] ?? 0, 3)}` },
-      { label: t("a new block after it"), hint: "alt N", cmd: `med seq new ${hex(i)}` },
-      { label: t("a copy of this block after it"), hint: "alt D", cmd: `med seq copy ${hex(i)}` },
-      { label: t("remove this position"), hint: "alt ⌫", cmd: `med seq rm ${hex(i)}`, danger: true, disabled: n <= 1 },
+      { label: t("add a position after it, same block"), cmd: `med seq add ${dec(s?.sequence[i] ?? 0)}` },
+      { label: t("a new block after it"), hint: "alt N", cmd: `med seq new ${dec(i)}` },
+      { label: t("a copy of this block after it"), hint: "alt D", cmd: `med seq copy ${dec(i)}` },
+      { label: t("remove this position"), hint: "alt ⌫", cmd: `med seq rm ${dec(i)}`, danger: true, disabled: n <= 1 },
     ];
   };
   seqList.tipOf = () => t("click: go there · double-click: play from here · wheel on the block: another block · drag: move it · right-click: more");
@@ -168,34 +168,34 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     if (to === undefined || to === from) return;
     void (async () => {
       const d = to > from ? 1 : -1;
-      for (let p = from; p !== to; p += d) await ib.shell.run(`med seq move ${hex(p)} ${d > 0 ? "down" : "up"}`);
+      for (let p = from; p !== to; p += d) await ib.shell.run(`med seq move ${dec(p)} ${d > 0 ? "down" : "up"}`);
     })();
   };
   /** a position plays another block: the list of blocks, the unused ones said */
   const useBlock = async (pos: number) => {
     const s = st.song;
     if (!s) return;
-    const opts = s.blocks.map((b, i) => ({ label: `${hex(i, 3)}  ${b.lines} ${t("lines")}${b.name ? ` · ${b.name}` : ""}${s.sequence.includes(i) ? "" : ` · ${t("not in the sequence")}`}` }));
-    const pick = await ib.ui.choose(`${t("position")} ${hex(pos)}: ${t("which block?")}`, opts, { selected: s.sequence[pos] });
-    if (pick !== null) run(`med seq set ${hex(pos)} ${hex(pick, 3)}`);
+    const opts = s.blocks.map((b, i) => ({ label: `${dec(i)}  ${b.lines} ${t("lines")}${b.name ? ` · ${b.name}` : ""}${s.sequence.includes(i) ? "" : ` · ${t("not in the sequence")}`}` }));
+    const pick = await ib.ui.choose(`${t("position")} ${dec(pos)}: ${t("which block?")}`, opts, { selected: s.sequence[pos] });
+    if (pick !== null) run(`med seq set ${dec(pos)} ${dec(pick)}`);
   };
   /** the blocks no position plays: add one to the sequence, or delete it */
   const unusedBlocks = async () => {
     const s = st.song;
     if (!s) return;
     const free = s.blocks.flatMap((_, i) => (s.sequence.includes(i) ? [] : [i]));
-    const opts = free.flatMap((i) => [{ label: `${t("add block")} ${hex(i, 3)} ${t("at the end of the sequence")}` }, { label: `${t("delete block")} ${hex(i, 3)}` }]);
+    const opts = free.flatMap((i) => [{ label: `${t("add block")} ${dec(i)} ${t("at the end of the sequence")}` }, { label: `${t("delete block")} ${dec(i)}` }]);
     const pick = await ib.ui.choose(t("blocks in no position"), opts);
     if (pick === null) return;
     const b = free[Math.floor(pick / 2)];
-    run(pick % 2 ? `med block rm ${hex(b, 3)}` : `med seq add ${hex(b, 3)}`);
+    run(pick % 2 ? `med block rm ${dec(b)}` : `med seq add ${dec(b)}`);
   };
   /** one block more or less at a position (the wheel, ‹ ›) */
   const nudgeBlock = (pos: number, d: number) => {
     const s = st.song;
     if (!s) return;
     const b = Math.max(0, Math.min(s.blocks.length - 1, (s.sequence[pos] ?? 0) + d));
-    if (b !== s.sequence[pos]) run(`med seq set ${hex(pos)} ${hex(b, 3)}`);
+    if (b !== s.sequence[pos]) run(`med seq set ${dec(pos)} ${dec(b)}`);
   };
   const screens = makeScreens(ib, engine, st);
   /** this page (State.page says which one is on screen) */
@@ -320,7 +320,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const to = Math.max(0, Math.min(s.sequence.length - 1, st.seq + d));
     if (to === st.seq) return;
     unselect();
-    run(`med pos ${hex(to)} ${st.line}`);
+    run(`med pos ${dec(to)} ${st.line}`);
   };
   /** what an operation works on: the selection, or the cell under the cursor */
   const target = (): Selection => st.sel && st.sel.block === blockNo() ? st.sel : { block: blockNo(), line0: st.line, line1: st.line, track0: st.track, track1: st.track };
@@ -617,7 +617,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     return menuEntries(line, track);
   };
   const menuEntries = (line: number, track: number): MenuEntry[] => [
-    { label: t("play from here"), run: () => run(`med play song ${hex(st.seq)} ${line}`) },
+    { label: t("play from here"), run: () => run(`med play song ${dec(st.seq)} ${line}`) },
     "-",
     // each runs its med command (the LOG shows it: the same line works in the shell)
     { label: t("copy"), hint: "alt C", cmd: "med copy" },
@@ -753,7 +753,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           // record = edit mode + playing: the keys write where the song is (B2)
           if (st.edit) parts.push({ k: -1, label: ` ● ${t("REC")} `, style: { fg: c.bg, bg: c.error, attrs: BOLD }, hit: { cmd: "med edit off", tip: t("recording: the keys write where the song is · click: stop writing") } });
         } else {
-          parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${hex(st.seq)}`, tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧space from the cursor") } });
+          parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${dec(st.seq)}`, tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧space from the cursor") } });
           parts.push({ k: -1, label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"), style: st.edit ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: c.fg }, hit: { cmd: `med edit ${st.edit ? "off" : "on"}`, tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block") } });
         }
         // the mix's level while playing: a bar of 6, and LIM when the limiter takes more than 1 dB
@@ -818,18 +818,18 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       seqList.items = s.sequence.map((_, i) => i);
       if (seqList.selected !== st.seq) seqList.select(st.seq);
       // its columns, and the blocks no position plays (a click: add or delete them)
-      ui.text(seqBox.x, seqBox.y, "pos  block", { fg: c.subtle });
+      ui.text(seqBox.x, seqBox.y, "pos    block", { fg: c.subtle });
       const free = s.blocks.length - new Set(s.sequence).size;
       const listBox = { x: seqBox.x, y: seqBox.y + 1, w: seqBox.w, h: Math.max(1, seqBox.h - 1 - (free > 0 ? 1 : 0)) };
       seqList.render(ui, listBox, false, (i, row, sel) => {
         const bn = s.sequence[i];
         const b = s.blocks[bn];
-        ui.text(row.x, row.y, hex(i), { fg: sel ? c.accent : c.muted, attrs: sel ? BOLD : 0 });
+        ui.text(row.x, row.y, dec(i), { fg: sel ? c.accent : c.muted, attrs: sel ? BOLD : 0 });
         // the block: ‹ › and the wheel change it
-        const bx = row.x + 3;
+        const bx = row.x + 4;
         if (sel) ui.button(bx, row.y, "‹", () => nudgeBlock(i, -1), { quiet: true, tip: t("the block before") });
-        ui.text(bx + 3, row.y, hex(bn, 3), { fg: sel ? c.accent : c.fg, attrs: sel ? BOLD : 0 });
-        ui.hit({ x: bx + 3, y: row.y, w: 3, h: 1 }, { onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1), onClick: () => run(`med pos ${hex(i)}`), tip: t("the block this position plays · the wheel: another · right-click: use block…, move") });
+        ui.text(bx + 3, row.y, dec(bn), { fg: sel ? c.accent : c.fg, attrs: sel ? BOLD : 0 });
+        ui.hit({ x: bx + 3, y: row.y, w: 3, h: 1 }, { onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1), onClick: () => run(`med pos ${dec(i)}`), tip: t("the block this position plays · the wheel: another · right-click: use block…, move") });
         if (sel) ui.button(bx + 6, row.y, "›", () => nudgeBlock(i, 1), { quiet: true, tip: t("the next block") });
         if (b?.name) ui.text(bx + 10, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 13));
       });
@@ -860,8 +860,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const bn = blockNo();
       const b = s.blocks[bn];
       // follow off, playing: where the song is, said on the frame (the line heard may be off screen)
-      const playingAt = now && !st.follow ? ` · ▶ ${hex(s.sequence[now.seq] ?? 0, 3) === hex(bn, 3) ? "" : `${t("block")} ${hex(s.sequence[now.seq] ?? 0, 3)} `}${lineNo(now.line)}` : "";
-      const inner = ui.box(right, { title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${lineNo(st.line)}/${lineNo((b?.lines ?? 1) - 1)}${playingAt}`, focused });
+      const playingAt = now && !st.follow ? ` · ▶ ${dec(s.sequence[now.seq] ?? 0) === dec(bn) ? "" : `${t("block")} ${dec(s.sequence[now.seq] ?? 0)} `}${lineNo(now.line)}` : "";
+      const inner = ui.box(right, { title: `${t("BLOCK")} ${dec(bn)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${lineNo(st.line)}/${lineNo((b?.lines ?? 1) - 1)}${playingAt}`, focused });
       if (!b) return;
       const chords = !!s.chordColumn;
       if (!chords && st.col === CHORD_COL) st.col = CMD_COL;
@@ -996,13 +996,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
       }
       // ⏎ the song from this block's top · ⇧⏎ this block, looped (pressed again: from its top again) (D1)
-      if (k.key === "enter" && !k.alt) return run(`med play ${k.shift ? "block" : "song"} ${hex(st.seq)}`), true;
+      if (k.key === "enter" && !k.alt) return run(`med play ${k.shift ? "block" : "song"} ${dec(st.seq)}`), true;
       if (k.key === "space") {
         if (engine.playing) run("med stop");
         // a long sound ringing from a key: space silences it first (I5)
         else if (!k.shift && engine.hush()) return true;
         // ⇧space: from the cursor's line (OctaMED's "continue")
-        else if (k.shift) run(`med play song ${hex(st.seq)} ${st.line}`);
+        else if (k.shift) run(`med play song ${dec(st.seq)} ${st.line}`);
         else run(`med edit ${st.edit ? "off" : "on"}`);
         return true;
       }
@@ -1041,9 +1041,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyF": return run(`med follow ${st.follow ? "off" : "on"}`), true;
           // mute / solo the cursor's track, the sequence (D3): what the mouse and med do, by key
           case "KeyM": return run(`med ${k.shift ? "solo" : "mute"} ${st.track + 1}`), true;
-          case "KeyN": return unselect(), run(`med seq new ${hex(st.seq)}`), true;
-          case "KeyD": return unselect(), run(`med seq copy ${hex(st.seq)}`), true;
-          case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${hex(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
+          case "KeyN": return unselect(), run(`med seq new ${dec(st.seq)}`), true;
+          case "KeyD": return unselect(), run(`med seq copy ${dec(st.seq)}`), true;
+          case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${dec(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
           // the vintage mode of the instrument the keys play: off → amiga → akai → off (D4)
           case "KeyR": {
             const ins = s.instruments[st.inst];
@@ -1173,7 +1173,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         case "right": return moveCol(1), true;
         case "page-up": return moveLine(-16), true;
         case "page-down": return moveLine(16), true;
-        case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)}`), true;
+        case "confirm": return run(engine.playing ? "med stop" : `med play song ${dec(st.seq)}`), true;
         // tab, in a deck that keeps it (ICEBREAKER 0.6.2 hands it over as "the next item"): the next track
         case "item-next": {
           const s = st.song;

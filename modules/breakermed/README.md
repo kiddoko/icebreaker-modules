@@ -37,7 +37,8 @@ play: delete and ⌫ change nothing either. Edit mode on while the song plays is
 "● rec" at the top, and each key writes its note on the line being heard. Only the BLOCK screen
 writes: on INSTRUMENT, SONG, EXPORT and the guide the keys only play.
 
-**Line numbers are decimal**, like OctaMED's (000–063); the commands' values stay hex (`0C40`).
+**Line numbers, positions and block numbers are decimal**, like OctaMED's (000–063), in the page
+and in the `med` commands; only the commands' values stay hex (`0C40`).
 The status line says the command under the cursor in words: "0C20 · volume 32 of 64",
 "0F06 · tempo 6 BPM (the speed is 09xx)".
 

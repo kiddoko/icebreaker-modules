@@ -297,6 +297,8 @@ export function noteName(n: number): string {
 
 /** a line number, in decimal like OctaMED's (the commands' values stay hex): 000, 063, 1024 */
 export const lineNo = (v: number, digits = 3) => String(v).padStart(digits, "0");
+/** a position of the sequence, or a block's number: decimal too, three digits (000, 012) */
+export const dec = (v: number) => String(v).padStart(3, "0");
 export const hex = (v: number, digits = 2) => v.toString(16).toUpperCase().padStart(digits, "0");
 
 // ── pitch ──────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ From Fable's hands-on review of 0.12.1 and the six answers it asked for.
 - ⏎ plays the song from the **top of the block** you're in (again while it plays: the block starts over) · ⇧⏎ loops the block from its top · **⇧space** plays from the cursor's line. The ▶ button and the gamepad play from the block's top too.
 
 **Line numbers (D2)**
-- In **decimal**, like OctaMED (000–063); the commands' values stay hex. `med note`, `med chord`, `med pos`, `med play` take decimal lines.
+- Lines, sequence positions and block numbers in **decimal**, like OctaMED (000–063); only the commands' values stay hex. Every `med` command that takes a line, a position or a block takes it in decimal (hex is refused, not misread); song files are unchanged (plain numbers).
 
 **Keys (D3)**
 - alt M mutes the cursor's track, ⇧ alt M solos it · alt N a new block after this position · alt D a copy of this block after it · alt ⌫ removes the position · insert (edit mode) inserts a line.
