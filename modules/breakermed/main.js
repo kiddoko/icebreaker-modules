@@ -11046,7 +11046,7 @@ function registerCommands(ib, engine, st) {
 		await st.autosave?.flush();
 		if (force) return true;
 		const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
-		const pick = await ib.ui.choose(`BreakerMED: the changes to “${name}” aren't saved`, [
+		const pick = await ib.ui.choose(`“${name}”: changes not saved`, [
 			{ label: "save them first" },
 			{ label: "don't save (the autosave keeps a copy: med recover)" },
 			{ label: "cancel: keep the song" }

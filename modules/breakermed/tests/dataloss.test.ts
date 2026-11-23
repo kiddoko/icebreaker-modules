@@ -61,7 +61,7 @@ describe("0.12 R2: new, open, demo never replace a changed song without asking",
     const song = d.st.song;
     d.answers.push(2); // cancel
     expect(await d.med("med new")).toBe(1);
-    expect(d.asked.at(-1)).toMatch(/aren't saved/);
+    expect(d.asked.at(-1)).toMatch(/changes not saved/);
     expect(d.st.song).toBe(song);
   });
   it("don't save: the autosave keeps a copy, even of a change a moment old", async () => {
