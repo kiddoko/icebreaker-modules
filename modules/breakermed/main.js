@@ -6177,7 +6177,7 @@ var GUIDE = [
 			["med save · ⌘S", "save (a new song asks for its name: never over another song)"],
 			["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
 			["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
-			["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
+			["enter", "play the song from the cursor · ⇧enter: this block, again and again · enter again: stop"],
 			["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
 			["med new, open, demo", "a song with changes asks first: save, don't save (the autosave keeps a copy), cancel"]
 		]
@@ -6733,7 +6733,7 @@ function makeApp(ib, engine, st) {
 	/** while the mouse drags a selection: the view stays put (the line under the mouse is the one drawn) */
 	let dragTop = null;
 	/** the master meter, held a little between frames */
-	let meterPeak = 0, meterLim = 0;
+	let meterPeak = 0, meterAt = 0, limUntil = 0;
 	/** the first line on screen when the view scrolls at the edges */
 	let viewTop = 0;
 	/** a drag, whichever hit of the block gets the moves (the deck sends them to the hit where it started) */
@@ -7529,8 +7529,11 @@ function makeApp(ib, engine, st) {
 				}
 				const m = engine.master?.() ?? null;
 				if (m) {
-					meterPeak = Math.max(m.peak, meterPeak * .85);
-					meterLim = m.limitDb > 1 ? 12 : Math.max(0, meterLim - 1);
+					const ms = performance.now();
+					meterPeak = Math.max(m.peak, meterPeak * 10 ** (-12 * Math.max(0, ms - meterAt) / 2e4));
+					meterAt = ms;
+					if (m.limitDb > 1) limUntil = ms + 1500;
+					const meterLim = ms < limUntil;
 					const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
 					const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
 					parts.push({
@@ -7539,7 +7542,7 @@ function makeApp(ib, engine, st) {
 						style: { fg: meterLim ? c.warning : c.success },
 						hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") }
 					});
-				} else meterPeak = 0, meterLim = 0;
+				} else meterPeak = 0, limUntil = 0;
 				parts.push({
 					k: 0,
 					label: tempo,
@@ -7787,8 +7790,9 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "guide") return guide.draw(ui, right, focused);
 			const bn = blockNo();
 			const b = s.blocks[bn];
+			const playingAt = now && !st.follow ? ` · ▶ ${hex(s.sequence[now.seq] ?? 0, 3) === hex(bn, 3) ? "" : `${t("block")} ${hex(s.sequence[now.seq] ?? 0, 3)} `}${hex(now.line, 3)}` : "";
 			const inner = ui.box(right, {
-				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}`,
+				title: `${t("BLOCK")} ${hex(bn, 3)}${b?.name ? ` · ${b.name}` : ""} · ${t("line")} ${hex(st.line)}/${hex((b?.lines ?? 1) - 1)}${playingAt}`,
 				focused
 			});
 			if (!b) return;
@@ -7917,16 +7921,17 @@ function makeApp(ib, engine, st) {
 				if (line < 0 || line >= b.lines) continue;
 				const here = line === st.line;
 				const beat = line % Math.max(1, s.lpb) === 0;
-				const bg = here ? engine.playing && st.follow ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : line === heard ? mix(c.panel, c.success, .22) : beat ? c.panelAlt : void 0;
+				const bg = here ? engine.playing && st.follow ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : line === heard ? mix(c.panel, c.success, .4) : beat ? c.panelAlt : void 0;
 				if (bg !== void 0) ui.fill({
 					x: inner.x,
 					y,
 					w: inner.w,
 					h: 1
 				}, { bg });
-				ui.text(inner.x, y, hex(line, 3), {
-					fg: here ? c.accent : beat ? c.muted : c.subtle,
-					bg
+				ui.text(inner.x, y, line === heard ? "▶" + hex(line, 2) : hex(line, 3), {
+					fg: line === heard ? c.success : here ? c.accent : beat ? c.muted : c.subtle,
+					bg,
+					attrs: line === heard ? BOLD : 0
 				});
 				for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
 					const tr = firstTrack + j;
@@ -8012,7 +8017,7 @@ function makeApp(ib, engine, st) {
 				const semi = k.key === "space" ? null : pianoKey(k.code);
 				if (semi !== null) return !k.repeat && preview(st.octave * 12 + semi), true;
 			}
-			if (k.key === "enter" && !k.alt) return run(k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+			if (k.key === "enter" && !k.alt) return run(engine.playing ? "med stop" : k.shift ? `med play block ${hex(st.seq)} ${hex(st.line)}` : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
 			if (k.key === "space") {
 				if (engine.playing) run("med stop");
 				else run(`med edit ${st.edit ? "off" : "on"}`);
@@ -10912,6 +10917,21 @@ var Autosave = class {
 		delete list[path];
 		await this.io.storage.set("recovery", list);
 	}
+	/**
+	* A song came on the page: make the folder its copies will go in, now. The deck asks
+	* for the permission to write the first time (songs/.recovery/…): better when the song
+	* opens than a minute later, in the middle of typing notes.
+	*/
+	async prepare(path) {
+		if (!this.on) return;
+		try {
+			await this.io.vault.mkdir(`${recoveryFile(path)}/samples`);
+		} catch (e) {
+			this.on = false;
+			this.error = e instanceof Error ? e.message : String(e);
+			this.onError?.(this.error);
+		}
+	}
 	/** a new song on the page: nothing to copy yet */
 	reset() {
 		if (this.timer !== null) this.io.cancel(this.timer);
@@ -10967,14 +10987,14 @@ function registerCommands(ib, engine, st) {
 			st.path = dir;
 			st.editor.dirty = false;
 			st.savedAt = Date.now();
-			ib.ui.notify(`BreakerMED: saved · ${dir}`, "success");
+			ib.ui.notify(`saved · ${dir}`, "success");
 			await st.autosave?.forget(was);
 			await st.autosave?.forget(dir);
 			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
 			return;
 		}
 		for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
-		ib.ui.notify(`BreakerMED: saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
+		ib.ui.notify(`saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
 		ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
 	};
 	const writeOut = async (path, w) => {
@@ -11045,15 +11065,15 @@ function registerCommands(ib, engine, st) {
 		if (!st.song || !st.editor?.dirty) return true;
 		await st.autosave?.flush();
 		if (force) return true;
-		const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
-		const pick = await ib.ui.choose(`“${name}”: changes not saved`, [
+		const name = !hasHome() ? "this new song" : `“${st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop()}”`;
+		const pick = await ib.ui.choose(`${name}: changes not saved`, [
 			{ label: "save them first" },
 			{ label: "don't save (the autosave keeps a copy: med recover)" },
 			{ label: "cancel: keep the song" }
 		]);
 		if (pick === 0) return await saveSafely(ctx, null) === 0;
 		if (pick === 1) return true;
-		ctx.err(`med ${what}: “${name}” has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
+		ctx.err(`med ${what}: ${name} has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
 		return false;
 	};
 	/** this song is the one on the page now */
@@ -11063,6 +11083,8 @@ function registerCommands(ib, engine, st) {
 		st.editor = new Editor(song);
 		st.editor.onChange = () => (ib.ui.redraw(), st.autosave?.changed());
 		st.autosave?.reset();
+		st.autosave?.prepare(path);
+		st.savedAt = 0;
 		st.sel = null;
 		st.col = 0;
 		st.path = path;
@@ -11299,7 +11321,7 @@ function registerCommands(ib, engine, st) {
 							const songs = await find();
 							if (!songs.length) {
 								st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
-								ib.ui.notify(`BreakerMED: ${st.error}`, "warning");
+								ib.ui.notify(st.error, "warning");
 								return ctx.err(`med open: ${st.error}\n`), 1;
 							}
 							const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
@@ -12108,7 +12130,7 @@ function activate(ib) {
 		path: st.path,
 		playing: !!engine?.playing
 	}));
-	st.autosave.onError = (m) => ib.ui.notify(`BreakerMED: autosave off — ${m} (med autosave on to try again)`, "warning");
+	st.autosave.onError = (m) => ib.ui.notify(`autosave off — ${m} (med autosave on to try again)`, "warning");
 	st.autosave.load().then(() => ib.ui.redraw());
 	engine.onChange = () => ib.ui.redraw();
 	ib.audio.onStop?.(() => engine?.silence());
