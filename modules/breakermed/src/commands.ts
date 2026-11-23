@@ -15,7 +15,7 @@ import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
 import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
-import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
+import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, lineNo, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
@@ -273,7 +273,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)",
       "med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
       "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
-      "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
+      "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (line in decimal, track from 1)",
       "med block                  the blocks: their length, the positions that play them",
       "med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)",
       "med seq                    the sequence: position → block",
@@ -316,7 +316,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "": {
             if (!st.song) return ctx.out(`${fmt.dim("no song loaded")} · med open <file> · med ls\n`), 0;
             const s = st.song;
-            ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${hex(st.seq)} · block ${hex(s.sequence[st.seq] ?? 0, 3)} · line ${hex(st.line)}\n`);
+            ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${hex(st.seq)} · block ${hex(s.sequence[st.seq] ?? 0, 3)} · line ${lineNo(st.line)}\n`);
             return 0;
           }
           case "ls": {
@@ -447,12 +447,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const mode = rest[0] === "block" ? "block" : "song";
             const nums = rest.filter((x) => /^[0-9a-f]+$/i.test(x) && x !== "block");
             const seq = nums[0] !== undefined ? parseInt(nums[0], 16) : st.seq;
-            const line = nums[1] !== undefined ? parseInt(nums[1], 16) : nums[0] !== undefined ? 0 : st.line;
+            const line = nums[1] !== undefined ? parseInt(nums[1], 10) : nums[0] !== undefined ? 0 : st.line;
             if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
             // follow off: the cursor stays where you edit
             if (st.follow) (st.seq = seq), (st.line = line);
             await engine.play(mode, { seq, line });
-            ctx.out(`▶ playing the ${mode} from position ${hex(seq)}, line ${hex(line)}\n`);
+            ctx.out(`▶ playing the ${mode} from position ${hex(seq)}, line ${lineNo(line)}\n`);
             return 0;
           }
           case "stop":
@@ -464,10 +464,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const seq = parseInt(rest[0] ?? "0", 16);
             if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med: position 0–${hex(s.sequence.length - 1)}\n`), 1;
             st.seq = seq;
-            st.line = rest[1] ? parseInt(rest[1], 16) || 0 : 0;
+            st.line = rest[1] ? parseInt(rest[1], 10) || 0 : 0;
             if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
             if (engine.playing) await engine.play(engine.mode ?? "song", { seq: st.seq, line: st.line });
-            ctx.out(`position ${hex(st.seq)} → block ${hex(s.sequence[st.seq], 3)} · line ${hex(st.line)}\n`);
+            ctx.out(`position ${hex(st.seq)} → block ${hex(s.sequence[st.seq], 3)} · line ${lineNo(st.line)}\n`);
             return 0;
           }
           case "mute":
@@ -542,14 +542,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             // med chord <line> <track> <0–F>: the chord a note plays (0: none)
             const s = need();
             const [lineS, trackS, chordS] = rest;
-            const line = parseInt(lineS ?? "", 16), track = parseInt(trackS ?? "", 10) - 1;
+            const line = parseInt(lineS ?? "", 10), track = parseInt(trackS ?? "", 10) - 1;
             const n = parseInt(chordS ?? "", 16);
             const b = s.blocks[s.sequence[st.seq]];
-            if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || !(n >= 0 && n <= 15) || !/^[0-9a-f]$/i.test(chordS ?? "")) return ctx.err("med chord <line (hex)> <track 1–n> <0–F> (0: none · med chords: the table)\n"), 1;
+            if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || !(n >= 0 && n <= 15) || !/^[0-9a-f]$/i.test(chordS ?? "")) return ctx.err("med chord <line> <track 1–n> <0–F> (0: none · med chords: the table)\n"), 1;
             st.editor!.writeHex(s.sequence[st.seq], line, track, CHORD_COL, n);
             if (n) s.chordColumn = true;
             const def = chordsOf(s)[n - 1];
-            ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${n ? `chord ${n.toString(16).toUpperCase()} ${def?.name ?? ""}` : "no chord"}\n`);
+            ctx.out(`${fmt.green("✓")} ${lineNo(line)} · ${trackName(s, track)}: ${n ? `chord ${n.toString(16).toUpperCase()} ${def?.name ?? ""}` : "no chord"}\n`);
             return 0;
           }
           case "chords": {
@@ -641,7 +641,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             else if (sub === "paste") {
               if (!st.clip) return ctx.err("med paste: nothing copied (med copy)\n"), 1;
               e.paste(block, st.line, st.track, st.clip);
-              ctx.out(`pasted at line ${hex(st.line)}, ${trackName(s, st.track)}\n`);
+              ctx.out(`pasted at line ${lineNo(st.line)}, ${trackName(s, st.track)}\n`);
             } else {
               const n = parseInt(rest[0] ?? "", 10);
               if (!(n >= -48 && n <= 48 && n !== 0)) return ctx.err("med transpose <±1–48 semitones> (12: an octave)\n"), 1;
@@ -653,8 +653,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "line": {
             const s = need();
             const tracks = flags.all ? [...Array(s.tracks).keys()] : [st.track];
-            if (rest[0] === "insert") st.editor!.insertLine(s.sequence[st.seq], st.line, tracks), ctx.out(`a line inserted at ${hex(st.line)}\n`);
-            else if (rest[0] === "delete") st.editor!.deleteLine(s.sequence[st.seq], st.line, tracks), ctx.out(`line ${hex(st.line)} deleted\n`);
+            if (rest[0] === "insert") st.editor!.insertLine(s.sequence[st.seq], st.line, tracks), ctx.out(`a line inserted at ${lineNo(st.line)}\n`);
+            else if (rest[0] === "delete") st.editor!.deleteLine(s.sequence[st.seq], st.line, tracks), ctx.out(`line ${lineNo(st.line)} deleted\n`);
             else return ctx.err("med line insert|delete [--all]\n"), 1;
             return 0;
           }
@@ -750,15 +750,15 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "note": {
             const s = need();
             const [lineS, trackS, noteS, instS, cmdS] = rest;
-            const line = parseInt(lineS ?? "", 16), track = parseInt(trackS ?? "", 10) - 1;
+            const line = parseInt(lineS ?? "", 10), track = parseInt(trackS ?? "", 10) - 1;
             const note = noteS ? parseNote(noteS) : null;
             const b = s.blocks[s.sequence[st.seq]];
             const tr = trackArg(s, trackS);
             if (typeof tr === "string") return ctx.err(`med note: ${tr}\n`), 1;
-            if (b && !(line >= 0 && line < b.lines)) return ctx.err(`med note: line ${(lineS ?? "?").toUpperCase()}: the block has ${hex(0)}–${hex(b.lines - 1)}\n`), 1;
+            if (b && !(line >= 0 && line < b.lines)) return ctx.err(`med note: line ${(lineS ?? "?").toUpperCase()}: the block has 0–${b.lines - 1}\n`), 1;
             if (instS && !(/^[0-9a-f]{1,2}$/i.test(instS) && parseInt(instS, 16) <= 63)) return ctx.err(`med note: instrument ${instS.toUpperCase()}: they are 01–3F\n`), 1;
             if (noteS && note === null) return ctx.err(`med note: "${noteS}" isn't a note (C-3, C#4, ^^^ a note off, --- none)\n`), 1;
-            if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || note === null) return ctx.err("med note <line (hex)> <track 1–n> <C-3|^^^|---> [instrument hex] [command 0C20]\n"), 1;
+            if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || note === null) return ctx.err("med note <line> <track 1–n> <C-3|^^^|---> [instrument hex] [command 0C20]\n"), 1;
             // a bad command refuses the whole cell (nothing written)
             if (cmdS && !/^[0-9a-f]{4}$/i.test(cmdS)) return ctx.err(`med note: "${cmdS}" isn't a command (4 hex digits, like 0C20)\n`), 1;
             const e = st.editor!;
@@ -768,7 +768,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (cmdS) [...cmdS].forEach((d, i) => e.writeHex(bn, line, track, CMD_COL + i, parseInt(d, 16)));
             const c = s.blocks[bn].cells[line][track];
             // what was written, the way the block shows it (a script or the LOG can check it)
-            ctx.out(`${fmt.green("✓")} ${hex(line)} · ${trackName(s, track)}: ${c.note ? noteName(c.note) : "---"} ${c.inst ? hex(c.inst) : ".."}${cmdS ? ` ${cmdS.toUpperCase()}` : ""}\n`);
+            ctx.out(`${fmt.green("✓")} ${lineNo(line)} · ${trackName(s, track)}: ${c.note ? noteName(c.note) : "---"} ${c.inst ? hex(c.inst) : ".."}${cmdS ? ` ${cmdS.toUpperCase()}` : ""}\n`);
             return 0;
           }
           case "block": {

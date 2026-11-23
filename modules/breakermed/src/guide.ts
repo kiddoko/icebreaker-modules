@@ -5,6 +5,7 @@
  * Edit the lists here: the screen and the commands follow.
  */
 import type { IcebreakerAPI, KeyInput, Rect, UI } from "./icebreaker";
+import { hex, type Song } from "./song";
 
 /** the effect commands, as the replayer plays them (replayer.ts) */
 export const EFFECTS: [string, string][] = [
@@ -14,11 +15,11 @@ export const EFFECTS: [string, string][] = [
   ["04xy", "vibrato (x speed, y depth, twice ProTracker's)"],
   ["05xy / 06xy", "03 / 04 going on, with a volume slide"],
   ["07xy", "tremolo: the volume wobbles (x speed, y depth)"],
-  ["09xx", "speed: ticks a line (01–20)"],
+  ["09xx", "speed: ticks a line (01–20) · ProTracker's Fxx below 20"],
   ["0Axy / 0Dxy", "volume slide (x up, y down)"],
   ["0Bxx", "jump to position xx of the sequence"],
-  ["0Cxx", "volume (decimal 00–64, or hex in hex mode)"],
-  ["0Fxx", "tempo · 0F00 next block · F1 note twice · F2 half a line late · F3 three times · FE stop · FF note off"],
+  ["0Cxx", "volume: 00–40 hex in a new song, 0C40 the loudest (old OctaMED songs: decimal 00–64)"],
+  ["0Fxx", "tempo in BPM (the speed is 09xx) · 0F00 next block · F1 note twice · F2 half a line late · F3 three times · F8 / F9 LED filter off / on · FE stop · FF note off"],
   ["11x / 12x", "fine slide up / down"],
   ["14xy", "vibrato, ProTracker's depth"],
   ["15x", "finetune (-8…7)"],
@@ -31,6 +32,67 @@ export const EFFECTS: [string, string][] = [
   ["1Fxy", "note x ticks late · y: again every y ticks"],
   ["2Exx", "pan (F0 left … 00 middle … 10 right)"],
 ];
+
+const n2 = (v: number) => hex(v);
+/**
+ * A command in words, as the replayer plays it in this song (the status line
+ * says it under the cursor): "0C20 · volume 32 of 64", "0F06 · tempo 6 BPM
+ * (the speed is 09xx)". Line numbers are said in decimal, like the block's.
+ */
+export function describe(cmd: number, v: number, song: Pick<Song, "tempoMode" | "flags">, t: (s: string) => string = (s) => s): string {
+  const code = `${n2(cmd)}${n2(v)}`;
+  const x = v >> 4, y = v & 15;
+  const said = (() => {
+    switch (cmd) {
+      case 0x00: return v ? `${t("arpeggio")} +${x} +${y}` : "";
+      case 0x01: return `${t("slide up")} ${v}`;
+      case 0x02: return `${t("slide down")} ${v}`;
+      case 0x03: return `${t("slide to the note")}${v ? `, ${t("speed")} ${v}` : ""}`;
+      case 0x04: return `${t("vibrato")} ${t("speed")} ${x} ${t("depth")} ${y}`;
+      case 0x05: return `${t("slide to the note + volume slide")}`;
+      case 0x06: return `${t("vibrato + volume slide")}`;
+      case 0x07: return `${t("tremolo")} ${t("speed")} ${x} ${t("depth")} ${y}`;
+      case 0x09: return v > 0 && v <= 0x20 ? `${t("speed")}: ${v} ${t("ticks a line")}` : `${t("speed")}: ${t("01–20 only")}`;
+      case 0x0a: case 0x0d: return x ? `${t("volume up")} ${x} ${t("a tick")}` : `${t("volume down")} ${y} ${t("a tick")}`;
+      case 0x0b: return `${t("jump to position")} ${n2(v)}`;
+      case 0x0c: {
+        const vol = song.flags.vol7bit ? ((v & 0x7f) + 1) >> 1 : song.flags.volHex ? Math.min(64, v & 0x7f) : v < 0x99 ? Math.min(64, x * 10 + y) : 64;
+        return `${t("volume")} ${vol} ${t("of 64")}`;
+      }
+      case 0x0f: {
+        if (v === 0) return t("next block");
+        if (v === 0xf1) return t("the note twice");
+        if (v === 0xf2) return t("the note half a line late");
+        if (v === 0xf3) return t("the note three times");
+        if (v === 0xf8) return t("LED filter off");
+        if (v === 0xf9) return t("LED filter on");
+        if (v === 0xfe) return t("the song stops");
+        if (v === 0xff) return t("note off");
+        if (v > 0xf0) return t("nothing (0FF1–F3, F8, F9, FE, FF)");
+        if (song.tempoMode === "pt") return v >= 0x20 ? `${t("tempo")} ${v} BPM` : `${t("nothing here: the speed is 09xx")}`;
+        return `${t("tempo")} ${v}${song.tempoMode === "spd" ? "" : " BPM"} (${t("the speed is 09xx")})`;
+      }
+      case 0x11: return `${t("fine slide up")} ${y}`;
+      case 0x12: return `${t("fine slide down")} ${y}`;
+      case 0x14: return `${t("vibrato (ProTracker's depth)")} ${t("speed")} ${x} ${t("depth")} ${y}`;
+      case 0x15: return `${t("finetune")} ${y > 7 ? y - 16 : y}`;
+      case 0x16: return y ? `${t("loop: back to the mark")} ×${y}` : t("loop: the start mark");
+      case 0x18: return `${t("cut the note at tick")} ${v}`;
+      case 0x19: return `${t("start")} ${v * 256} ${t("frames into the sample")}`;
+      case 0x1a: return `${t("fine volume up")} ${y}`;
+      case 0x1b: return `${t("fine volume down")} ${y}`;
+      case 0x1d: return `${t("next block, at line")} ${v}`;
+      case 0x1e: return `${t("the line")} ${Math.min(15, v)} ${t("more times")}`;
+      case 0x1f: return `${t("the note")} ${x} ${t("ticks late")}${y ? `, ${t("again every")} ${y}` : ""}`;
+      case 0x2e: {
+        const p = v > 127 ? v - 256 : v;
+        return p >= -16 && p <= 16 ? `${t("pan")} ${p < 0 ? `${t("left")} ${-p}` : p > 0 ? `${t("right")} ${p}` : t("middle")}` : `${t("pan")}: F0–10 ${t("only")}`;
+      }
+    }
+    return "";
+  })();
+  return `${code} · ${said || `${t("no such command here")} (med effects)`}`;
+}
 
 export interface GuidePart {
   title: string;

@@ -281,6 +281,8 @@ export function noteName(n: number): string {
   return `${NOTE_NAMES[i % 12]}${Math.floor(i / 12) + 1}`.slice(0, 3);
 }
 
+/** a line number, in decimal like OctaMED's (the commands' values stay hex): 000, 063, 1024 */
+export const lineNo = (v: number, digits = 3) => String(v).padStart(digits, "0");
 export const hex = (v: number, digits = 2) => v.toString(16).toUpperCase().padStart(digits, "0");
 
 // ── pitch ──────────────────────────────────────────────────────────────────

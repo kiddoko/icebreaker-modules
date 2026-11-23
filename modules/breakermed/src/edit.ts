@@ -285,6 +285,8 @@ export class Editor {
       const src = clip.cells[l - line][t - track];
       c.note = src.note;
       c.inst = src.inst;
+      if (src.chord) c.chord = src.chord;
+      else delete c.chord;
       for (let p = 0; p < Math.max(c.cmd.length, src.cmd.length); p++) {
         if (p >= c.cmd.length) break; // a page this block hasn't got
         c.cmd[p] = src.cmd[p] ?? 0;
