@@ -58,14 +58,14 @@ every **alt** combination (alt + arrows too, on Mac, Windows and Linux), like an
 
 ```
 enter        play the song from the cursor      ⇧ enter    play the block, again and again
-tab · ⇧ tab  the next track · the one before    ⌘← ⌘→      the position before · after (ctrl: Windows, Linux)
+tab          the next track                     ⇧ alt ← →  the position before · after
 alt F        follow the song while it plays, or not (scroll lock too): off, the cursor stays where you edit
 space        stop (playing) · edit mode on / off (stopped: a red ● EDIT, typing writes in the block)
 ↑ ↓ ← →      the cursor (← → column by column)  PgUp PgDn Home End   jump
 the keys     a piano: Z S X D C V… an octave, Q 2 W 3 E… the next (by their place: AZERTY works)
              in edit mode they write the note and the instrument; ` (left of 1), 1 or caps lock: a note off
 0–9 A–F      the instrument / command columns, digit by digit (edit mode)
-alt ↑ ↓ · F1–F8   the piano's octave            alt ← →    the instrument it plays
+alt ↑ ↓      the piano's octave                 alt ← →    the instrument it plays
 alt 0–9      the edit step: lines the cursor moves after a note
 delete       clear the column (or the selection)   ⌫ delete the line (⇧: in every track) — edit mode only
 alt enter    insert a line (⇧: in every track)

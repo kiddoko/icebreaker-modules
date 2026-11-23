@@ -44,6 +44,20 @@ describe("0.12 R5: tab goes to the next track, ⇧tab the one before", () => {
     expect(d.press(key("tab", { shift: true }))).toBe(true);
     expect(d.st.track).toBe(7);
   });
+  it("ICEBREAKER 0.6.2 keeps tab and hands it over as item-next: the next track too", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    expect(d.app.onAction!("item-next")).toBe(true);
+    expect(d.st.track).toBe(1);
+  });
+  it("⇧ alt ←→: the position before / after", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med seq add 0");
+    d.press(key("right", { code: "ArrowRight", alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(d.st.seq).toBe(1);
+  });
 });
 
 describe("0.12 R15: one edit button, a tip on hover, nothing hard-coded", () => {

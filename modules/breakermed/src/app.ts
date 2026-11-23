@@ -721,7 +721,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         } else (meterPeak = 0), (meterLim = 0);
         parts.push({ k: 0, label: tempo, style: { fg: c.fg }, hit: { cmd: "med screen song", tip: t("the tempo · the wheel changes it · click: the SONG screen"), onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`) } });
         parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
-        parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: t("the octave the keys play · alt ↑↓ or F1–F8 · the wheel"), onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
+        parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: t("the octave the keys play · alt ↑↓ · the wheel"), onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
         parts.push({ k: 4, label: `${t("step")} ${st.step}`, style: { fg: c.muted }, hit: { tip: t("lines the cursor moves after a note · alt 0–9 · the wheel"), onWheel: (d) => (st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1)))), onClick: () => {} } });
         parts.push({ k: 5, label: engine.paula ? t("stepped") : t("smooth"), style: { fg: c.muted }, hit: { cmd: `med paula ${engine.paula ? "off" : "on"}`, tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga") } });
         if (s.echo) parts.push({ k: 1, label: `${t("echo")} ${s.echo.ms}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("the echo on the whole mix (ms) · click: the SONG screen") } });
@@ -777,10 +777,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         // the block: ‹ › and the wheel change it
         const bx = row.x + 3;
         if (sel) ui.button(bx, row.y, "‹", () => nudgeBlock(i, -1), { quiet: true, tip: t("the block before") });
-        ui.text(bx + 2, row.y, hex(bn, 3), { fg: sel ? c.accent : c.fg, attrs: sel ? BOLD : 0 });
-        ui.hit({ x: bx + 2, y: row.y, w: 3, h: 1 }, { onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1), onClick: () => run(`med pos ${hex(i)}`), tip: t("the block this position plays · the wheel: another · right-click: use block…, move") });
-        if (sel) ui.button(bx + 5, row.y, "›", () => nudgeBlock(i, 1), { quiet: true, tip: t("the next block") });
-        if (b?.name) ui.text(bx + 9, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 12));
+        ui.text(bx + 3, row.y, hex(bn, 3), { fg: sel ? c.accent : c.fg, attrs: sel ? BOLD : 0 });
+        ui.hit({ x: bx + 3, y: row.y, w: 3, h: 1 }, { onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1), onClick: () => run(`med pos ${hex(i)}`), tip: t("the block this position plays · the wheel: another · right-click: use block…, move") });
+        if (sel) ui.button(bx + 6, row.y, "›", () => nudgeBlock(i, 1), { quiet: true, tip: t("the next block") });
+        if (b?.name) ui.text(bx + 10, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 13));
       });
       if (free > 0) ui.button(seqBox.x, seqBox.y + seqBox.h - 1, `+${free} ${free > 1 ? t("blocks") : t("block")} ${t("unused")}`, () => void unusedBlocks(), { quiet: true, tip: t("blocks no position plays: add one to the sequence, or delete it") });
       const instBox = ui.box({ x: body.x, y: body.y + seqH, w: leftW, h: body.h - seqH }, { title: t("INSTRUMENTS"), focused: false });
@@ -950,7 +950,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       // F1–F8: the octave (ProTracker, OctaMED)
       const fn = /^F([1-8])$/.exec(k.code);
       if (fn && !k.alt && !k.ctrl && !k.meta) return (st.octave = +fn[1] - 1), true;
-      // ⌘←→ (ctrl on Windows, Linux): the position before / after · alt PgUp PgDn too
+      // ⌘←→ (ctrl on Windows, Linux): the position before / after, where the deck hands them over (⇧ alt ←→ always)
       if ((k.ctrl || k.meta) && !k.alt && (k.key === "left" || k.key === "right")) return goPos(k.key === "left" ? -1 : 1), true;
       if (k.alt) {
         const digit = /^Digit(\d)$/.exec(k.code);
@@ -962,9 +962,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyE": return (st.screen = "export"), true;
           case "ArrowUp": return (st.octave = Math.min(7, st.octave + 1)), true;
           case "ArrowDown": return (st.octave = Math.max(0, st.octave - 1)), true;
-          case "ArrowLeft": return (st.inst = Math.max(0, st.inst - 1)), true;
+          // ⇧ alt ←→: the position before / after in the sequence
+          case "ArrowLeft": return k.shift ? goPos(-1) : (st.inst = Math.max(0, st.inst - 1)), true;
           // one past the last: a free slot, to load a sound or make a synth in
-          case "ArrowRight": return (st.inst = Math.min(62, s.instruments.length, st.inst + 1)), true;
+          case "ArrowRight": return k.shift ? goPos(1) : (st.inst = Math.min(62, s.instruments.length, st.inst + 1)), true;
           case "KeyC": return copy(), true;
           case "KeyX": return cut(), true;
           case "KeyV": return paste(), true;
@@ -1079,6 +1080,12 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         case "page-up": return moveLine(-16), true;
         case "page-down": return moveLine(16), true;
         case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+        // tab, in a deck that keeps it (ICEBREAKER 0.6.2 hands it over as "the next item"): the next track
+        case "item-next": {
+          const s = st.song;
+          if (!s || st.home || st.screen !== "block") return false;
+          return unselect(), (st.track = (st.track + 1) % s.tracks), (st.col = 0), true;
+        }
       }
       return false;
     },

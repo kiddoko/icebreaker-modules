@@ -191,7 +191,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     st.error = "";
     await engine.load(song);
     const len = songLength(song);
-    ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+    const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
+    ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · ${n(song.tracks, "track")} · ${n(song.blocks.length, "block")} · ${n(song.sequence.length, "position")} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
   };
 
   /** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */

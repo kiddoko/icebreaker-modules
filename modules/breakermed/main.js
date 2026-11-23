@@ -6190,7 +6190,7 @@ var GUIDE = [
 			["0–9 A–F", "the hex columns: the instrument (2 digits), the chord, the command (4)"],
 			["delete · ⌫", "clear the column · delete the line (⇧: in every track) — in edit mode only"],
 			["alt enter", "insert a line (⇧: in every track)"],
-			["alt ↑↓ · F1–F8 · alt ←→", "the octave · the instrument the keys play"],
+			["alt ↑↓ · alt ←→", "the octave · the instrument the keys play"],
 			["alt 0–9", "the step: lines the cursor moves after a note"],
 			["⇧ arrows · drag", "select · alt L the track · alt K the block · alt C / X / V copy cut paste"],
 			["alt PgUp · alt PgDn", "transpose a semitone (⇧: an octave) — the same on every keyboard (alt Q / A too)"],
@@ -6201,8 +6201,8 @@ var GUIDE = [
 		title: "MOVING AROUND",
 		rows: [
 			["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines"],
-			["tab · ⇧tab", "the next track · the one before"],
-			["⌘← · ⌘→", "the position before · after in the sequence (ctrl on Windows, Linux)"],
+			["tab", "the next track (←→ walk the columns into the next one too)"],
+			["⇧ alt ← →", "the position before · after in the sequence"],
 			["alt F · scroll lock", "follow the song while it plays, or not (the cursor stays where you edit)"],
 			["med view center|edges", "the cursor's line in the middle (the default), or a view that scrolls at its edges"],
 			["med click on", "the metronome: a click on each beat while playing"],
@@ -7565,7 +7565,7 @@ function makeApp(ib, engine, st) {
 					label: `${t("oct")} ${st.octave + 1}`,
 					style: { fg: c.muted },
 					hit: {
-						tip: t("the octave the keys play · alt ↑↓ or F1–F8 · the wheel"),
+						tip: t("the octave the keys play · alt ↑↓ · the wheel"),
 						onWheel: (d) => st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1))),
 						onClick: () => {}
 					}
@@ -7726,12 +7726,12 @@ function makeApp(ib, engine, st) {
 					quiet: true,
 					tip: t("the block before")
 				});
-				ui.text(bx + 2, row.y, hex(bn, 3), {
+				ui.text(bx + 3, row.y, hex(bn, 3), {
 					fg: sel ? c.accent : c.fg,
 					attrs: sel ? BOLD : 0
 				});
 				ui.hit({
-					x: bx + 2,
+					x: bx + 3,
 					y: row.y,
 					w: 3,
 					h: 1
@@ -7740,11 +7740,11 @@ function makeApp(ib, engine, st) {
 					onClick: () => run(`med pos ${hex(i)}`),
 					tip: t("the block this position plays · the wheel: another · right-click: use block…, move")
 				});
-				if (sel) ui.button(bx + 5, row.y, "›", () => nudgeBlock(i, 1), {
+				if (sel) ui.button(bx + 6, row.y, "›", () => nudgeBlock(i, 1), {
 					quiet: true,
 					tip: t("the next block")
 				});
-				if (b?.name) ui.text(bx + 9, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 12));
+				if (b?.name) ui.text(bx + 10, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 13));
 			});
 			if (free > 0) ui.button(seqBox.x, seqBox.y + seqBox.h - 1, `+${free} ${free > 1 ? t("blocks") : t("block")} ${t("unused")}`, () => void unusedBlocks(), {
 				quiet: true,
@@ -8033,8 +8033,8 @@ function makeApp(ib, engine, st) {
 					case "KeyE": return st.screen = "export", true;
 					case "ArrowUp": return st.octave = Math.min(7, st.octave + 1), true;
 					case "ArrowDown": return st.octave = Math.max(0, st.octave - 1), true;
-					case "ArrowLeft": return st.inst = Math.max(0, st.inst - 1), true;
-					case "ArrowRight": return st.inst = Math.min(62, s.instruments.length, st.inst + 1), true;
+					case "ArrowLeft": return k.shift ? goPos(-1) : st.inst = Math.max(0, st.inst - 1), true;
+					case "ArrowRight": return k.shift ? goPos(1) : st.inst = Math.min(62, s.instruments.length, st.inst + 1), true;
 					case "KeyC": return copy(), true;
 					case "KeyX": return cut(), true;
 					case "KeyV": return paste(), true;
@@ -8131,6 +8131,11 @@ function makeApp(ib, engine, st) {
 				case "page-up": return moveLine(-16), true;
 				case "page-down": return moveLine(16), true;
 				case "confirm": return run(engine.playing ? "med stop" : `med play song ${hex(st.seq)} ${hex(st.line)}`), true;
+				case "item-next": {
+					const s = st.song;
+					if (!s || st.home || st.screen !== "block") return false;
+					return unselect(), st.track = (st.track + 1) % s.tracks, st.col = 0, true;
+				}
 			}
 			return false;
 		},
@@ -11066,7 +11071,8 @@ function registerCommands(ib, engine, st) {
 		st.error = "";
 		await engine.load(song);
 		const len = songLength(song);
-		ctx.out(`${fmt.green("♫")} ${song.title || path} · ${song.format} · ${song.tracks} tracks · ${song.blocks.length} blocks · ${song.sequence.length} positions · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+		const n = (k, one) => `${k} ${one}${k === 1 ? "" : "s"}`;
+		ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · ${n(song.tracks, "track")} · ${n(song.blocks.length, "block")} · ${n(song.sequence.length, "position")} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
 	};
 	/** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */
 	const recover = async (ctx, rec) => {
@@ -12526,7 +12532,7 @@ var FR = {
 	"the metronome: a click on each beat while playing · click: off": "le métronome : un clic à chaque temps pendant la lecture · clic : le couper",
 	"the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips": "le niveau du mix (la dernière barre : −1 dB, le maximum) · LIM : le limiteur le baisse pour qu'il ne sature jamais",
 	"the next block": "le bloc suivant",
-	"the octave the keys play · alt ↑↓ or F1–F8 · the wheel": "l'octave que jouent les touches · alt ↑↓ ou F1–F8 · la molette",
+	"the octave the keys play · alt ↑↓ · the wheel": "l'octave que jouent les touches · alt ↑↓ · la molette",
 	"the sound: smooth (interpolated) · click: stepped, like the Amiga": "le son : lisse (interpolé) · clic : en escalier, comme l'Amiga",
 	"the sound: stepped and gritty, like the Amiga's Paula · click: smooth": "le son : en escalier et granuleux, comme la puce Paula de l'Amiga · clic : lisse",
 	"the tempo · the wheel changes it · click: the SONG screen": "le tempo · la molette le change · clic : l'écran MORCEAU",

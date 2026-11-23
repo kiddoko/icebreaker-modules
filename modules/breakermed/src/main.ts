@@ -439,7 +439,7 @@ const FR: Record<string, string> = {
   "the metronome: a click on each beat while playing · click: off": "le métronome : un clic à chaque temps pendant la lecture · clic : le couper",
   "the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips": "le niveau du mix (la dernière barre : −1 dB, le maximum) · LIM : le limiteur le baisse pour qu'il ne sature jamais",
   "the next block": "le bloc suivant",
-  "the octave the keys play · alt ↑↓ or F1–F8 · the wheel": "l'octave que jouent les touches · alt ↑↓ ou F1–F8 · la molette",
+  "the octave the keys play · alt ↑↓ · the wheel": "l'octave que jouent les touches · alt ↑↓ · la molette",
   "the sound: smooth (interpolated) · click: stepped, like the Amiga": "le son : lisse (interpolé) · clic : en escalier, comme l'Amiga",
   "the sound: stepped and gritty, like the Amiga's Paula · click: smooth": "le son : en escalier et granuleux, comme la puce Paula de l'Amiga · clic : lisse",
   "the tempo · the wheel changes it · click: the SONG screen": "le tempo · la molette le change · clic : l'écran MORCEAU",
