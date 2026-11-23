@@ -378,7 +378,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (jobs.some((j) => j.solo)) await ib.vault.mkdir(`${base} stems`).catch(() => {});
             for (const job of jobs) {
               let shown = 0;
-              const pcm = await renderSong(s, { ...opts, solo: job.solo }, (p) => {
+              // a stem: before the limiter, so the stems add up to the mix (a limiter on each would not)
+              const pcm = await renderSong(s, { ...opts, solo: job.solo, limit: !job.solo }, (p) => {
                 if (p - shown >= 0.25 && p < 1) (shown = p), ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
               });
               const title = job.solo ? `${s.title || "untitled"} — ${job.label}` : s.title || "";

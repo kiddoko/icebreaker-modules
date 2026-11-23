@@ -654,6 +654,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       // closing the page stops the song; it opens on START next time ("continue" brings the song back)
       engine.stop();
       st.home = true;
+      // it opens on START next time, not on the guide (B13)
+      if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
       if (!st.song || !e?.dirty) return true;
       await a?.flush();
       const name = st.song.title || st.path.split("/").pop() || "untitled";
@@ -1048,8 +1050,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           return true;
         }
       }
-      // note off: the key left of 1 (or the one left of Z)
-      if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash")) return typeNote(NOTE_OFF), true;
+      // note off: the key left of 1 (or the one left of Z), 1 (FastTracker), caps lock (Renoise)
+      if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash" || k.code === "Digit1" || k.code === "CapsLock")) return typeNote(NOTE_OFF), true;
       const semi = pianoKey(k.code);
       if (semi !== null) {
         if (k.repeat) return true;
