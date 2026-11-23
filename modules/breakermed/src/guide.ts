@@ -115,7 +115,7 @@ export const GUIDE: GuidePart[] = [
       ["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
       ["⏎", "play the song from the top of this block · again while it plays: the block starts over"],
       ["⇧⏎", "this block, looped, from its top"],
-      ["⇧space", "play from the cursor's line"],
+      ["⇧Space", "play from the cursor's line"],
       ["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
       ["med new, open, demo", "a song with changes asks first: save, don't save, cancel"],
     ],
@@ -144,7 +144,7 @@ export const GUIDE: GuidePart[] = [
       ["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines · home / end: the block's first / last line"],
       ["the numbers", "lines, positions and blocks in decimal, like OctaMED (the commands' values are hex)"],
       ["the wheel on the block", "2 lines a notch"],
-      ["tab · ⇧tab", "the next track · the one before (←→ walk the columns into the next one too)"],
+      ["tab · ⇧Tab", "the next track · the one before (←→ walk the columns into the next one too)"],
       ["⌘←→ · ⇧ alt ←→", "the position before · after in the sequence"],
       ["alt F · scroll lock", "follow the song while it plays, or not (the cursor stays where you edit)"],
       ["med view center|edges", "the cursor's line in the middle (the default), or a view that scrolls at its edges"],
@@ -176,7 +176,7 @@ export const GUIDE: GuidePart[] = [
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
       ["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
-      ["alt R · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
+      ["alt Y · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
     ],
   },
   {
@@ -212,7 +212,7 @@ export function makeGuide(ib: IcebreakerAPI) {
       const row = all[scroll + k], y = inner.y + k;
       if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", { fg: c.accent, attrs: BOLD }, inner.w - 2);
       else {
-        ui.text(inner.x + 2, y, truncate(row.keys, keyW - 1), { fg: /^[0-9A-F]{2}/.test(row.keys) ? c.accentAlt : c.fg });
+        ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: /^[0-9A-F]{2}/.test(row.keys) ? c.accentAlt : c.fg });
         ui.text(inner.x + 2 + keyW, y, t(row.what), { fg: c.muted }, inner.w - keyW - 3);
       }
     }

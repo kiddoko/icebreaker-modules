@@ -50,14 +50,14 @@ export const USAGE: string[] = [
   "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
   "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
   "med play [song|block] [position] [line]   no position: the cursor's · a position: from its line 0 (or the line given)",
-  "                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor",
+  "                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧Space from the cursor",
   "med stop",
   "med pos <position> [line] [track]   move the cursor (and where play starts)",
   "med key <C-3> [instrument]   hear a note (nothing is written: the piano's keys do the same)",
   "med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page",
   "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
   "med paula on|off           stepped like the Amiga (on), or smooth",
-  "med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt R)",
+  "med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt Y)",
   "med edit on|off            typing writes in the block (space on the page)",
   "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
   "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
@@ -91,6 +91,19 @@ export const USAGE: string[] = [
   "med info                   the song's settings",
 ];
 
+export const EXAMPLES: ([string, string] | string)[] = [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "the song, from the top of the block the cursor is in"], ["med play block", "this block again and again"], ["med vintage 01 amiga", "instrument 01 through an Amiga's Paula"], "med mute 2", "med effects"];
+
+/** `med help`: the page the deck prints for `med -h` (ICEBREAKER's shell/help.ts layout), word for word */
+export function helpPage(): string {
+  const out = [`med — ${SUMMARY}   (module: breakermed)`, "", "USAGE", ...USAGE.map((l) => `  ${l}`), "", "EXAMPLES"];
+  for (const ex of EXAMPLES) {
+    const [line, what] = Array.isArray(ex) ? ex : [ex, ""];
+    out.push(`  $ ${line}`);
+    if (what) out.push(`    ${what}`);
+  }
+  return `${out.join("\n")}\n`;
+}
+
 /** every word `med` takes first (the dispatcher's switch, and what goes to sample / the synths / drums / bounce) */
 export const SUBS = [
   "", "help", "ls", "open", "demo", "new", "save", "saveas", "continue", "title", "export", "play", "stop", "pos", "key", "mute", "solo", "track",
@@ -101,6 +114,9 @@ export const SUBS = [
 
 /** the completion: the words of USAGE (sub-commands, their words, the flags) — it can't drift from the help */
 export const COMPLETE: string[] = [...new Set(USAGE.join(" ").split(/[\s·|,()[\]<>…]+/).map((w) => w.replace(/[:;.]+$/, "")).filter((w) => /^(--)?[a-z][a-z0-9-]*$/.test(w) && w !== "med"))];
+
+/** a number written in hex where a decimal one goes ("1A") */
+const notDecimal = (v: string | undefined) => !!v && /^[0-9a-f]+$/i.test(v) && !/^\d+$/.test(v);
 
 export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): void {
   const { fmt, parseFlags, t } = ib.lib;
@@ -149,6 +165,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     else if (/\.(med|mmd1)$/i.test(p)) ({ warnings } = await writeOut(p, writeMed(s)));
     else {
       const dir = /\.bmed$/i.test(p) ? p : `${p}.bmed`;
+      // a song still called "untitled" takes its file's name (the page's top line, the tab)
+      if (!s.title || /^untitled( \d+)?$/i.test(s.title)) s.title = (dir.split("/").pop() ?? "").replace(/\.bmed$/i, "").slice(0, 60);
       // the song's folder and song.json first: the deck's first question names the song, not samples/ (P9)
       const files = writeBmed(s).sort((a, b) => (a.path === "song.json" ? -1 : b.path === "song.json" ? 1 : 0));
       await ib.vault.mkdir(dir).catch(() => {});
@@ -275,8 +293,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     st.error = "";
     await engine.load(song);
     const len = songLength(song);
-    const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
-    ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · ${n(song.tracks, "track")} · ${n(song.blocks.length, "block")} · ${n(song.sequence.length, "position")} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+    ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · tracks ${song.tracks} · blocks ${song.blocks.length} · positions ${song.sequence.length} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
   };
 
   /** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */
@@ -303,10 +320,12 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
   };
   const posArg = (s: Song, v: string | undefined): number | string => {
     const n = parseInt(v ?? "", 10);
+    if (notDecimal(v)) return `positions are decimal: ${v} is ${dec(parseInt(v!, 16))} in hex`;
     return /^\d+$/.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").padStart(3, "0")}: the sequence has ${dec(0)}–${dec(s.sequence.length - 1)}`;
   };
   const blockArg = (s: Song, v: string | undefined): number | string => {
     const n = parseInt(v ?? "", 10);
+    if (notDecimal(v)) return `blocks are decimal: ${v} is ${dec(parseInt(v!, 16))} in hex`;
     return /^\d+$/.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").padStart(3, "0")}: the song has ${dec(0)}–${dec(s.blocks.length - 1)}`;
   };
   /** the sequence, one position a line, the cursor's marked */
@@ -322,7 +341,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     name: "med",
     summary: SUMMARY,
     usage: USAGE.join("\n"),
-    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "the song, from the top of the block the cursor is in"], ["med play block", "this block again and again"], ["med vintage 01 amiga", "instrument 01 through an Amiga's Paula"], "med mute 2", "med effects"],
+    examples: EXAMPLES,
     complete: () => COMPLETE,
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail", "quality"]);
@@ -478,10 +497,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const s = need();
             const mode = rest[0] === "block" ? "block" : "song";
             // a word that is neither a mode nor a number: refused (it used to play the song)
-            const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^\d+$/.test(x));
+            const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^[0-9a-f]+$/i.test(x)); // (hex: said below)
             if (odd !== undefined) return ctx.err(`med play: "${odd}"? med play [song|block] [position] [line]\n`), 1;
             const nums = rest.filter((x, i) => !(i === 0 && (x === "song" || x === "block")));
-            if (nums.some((x) => !/^\d+$/.test(x))) return ctx.err(`med play: positions and lines are decimal (med play song 2 16)\n`), 1;
+            const hexed = nums.find((x) => !/^\d+$/.test(x));
+            if (hexed !== undefined) return ctx.err(`med play: positions and lines are decimal${notDecimal(hexed) ? `: ${hexed} is ${dec(parseInt(hexed, 16))} in hex` : ""} (med play song 2 16)\n`), 1;
             const seq = nums[0] !== undefined ? parseInt(nums[0], 10) : st.seq;
             const line = nums[1] !== undefined ? parseInt(nums[1], 10) : nums[0] !== undefined ? 0 : st.line;
             if (seq >= s.sequence.length) return ctx.err(`med: position ${dec(seq)} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
@@ -497,6 +517,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             return 0;
           case "pos": {
             const s = need();
+            if (notDecimal(rest[0]) || notDecimal(rest[1])) {
+              const x = notDecimal(rest[0]) ? rest[0]! : rest[1]!;
+              return ctx.err(`med pos: positions and lines are decimal: ${x} is ${dec(parseInt(x, 16))} in hex\n`), 1;
+            }
             const seq = /^\d+$/.test(rest[0] ?? "0") ? parseInt(rest[0] ?? "0", 10) : -1;
             if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${rest[0] ?? "?"} isn't in the sequence (${dec(0)}–${dec(s.sequence.length - 1)})\n`), 1;
             st.seq = seq;
@@ -680,7 +704,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             return 0;
           }
           case "help":
-            ctx.out(`${SUMMARY}\n${USAGE.map((l) => `  ${l}`).join("\n")}\n`);
+            ctx.out(helpPage());
             return 0;
           case "title": {
             // med title <text>: the song's title (the SONG screen's row runs it)
@@ -953,7 +977,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!(n >= 1 && n <= most)) return ctx.err(`med tracks 1–${most}\n`), 1;
             engine.stop();
             st.editor!.setTracks(n);
-            ctx.out(`${n} track${n === 1 ? "" : "s"}\n`);
+            ctx.out(`tracks: ${n}\n`);
             return 0;
           }
           case "tempo":

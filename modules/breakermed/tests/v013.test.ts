@@ -183,7 +183,7 @@ describe("0.13 P2 / P3: the commands answer, and refuse what they don't know", (
     expect(d.engine.playing).toBe(false);
     expect(d.log).toMatch(/med play: "foo"\?/);
     await d.med("med tracks 4");
-    expect(d.log).toMatch(/4 tracks\n/);
+    expect(d.log).toMatch(/tracks: 4\n/);
     await d.med("med block lines 1");
     expect(d.log).toMatch(/: 1 line\n/);
     expect(await d.med("med pos 5")).toBe(1);
@@ -456,5 +456,59 @@ describe("0.13 D2 (all of it): positions and block numbers in decimal too", () =
     await d.med("med save");
     const json = JSON.parse(d.files.get("songs/dec.bmed/song.json") as string);
     expect(json.sequence[11]).toBe(2);
+  });
+});
+
+describe("0.13 Windows bench (61d6e29)", () => {
+  it("alt Y goes round the vintage mode (Windows' GPU overlays keep Alt+R); alt R still works where it arrives", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    d.st.inst = 0;
+    d.press(alt("KeyY"));
+    await settle();
+    expect(d.st.song!.instruments[0].vintage?.kind).toBe("amiga");
+    d.press(alt("KeyR"));
+    await settle();
+    expect(d.st.song!.instruments[0].vintage?.kind).toBe("akai");
+  });
+  it("the shell's lines dodge the deck's own '{n} tracks' (it made them '8 morceaux')", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    await d.med("med tracks 4");
+    expect(d.log).not.toMatch(/(^|· )\d+ tracks?( ·|\n)/m);
+    expect(d.log).toMatch(/tracks 8 ·/);
+    expect(d.log).toMatch(/tracks: 4\n/);
+  });
+  it("⇧Space and ⇧Tab are written whole (the deck's keycaps took '⇧s' of '⇧space')", async () => {
+    const { GUIDE } = await import("../src/guide");
+    const rows = GUIDE.flatMap((p) => p.rows.flat()).join("\n");
+    expect(rows).not.toMatch(/⇧[a-z]{2,}/);
+    expect(rows).toMatch(/⇧Space/);
+  });
+  it("med help prints the same page as med -h (the deck's layout: name, USAGE, EXAMPLES)", async () => {
+    const { USAGE } = await import("../src/commands");
+    const d = makeDeck();
+    await d.med("med help");
+    expect(d.log).toMatch(/^\$ med help\nmed — BreakerMED: a tracker/);
+    expect(d.log).toContain(`USAGE\n${USAGE.map((l) => `  ${l}`).join("\n")}\n\nEXAMPLES\n  $ med export --stems`);
+  });
+  it("save as names the song: the top line says the file's name, not 'untitled'", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    d.answers.push("songs/night drive.bmed");
+    await d.med("med saveas");
+    expect(d.st.song!.title).toBe("night drive");
+    expect(d.draw().screen().split("\n")[0]).toMatch(/night drive/);
+    expect(d.draw().screen().split("\n")[0]).not.toMatch(/untitled/);
+  });
+  it("med pos 1A: positions are decimal, said (not 'out of range')", async () => {
+    const d = makeDeck();
+    await d.med("med new");
+    expect(await d.med("med pos 1A")).toBe(1);
+    expect(d.log).toMatch(/positions and lines are decimal: 1A is 026 in hex/);
+    expect(await d.med("med seq rm 1F")).toBe(1);
+    expect(d.log).toMatch(/positions are decimal: 1F is 031 in hex/);
+    expect(await d.med("med play song 0B")).toBe(1);
+    expect(d.log).toMatch(/0B is 011 in hex/);
   });
 });

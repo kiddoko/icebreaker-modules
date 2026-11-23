@@ -20,7 +20,7 @@ It reads and writes **.bmed** (its own: a folder that keeps everything), **.med*
 - **`vault:read:songs/`**: it reads your songs and sounds in `songs/` only (`.bmed`, `.med`, `.mod`, `mod.xxx`, `.wav`…).
 - **`vault:write:songs/`**: it saves your songs in `songs/` (`med save`, and the autosave's copies in `songs/.recovery/`).
 - Nothing online, no account, no AI. ICEBREAKER **0.6.0** or later (on an older deck it says so and
-  stays off) · **0.6.2** hands ⌘S and tab to the page · **0.7.0** F1–F8, ⌘←→, ⇧tab and an autosave
+  stays off) · **0.6.2** hands ⌘S and tab to the page · **0.7.0** F1–F8, ⌘←→, ⇧Tab and an autosave
   that never asks. MP3 / M4A / OGG / Opus exports need the encoder pack (below).
 
 > **Beta.** Everything below works and was tested on macOS and Windows; it may still have rough
@@ -85,7 +85,7 @@ alt L · alt K   select the track · the whole block
 alt PgUp / PgDn transpose up / down a semitone (⇧: an octave), the same on every keyboard (alt Q / A too)
 alt M · ⇧ alt M   mute the cursor's track · solo it (again: back)
 alt N · alt D · alt ⌫   a new block after this position · a copy of this block after it · remove the position
-alt R        the instrument's vintage mode: off → amiga → akai (see Vintage)
+alt Y        the instrument's vintage mode: off → amiga → akai (alt R too, where Windows lets it through; see Vintage)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps): notes, blocks, instruments, the song's settings
              (tempo, swing, echo…), mutes; the cursor goes where it changed back; one field typed is one undo
 ⌘S · ⌘⇧S     save · save as…
@@ -130,14 +130,14 @@ med title <text>           the song's title (60 characters at most)
 med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]
 med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)
 med play [song|block] [position] [line]   no position: the cursor's · a position: from its line 0 (or the line given)
-                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor
+                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧Space from the cursor
 med stop
 med pos <position> [line] [track]   move the cursor (and where play starts)
 med key <C-3> [instrument]   hear a note (nothing is written: the piano's keys do the same)
 med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page
 med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>
 med paula on|off           stepped like the Amiga (on), or smooth
-med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt R)
+med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt Y)
 med edit on|off            typing writes in the block (space on the page)
 med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges
 med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)
@@ -317,7 +317,7 @@ med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8
 
 ## Vintage
 
-Any instrument (a sound, a synth, a kit) can be heard through an old machine: **alt R** (or the
+Any instrument (a sound, a synth, a kit) can be heard through an old machine: **alt Y** (or the
 "vintage" button at the top right of the INSTRUMENT screen) goes off → amiga → akai → off, and
 `med vintage <n> amiga | akai [rate] | off` does it from the shell. Only the sound changes: the
 instrument's frames, its notes and the song stay as they are (off: exactly the sound before).

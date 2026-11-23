@@ -13,13 +13,13 @@
  * ⌥ / alt combinations are its own on every system. Esc gives the keys back to
  * the deck (the tree takes the focus), a click brings them back.
  *
- *   ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor · space stop / edit mode
- *   ↑↓ ←→ PgUp PgDn home end the cursor · tab ⇧tab the tracks · ⌘←→ ⇧alt ←→ the positions · ⇧ + arrows select
+ *   ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧Space from the cursor · space stop / edit mode
+ *   ↑↓ ←→ PgUp PgDn home end the cursor · tab ⇧Tab the tracks · ⌘←→ ⇧alt ←→ the positions · ⇧ + arrows select
  *   the keys: a piano (keys.ts) · F1–F8 the octave · 0–9 A–F the hex columns · ` 1 caps lock note off
  *   delete clear · ⌫ delete the line · alt ⏎ / insert a line (⇧: in every track)
  *   alt ↑↓ octave · alt ←→ instrument · alt 0–9 edit step · alt L / K select the track / block
  *   alt C / X / V copy cut paste · alt PgUp / PgDn (alt Q / A) transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
- *   alt M mute · ⇧alt M solo · alt N / D / ⌫ the sequence · alt F follow · alt R vintage · ⌘S ⌘⇧S save
+ *   alt M mute · ⇧alt M solo · alt N / D / ⌫ the sequence · alt F follow · alt Y vintage · ⌘S ⌘⇧S save
  *   the chord column (when the song has chords): one digit, 1–F of the song's table
  *
  * The tabs over the right side (or alt B / I / S / E): the BLOCK; the INSTRUMENT
@@ -377,13 +377,13 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const ins = s.instruments[st.inst];
     const n = hex(st.inst + 1);
     const inner = ui.box(r, { title: `${t("INSTRUMENT")} ${n}${ins?.name ? ` · ${ins.name}` : ""}`, focused });
-    // the vintage mode, on the frame's top right: a click (or alt R) goes round off → amiga → akai (D4)
+    // the vintage mode, on the frame's top right: a click (or alt Y) goes round off → amiga → akai (D4)
     if (ins && ins.kind !== "empty") {
       const v = ins.vintage;
       const label = v ? `◆ ${t("vintage")} ${v.kind}${v.kind === "akai" && v.rate ? ` ${Math.round(v.rate / 100) / 10} kHz` : ""}` : `${t("vintage")} ${t("off")}`;
       const next = !v ? "amiga" : v.kind === "amiga" ? "akai" : "off";
       const bx = r.x + r.w - label.length - 4;
-      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt R")}: ${next}` });
+      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt Y")}: ${next}` });
     }
     const sk = synthOf(ins);
     if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
@@ -753,7 +753,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           // record = edit mode + playing: the keys write where the song is (B2)
           if (st.edit) parts.push({ k: -1, label: ` ● ${t("REC")} `, style: { fg: c.bg, bg: c.error, attrs: BOLD }, hit: { cmd: "med edit off", tip: t("recording: the keys write where the song is · click: stop writing") } });
         } else {
-          parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${dec(st.seq)}`, tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧space from the cursor") } });
+          parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${dec(st.seq)}`, tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧Space from the cursor") } });
           parts.push({ k: -1, label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"), style: st.edit ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: c.fg }, hit: { cmd: `med edit ${st.edit ? "off" : "on"}`, tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block") } });
         }
         // the mix's level while playing: a bar of 6, and LIM when the limiter takes more than 1 dB
@@ -1001,7 +1001,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         if (engine.playing) run("med stop");
         // a long sound ringing from a key: space silences it first (I5)
         else if (!k.shift && engine.hush()) return true;
-        // ⇧space: from the cursor's line (OctaMED's "continue")
+        // ⇧Space: from the cursor's line (OctaMED's "continue")
         else if (k.shift) run(`med play song ${dec(st.seq)} ${st.line}`);
         else run(`med edit ${st.edit ? "off" : "on"}`);
         return true;
@@ -1045,6 +1045,9 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           case "KeyD": return unselect(), run(`med seq copy ${dec(st.seq)}`), true;
           case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${dec(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
           // the vintage mode of the instrument the keys play: off → amiga → akai → off (D4)
+          // alt Y everywhere; alt R too where nothing takes it first (on Windows the GPU overlays,
+          // NVIDIA's and AMD's, keep Alt+R for themselves: the page never gets it)
+          case "KeyY":
           case "KeyR": {
             const ins = s.instruments[st.inst];
             if (!ins || ins.kind === "empty") return ib.ui.notify(t("an empty instrument: nothing to make vintage"), "warning"), true;
@@ -1099,7 +1102,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         case "end": return moveLine(9999), true;
         case "left": return unselect(), moveCol(-1), true;
         case "right": return unselect(), moveCol(1), true;
-        // tab, ⇧tab: the next track, the one before (its note column)
+        // tab, ⇧Tab: the next track, the one before (its note column)
         case "tab": return unselect(), (st.track = (st.track + (k.shift ? s.tracks - 1 : 1)) % s.tracks), (st.col = 0), true;
         case "scrolllock": return run(`med follow ${st.follow ? "off" : "on"}`), true;
         // they write: in edit mode only (off, the keys only play)
