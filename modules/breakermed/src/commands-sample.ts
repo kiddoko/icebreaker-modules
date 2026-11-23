@@ -68,7 +68,7 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
         // and the starter pack's sounds nobody has recorded yet: computed placeholders
         const missing = PACK.filter((p) => !found.includes(`${PACK_DIR}/${p.file}`));
         const labels = [...found, ...missing.map((p) => `pack: ${p.file.split("/").pop()!.replace(/\.wav$/, "")} (placeholder) · ${p.what}`)];
-        const i = await ib.ui.choose(found.length ? "LOAD A SOUND" : "LOAD A SOUND (none in songs/ yet: the pack's placeholders)", labels.map((label) => ({ label })));
+        const i = await ib.ui.choose(found.length ? ib.lib.t("load a sound") : ib.lib.t("load a sound (none in songs/ yet: the pack's placeholders)"), labels.map((label) => ({ label })));
         if (i === null) return 1;
         if (i >= found.length) {
           const p = missing[i - found.length];

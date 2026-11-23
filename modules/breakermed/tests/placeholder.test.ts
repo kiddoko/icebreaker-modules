@@ -29,7 +29,7 @@ describe("0.12: the sound pack's placeholders, computed until people record them
     await d.med("med new");
     d.answers.push(0);
     expect(await d.med("med sampler")).toBe(0);
-    expect(d.asked.at(-1)).toMatch(/LOAD A SOUND.*kick-acoustic/);
+    expect(d.asked.at(-1)).toMatch(/load a sound.*kick-acoustic/);
     expect(d.st.song!.instruments[d.st.inst].kind).toBe("sample");
   });
 });

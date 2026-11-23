@@ -26,7 +26,7 @@ import { SCREENS, type Screen } from "./screens";
 
 
 export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): void {
-  const { fmt, parseFlags } = ib.lib;
+  const { fmt, parseFlags, t } = ib.lib;
 
   // the module sees only songs/ (its permissions: vault:read:songs/, vault:write:songs/)
   const find = async (dir = "songs", depth = 0, out: string[] = []): Promise<string[]> => {
@@ -46,10 +46,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     const rec = given ? undefined : await st.autosave?.find(p);
     if (rec) {
       const when = new Date(rec.at).toLocaleString();
-      const pick = await ib.ui.choose(`BreakerMED: ${p} has changes that were never saved (autosaved ${when})`, [
-        { label: "recover them (the autosaved version)" },
-        { label: "open the saved file, keep the autosaved copy for later" },
-        { label: "open the saved file, throw the changes away" },
+      const pick = await ib.ui.choose(`${p}: ${t("changes never saved")} (${t("autosaved")} ${when})`, [
+        { label: t("recover them (the autosaved version)") },
+        { label: t("open the saved file, keep the autosaved copy for later") },
+        { label: t("open the saved file, throw the changes away") },
       ]);
       if (pick === null) return;
       if (pick === 0) return recover(ctx, rec);
@@ -140,14 +140,14 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     let path = given;
     if (!path && !o.ask && hasHome()) path = defaultPath();
     if (!path) {
-      const name = await ib.ui.prompt("SAVE AS", { initial: await freeName(), placeholder: "songs/my song.bmed (or .mod, .med)" });
+      const name = await ib.ui.prompt(t("save as"), { initial: await freeName(), placeholder: t("songs/my song.bmed (or .mod, .med)") });
       if (name === null || !name.trim()) return ctx.err("med save: not saved (no name given)\n"), 1;
       const p = name.trim();
       path = p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`;
     }
     const target = savedAs(path);
     if (!o.force && target !== st.path && (await exists(target))) {
-      const pick = await ib.ui.choose(`BreakerMED: ${target} already exists — replace it with this song?`, [{ label: "replace it" }, { label: "cancel: keep it" }], { selected: 1 });
+      const pick = await ib.ui.choose(`${target}: ${t("already there — replace it with this song?")}`, [{ label: t("replace it") }, { label: t("cancel: keep it") }], { selected: 1 });
       if (pick !== 0) return ctx.err(`med save: not saved (${target} kept)\n`), 1;
     }
     await save(ctx, path);
@@ -165,10 +165,11 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     if (force) return true;
     // a song never saved has no file name worth saying (every new one is "untitled.bmed")
     const name = !hasHome() ? "this new song" : `“${st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop()}”`;
-    const pick = await ib.ui.choose(`${name}: changes not saved`, [
-      { label: "save them first" },
-      { label: "don't save (the autosave keeps a copy: med recover)" },
-      { label: "cancel: keep the song" },
+    const pick = await ib.ui.choose(`${hasHome() ? name : t(name)}: ${t("changes not saved")}`, [
+      { label: t("save them first") },
+      // the copy is said only when the autosave is on (0.12.2)
+      { label: st.autosave?.on ? t("don't save (the autosave keeps a copy: med recover)") : t("don't save") },
+      { label: t("cancel: keep the song") },
     ]);
     if (pick === 0) return (await saveSafely(ctx, null)) === 0;
     if (pick === 1) return true;
@@ -232,7 +233,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${hex(i)}  ${hex(b, 3)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
 
   const need = (): Song => {
-    if (!st.song) throw new Error("no song loaded (med open <file>)");
+    if (!st.song) throw new Error("no song loaded (med new · med open <file> · med demo)");
     return st.song;
   };
 
@@ -263,7 +264,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
       "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
       "med click on|off           the metronome: a click on each beat while playing",
-      "med step <0–9>             lines the cursor moves after a note",
+      "med step <0–16>            lines the cursor moves after a note (alt 0–9 on the page)",
       "med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
       "med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
       "med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)",
@@ -278,7 +279,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       "med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)",
       "med seq                    the sequence: position → block",
       "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <position> up|down",
-      "med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
+      "med tracks <1–16> · med tempo <n> · med speed <n> · med lpb <n>",
       "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
       "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
       "med swing <0–100>          every other line longer (0 straight, 100 triplets)",
@@ -314,7 +315,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       try {
         switch (sub) {
           case "": {
-            if (!st.song) return ctx.out(`${fmt.dim("no song loaded")} · med open <file> · med ls\n`), 0;
+            if (!st.song) return ctx.out(`${fmt.dim("no song loaded")} · med new · med open <file> · med demo · med ls\n`), 0;
             const s = st.song;
             ctx.out(`♫ ${s.title || st.path} (${st.path})\n  ${engine.playing ? fmt.green(`playing (${engine.mode})`) : "stopped"} · position ${hex(st.seq)} · block ${hex(s.sequence[st.seq] ?? 0, 3)} · line ${lineNo(st.line)}\n`);
             return 0;
@@ -334,7 +335,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
                 ib.ui.notify(st.error, "warning");
                 return ctx.err(`med open: ${st.error}\n`), 1;
               }
-              const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
+              const i = await ib.ui.choose(t("open a song"), songs.map((p) => ({ label: p })));
               if (i === null) return 1;
               path = songs[i];
             }
@@ -445,7 +446,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "play": {
             const s = need();
             const mode = rest[0] === "block" ? "block" : "song";
-            const nums = rest.filter((x) => /^[0-9a-f]+$/i.test(x) && x !== "block");
+            // a word that is neither a mode nor a number: refused (it used to play the song)
+            const odd = rest.find((x, i) => !(i === 0 && (x === "song" || x === "block")) && !/^[0-9a-f]+$/i.test(x));
+            if (odd !== undefined) return ctx.err(`med play: "${odd}"? med play [song|block] [position] [line]\n`), 1;
+            const nums = rest.filter((x, i) => !(i === 0 && (x === "song" || x === "block")));
             const seq = nums[0] !== undefined ? parseInt(nums[0], 16) : st.seq;
             const line = nums[1] !== undefined ? parseInt(nums[1], 10) : nums[0] !== undefined ? 0 : st.line;
             if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
@@ -462,7 +466,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
           case "pos": {
             const s = need();
             const seq = parseInt(rest[0] ?? "0", 16);
-            if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med: position 0–${hex(s.sequence.length - 1)}\n`), 1;
+            if (!(seq >= 0 && seq < s.sequence.length)) return ctx.err(`med pos: position ${(rest[0] ?? "?").toUpperCase()} isn't in the sequence (00–${hex(s.sequence.length - 1)})\n`), 1;
             st.seq = seq;
             st.line = rest[1] ? parseInt(rest[1], 10) || 0 : 0;
             if (rest[2]) st.track = Math.max(0, Math.min(s.tracks - 1, (parseInt(rest[2], 10) || 1) - 1));
@@ -790,7 +794,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               const n = parseInt(rest[1] ?? "", 10);
               if (!(n >= 1 && n <= 3200)) return ctx.err(`med block lines: ${rest[1] ?? "?"} — a block has 1–3200 lines\n`), 1;
               e.setLines(s.sequence[st.seq], n);
-              ctx.out(`block ${hex(s.sequence[st.seq], 3)}: ${n} lines\n`);
+              ctx.out(`block ${hex(s.sequence[st.seq], 3)}: ${n} line${n === 1 ? "" : "s"}\n`);
             } else if (what === "rm") {
               const n = blockArg(s, rest[1] ?? hex(s.sequence[st.seq], 3));
               if (typeof n === "string") return ctx.err(`med block rm: ${n}\n`), 1;
@@ -852,6 +856,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!(n >= 1 && n <= most)) return ctx.err(`med tracks 1–${most}\n`), 1;
             engine.stop();
             st.editor!.setTracks(n);
+            ctx.out(`${n} track${n === 1 ? "" : "s"}\n`);
             return 0;
           }
           case "tempo":
