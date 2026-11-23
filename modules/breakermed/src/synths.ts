@@ -1,5 +1,5 @@
 /**
- * breakerMED — our synths, described once: the command that drives each, the
+ * BreakerMED — our synths, described once: the command that drives each, the
  * instrument kind, where its settings live, its list of settings and presets.
  * `med synth` / `med fm` and the INSTRUMENT screen work from this, so a new
  * synth is a voice (dsp/), a list of settings and one entry here.

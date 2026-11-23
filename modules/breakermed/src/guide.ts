@@ -104,51 +104,63 @@ export const GUIDE: GuidePart[] = [
   {
     title: "START",
     rows: [
-      ["med new", "a new song: 8 tracks, drums and synths, a beat ready to play"],
+      ["med new", "a new song: 8 tracks, drums and synths, a beat ready to play (med new 12: 12 tracks · --empty: a blank page)"],
       ["med new --chip", "a chiptune song: 2 pulses, a triangle, a noise (NES-style)"],
       ["med open", "open a .med, .mod or .bmed in songs/"],
       ["med demo", "the demo song"],
       ["med save · ⌘S", "save (a new song asks for its name: never over another song)"],
+      ["med saveas · ⌘⇧S", "save under another name"],
+      ["med continue", "back to the song in memory, after the page was closed"],
       ["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
       ["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
-      ["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
+      ["⏎", "play the song from the top of this block · again while it plays: the block starts over"],
+      ["⇧⏎", "this block, looped, from its top"],
+      ["⇧space", "play from the cursor's line"],
       ["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
-      ["med new, open, demo", "a song with changes asks first: save, don't save (the autosave keeps a copy), cancel"],
+      ["med new, open, demo", "a song with changes asks first: save, don't save, cancel"],
     ],
   },
   {
-    title: "EDIT MODE (space: the line turns red, ● EDIT at the top)",
+    title: "EDIT MODE (space: the line turns red, ● edit at the top)",
     rows: [
       ["the letter keys", "a piano: Z S X D C V… (bottom row) and Q 2 W 3 E R… (top row), by place"],
+      ["F1–F8", "the octave the keys play (alt ↑↓ too)"],
       ["` · 1 · caps lock", "note off (^^^): the note stops, a synth releases"],
       ["0–9 A–F", "the hex columns: the instrument (2 digits), the chord, the command (4)"],
       ["delete · ⌫", "clear the column · delete the line (⇧: in every track) — in edit mode only"],
-      ["alt enter", "insert a line (⇧: in every track)"],
+      ["alt ⏎ · insert", "insert a line (⇧: in every track)"],
       ["alt ↑↓ · alt ←→", "the octave · the instrument the keys play"],
       ["alt 0–9", "the step: lines the cursor moves after a note"],
       ["⇧ arrows · drag", "select · alt L the track · alt K the block · alt C / X / V copy cut paste"],
       ["alt PgUp · alt PgDn", "transpose a semitone (⇧: an octave) — the same on every keyboard (alt Q / A too)"],
-      ["⌘Z · ⌘⇧Z", "undo · redo (notes, instruments, settings, mutes)"],
+      ["⌘Z · ⌘⇧Z", "undo · redo (the cursor goes where it changed back)"],
+      ["playing, edit mode on", "● REC: the keys record where the song is"],
+      ["the status line", "says the command under the cursor in words (0C20 · volume 32 of 64)"],
     ],
   },
   {
     title: "MOVING AROUND",
     rows: [
-      ["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines"],
-      ["tab", "the next track (←→ walk the columns into the next one too)"],
-      ["⇧ alt ← →", "the position before · after in the sequence"],
+      ["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines · home / end: the block's first / last line"],
+      ["the line numbers", "in decimal, like OctaMED (the commands' values are hex)"],
+      ["the wheel on the block", "2 lines a notch"],
+      ["tab · ⇧tab", "the next track · the one before (←→ walk the columns into the next one too)"],
+      ["⌘←→ · ⇧ alt ←→", "the position before · after in the sequence"],
       ["alt F · scroll lock", "follow the song while it plays, or not (the cursor stays where you edit)"],
       ["med view center|edges", "the cursor's line in the middle (the default), or a view that scrolls at its edges"],
       ["med click on", "the metronome: a click on each beat while playing"],
       ["the sequence", "‹ › or the wheel: another block · drag: move it · right-click: use block…, move, insert"],
+      ["alt N · alt D · alt ⌫", "a new block after this position · a copy of this block after it · remove this position"],
+      ["alt M · ⇧ alt M", "mute the cursor's track · solo it (again: back)"],
       ["the track's ■", "mute (lit while it plays) · right-click the name: solo, rename"],
       ["the top line", "each part clicks (▶ play, edit, the tempo, stepped / smooth, follow…), the wheel changes them"],
+      ["? · alt G", "this guide"],
     ],
   },
   {
     title: "A CELL: C-3 01 . 0C20",
     rows: [
-      ["C-3", "the note (C-1 … B-7) · ^^^ a note off"],
+      ["C-3", "the note (C-1 … B-9) · ^^^ a note off"],
       ["01", "the instrument (01–3F, the list on the left)"],
       [".", "the chord (1–F of the song's table: med chords), when the song has chords"],
       ["0C20", "an effect: the command (0C) and its value (20) — the list below"],
@@ -160,21 +172,22 @@ export const GUIDE: GuidePart[] = [
     rows: [
       ["med sampler", "load a sound into a free instrument (a list of the sounds in songs/)"],
       ["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
-      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n"],
+      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the Amiga's)"],
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
       ["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
+      ["alt R · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
     ],
   },
   {
     title: "SCREENS (the tabs, or alt B I S E, ? for this guide)",
     rows: [
       ["BLOCK", "the notes, track by track"],
-      ["INSTRUMENT", "the instrument the keys play: a sound's tools, a synth's settings, a drum kit"],
+      ["INSTRUMENT", "the instrument the keys play: a sound's tools, a synth's settings, a drum kit, its vintage mode"],
       ["SONG", "tempo, swing, echo, tracks: name, volume, pan, strum, mute, solo"],
       ["EXPORT", "WAV, AIFF, FLAC, MP3, M4A, OGG, Opus, with each track apart"],
       ["right-click", "a menu on a cell, a track's name, a position, an instrument"],
-      ["med -h", "every command (all the mouse does, the shell does too)"],
+      ["med -h · med help", "every command (all the mouse does, the shell does too)"],
     ],
   },
 ];
@@ -205,7 +218,7 @@ export function makeGuide(ib: IcebreakerAPI) {
     }
     ui.hit(inner, { onWheel: (d) => (scroll += Math.sign(d) * 3) });
     const more = all.length > height ? ` ${scroll + 1}–${Math.min(all.length, scroll + height)}/${all.length} · ↑↓ ` : " ";
-    ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or esc: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
+    ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or ⌫: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
   };
 
   const key = (k: KeyInput): boolean => {

@@ -1,5 +1,5 @@
 /**
- * breakerMED — editing a song: what the page's keys and the `med` commands
+ * BreakerMED — editing a song: what the page's keys and the `med` commands
  * change, in one place, each change undoable. No UI here (tests/edit.test.ts).
  *
  * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), 3 the

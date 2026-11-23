@@ -1,5 +1,5 @@
 /**
- * breakerMED — a little song of our own (our samples, our notes: free to use),
+ * BreakerMED — a little song of our own (our samples, our notes: free to use),
  * made as a .mod file in memory so `med demo` plays something right away and
  * goes through the same reader as a real file.
  */
@@ -16,7 +16,7 @@ export function demoMod(): Uint8Array {
   const hat = Array.from({ length: 900 }, (_, i) => Math.round(90 * Math.exp(-i / 120) * rnd()));
   const samples: [string, number[], boolean, number][] = [["square", sq, true, 40], ["saw bass", saw, true, 52], ["kick", kick, false, 64], ["hat", hat, false, 34]];
   const w = new Writer();
-  w.text("breakerMED demo", 20);
+  w.text("BreakerMED demo", 20);
   for (let i = 0; i < 31; i++) {
     const s = samples[i];
     w.text(s ? s[0] : "", 22);

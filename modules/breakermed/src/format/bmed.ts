@@ -1,5 +1,5 @@
 /**
- * breakerMED's own format: a song is a folder you can read.
+ * BreakerMED's own format: a song is a folder you can read.
  *
  *   my-song.bmed/
  *     song.json          the settings, the tracks, the sequence, the instruments,
@@ -157,8 +157,8 @@ export async function readBmed(jsonText: string, readFile: (path: string) => Pro
   } catch {
     throw new Error("song.json isn't valid JSON");
   }
-  if (typeof j.breakermed !== "number") throw new Error("song.json isn't a breakerMED song");
-  if (j.breakermed > BMED_VERSION) throw new Error("this song was saved by a newer breakerMED: update the module");
+  if (typeof j.breakermed !== "number") throw new Error("song.json isn't a BreakerMED song");
+  if (j.breakermed > BMED_VERSION) throw new Error("this song was saved by a newer BreakerMED: update the module");
   const tracks = Math.max(1, Math.min(64, (j.tracks ?? []).length || 4));
   const num = (v: unknown, d: number, lo = -Infinity, hi = Infinity) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d);
   const sample = async (path?: string) => {

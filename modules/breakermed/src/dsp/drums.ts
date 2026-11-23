@@ -1,5 +1,5 @@
 /**
- * breakerMED — the drum machine: a kit of twelve drums computed on the fly,
+ * BreakerMED — the drum machine: a kit of twelve drums computed on the fly,
  * one a note of the octave (whatever the octave):
  *
  *   C kick   C# rim    D snare   D# clap    E closed hat   F low tom

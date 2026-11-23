@@ -1,5 +1,5 @@
 /**
- * breakerMED — `med sample …`, `med bounce`, `med filter`: the sampler's tools
+ * BreakerMED — `med sample …`, `med bounce`, `med filter`: the sampler's tools
  * as commands (the INSTRUMENT screen's buttons run these). Every change goes
  * through the editor: ⌘Z / `med undo` brings the sound back.
  */

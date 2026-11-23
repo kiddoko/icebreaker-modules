@@ -13,12 +13,13 @@
  * ⌥ / alt combinations are its own on every system. Esc gives the keys back to
  * the deck (the tree takes the focus), a click brings them back.
  *
- *   enter play the song · ⇧enter play the block · space stop / edit mode
- *   ↑↓ ←→ PgUp PgDn the cursor · ⇧ + arrows select
- *   the keys: a piano (keys.ts) · 0–9 A–F the hex columns · ` note off
- *   delete clear · ⌫ delete the line · alt enter insert a line (⇧: in every track)
- *   alt ↑↓ octave · alt ←→ instrument · alt 0–9 edit step
- *   alt C / X / V copy cut paste · alt Q / A transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
+ *   ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor · space stop / edit mode
+ *   ↑↓ ←→ PgUp PgDn home end the cursor · tab ⇧tab the tracks · ⌘←→ ⇧alt ←→ the positions · ⇧ + arrows select
+ *   the keys: a piano (keys.ts) · F1–F8 the octave · 0–9 A–F the hex columns · ` 1 caps lock note off
+ *   delete clear · ⌫ delete the line · alt ⏎ / insert a line (⇧: in every track)
+ *   alt ↑↓ octave · alt ←→ instrument · alt 0–9 edit step · alt L / K select the track / block
+ *   alt C / X / V copy cut paste · alt PgUp / PgDn (alt Q / A) transpose (⇧: an octave) · ⌘Z ⌘⇧Z undo redo
+ *   alt M mute · ⇧alt M solo · alt N / D / ⌫ the sequence · alt F follow · alt R vintage · ⌘S ⌘⇧S save
  *   the chord column (when the song has chords): one digit, 1–F of the song's table
  *
  * The tabs over the right side (or alt B / I / S / E): the BLOCK; the INSTRUMENT
@@ -220,7 +221,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     const empty = !ins || ins.kind === "empty";
     return [
       { label: t("open it (INSTRUMENT)"), hint: "alt I", run: () => ((st.inst = i), (st.screen = "instrument")) },
-      ...(empty ? [] : [{ label: t("play it"), run: () => preview(st.octave * 12, i) }]),
+      ...(empty ? [] : [{ label: t("play it"), cmd: `med key ${noteName(st.octave * 12 + 1)} ${n}` }]),
       "-",
       { label: t("sampler: load a sound…"), cmd: `med sample ${n} load` },
       { label: t("analog synth"), cmd: `med synth ${n} new` },
@@ -312,15 +313,6 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     st.sel = { block: blockNo(), line0: Math.min(anchor.line, st.line), line1: Math.max(anchor.line, st.line), track0: Math.min(anchor.track, st.track), track1: Math.max(anchor.track, st.track) };
   };
   const unselect = () => ((st.sel = null), (anchor = null));
-  /** alt L: the whole track · alt K: the whole block (again: nothing) */
-  const selectTrack = () => {
-    const b = block();
-    if (b) st.sel = { block: blockNo(), line0: 0, line1: b.lines - 1, track0: st.track, track1: st.track };
-  };
-  const selectBlock = () => {
-    const s = song(), b = block();
-    if (s && b) st.sel = { block: blockNo(), line0: 0, line1: b.lines - 1, track0: 0, track1: s.tracks - 1 };
-  };
   /** the position before / after in the sequence (the cursor's line stays when it fits) */
   const goPos = (d: number) => {
     const s = song();
@@ -524,7 +516,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       ui.button(x0 + 19, y, "‹", () => ((st.synthRow = i), nudge(i, -1)), { quiet: !on });
       ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
       ui.button(x0 + 32, y, "›", () => ((st.synthRow = i), nudge(i, 1)), { quiet: !on });
-      const tip = t("the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)");
+      const tip = `${t("the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)")} · med ${sk.cmd} ${n} set ${def.key} <value>`;
       ui.hit({ x: x0, y, w: 18, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1), tip });
       ui.hit({ x: x0 + 22, y, w: 10, h: 1 }, { onClick: () => (st.synthRow = i), onWheel: (d: number) => nudge(i, d < 0 ? 1 : -1), tip });
       if (on && focused) ui.tint({ x: x0, y, w: 18, h: 1 }, undefined, c.highlight);
@@ -567,6 +559,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     x = inner.x + 1;
     ui.text(x, gy, t("grit"), { fg: c.muted });
     x += t("grit").length + 1;
+    ui.hit({ x: inner.x + 1, y: gy, w: t("grit").length, h: 1 }, { tip: `${t("the kit's grit: fewer bits, each value held longer")} · med drums ${n} grit <bits> [hold]` });
     x += ui.button(x, gy, "‹", () => nudgeGrit("bits", -1), { quiet: true });
     x = ui.text(x, gy, ` ${kit.bits >= 16 ? t("clean") : `${kit.bits} bits`} `, { fg: kit.bits < 16 ? c.warning : c.fg });
     x += ui.button(x, gy, "›", () => nudgeGrit("bits", 1), { quiet: true }) + 1;
@@ -601,7 +594,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           ui.text(cx + 3, y, text.padStart(5), { fg: sel ? c.accent : c.fg });
           ui.button(cx + 8, y, "›", () => ((st.drumRow = i), (st.drumCol = k), nudgeKit(i, k, 1)), { quiet: !sel });
         } else ui.text(cx, y, text.padStart(5), { fg: sel ? c.accent : c.fg, bg: sel ? c.highlight : undefined });
-        ui.hit({ x: cx + (wide ? 3 : 0), y, w: 5, h: 1 }, { onClick: () => ((st.drumRow = i), (st.drumCol = k)), onWheel: (dl: number) => nudgeKit(i, k, dl < 0 ? 1 : -1), tip: t("←→ a setting · ⇧←→ or the wheel: change it") });
+        ui.hit({ x: cx + (wide ? 3 : 0), y, w: 5, h: 1 }, { onClick: () => ((st.drumRow = i), (st.drumCol = k)), onWheel: (dl: number) => nudgeKit(i, k, dl < 0 ? 1 : -1), tip: `${t("←→ a setting · ⇧←→ or the wheel: change it")} · med drums ${n} set ${DRUM_NOTES[i]} ${s.key} <value>` });
       });
       ui.hit({ x: x0, y, w: 15, h: 1 }, { onClick: () => (st.drumRow = i), tip: t("one drum a note (the keys play them) · ↑↓ a drum") });
     });
@@ -636,8 +629,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("transpose down"), hint: "alt PgDn", cmd: "med transpose -1" },
     { label: t("an octave up"), hint: "⇧ alt PgUp", cmd: "med transpose 12" },
     { label: t("an octave down"), hint: "⇧ alt PgDn", cmd: "med transpose -12" },
-    { label: t("select the track"), hint: "alt L", run: () => selectTrack() },
-    { label: t("select the block"), hint: "alt K", run: () => selectBlock() },
+    { label: t("select the track"), hint: "alt L", cmd: "med select track" },
+    { label: t("select the block"), hint: "alt K", cmd: "med select block" },
     "-",
     { label: t("insert a line"), hint: "alt ⏎", cmd: "med line insert" },
     { label: t("delete the line"), hint: "⌫ (edit mode)", cmd: "med line delete" },
@@ -779,8 +772,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         } else (meterPeak = 0), (limUntil = 0);
         parts.push({ k: 0, label: tempo, style: { fg: c.fg }, hit: { cmd: "med screen song", tip: t("the tempo · the wheel changes it · click: the SONG screen"), onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`) } });
         parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
-        parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: t("the octave the keys play · alt ↑↓ · the wheel"), onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
-        parts.push({ k: 4, label: `${t("step")} ${st.step}`, style: { fg: c.muted }, hit: { tip: t("lines the cursor moves after a note · alt 0–9 · the wheel"), onWheel: (d) => (st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1)))), onClick: () => {} } });
+        parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: `${t("the octave the keys play · F1–F8 · alt ↑↓ · the wheel")} · med octave <1–8>`, onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
+        parts.push({ k: 4, label: `${t("step")} ${st.step}`, style: { fg: c.muted }, hit: { tip: `${t("lines the cursor moves after a note · alt 0–9 · the wheel")} · med step <0–16>`, onWheel: (d) => (st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1)))), onClick: () => {} } });
         parts.push({ k: 5, label: engine.paula ? t("stepped") : t("smooth"), style: { fg: c.muted }, hit: { cmd: `med paula ${engine.paula ? "off" : "on"}`, tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga") } });
         if (s.echo) parts.push({ k: 1, label: `${t("echo")} ${s.echo.ms}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("the echo on the whole mix (ms) · click: the SONG screen") } });
         parts.push({ k: 2, label: st.follow ? t("follow") : t("follow off"), style: { fg: st.follow ? c.muted : c.warning }, hit: { cmd: `med follow ${st.follow ? "off" : "on"}`, tip: st.follow ? t("the cursor follows the song as it plays · click or alt F: it stays where you edit") : t("the cursor stays where you edit while the song plays · click or alt F: follow it") } });
@@ -892,7 +885,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         const here = tr === st.track;
         const lit = level ? Math.min(1, (level[tr] ?? 0) * 1.6) : 0;
         ui.text(hx, inner.y, muted ? "M" : "■", { fg: muted ? c.warning : lit > 0.02 ? mix(c.subtle, c.success, 0.35 + lit * 0.65) : c.subtle, attrs: muted ? BOLD : 0 });
-        ui.hit({ x: hx, y: inner.y, w: 1, h: 1 }, { cmd: `med mute ${tr + 1}`, tip: muted ? t("muted · click: unmute · right-click: solo, rename") : t("mute · right-click: solo, rename"), ...drag });
+        ui.hit({ x: hx, y: inner.y, w: 1, h: 1 }, { cmd: `med mute ${tr + 1}`, tip: `${muted ? t("muted · click: unmute · right-click: solo, rename") : t("mute · right-click: solo, rename")} · alt M · med mute ${tr + 1}`, ...drag });
         ui.text(hx + 2, inner.y, truncate(name, cw - 3), { fg: muted ? c.subtle : here ? c.accent : c.muted, attrs: here ? BOLD : 0 }, cw - 3);
         ui.hit({ x: hx + 2, y: inner.y, w: cw - 3, h: 1 }, {
           onClick: () => (st.track = tr),
@@ -989,7 +982,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const help = (k.key === "?" || (k.key === "/" && k.shift) || (k.code === "Slash" && k.shift)) && !k.ctrl && !k.meta;
       if (help || (k.alt && k.code === "KeyG")) return toggleGuide(), true;
       if (st.screen === "guide") {
-        if (k.key === "backspace" || k.key === "escape") return toggleGuide(), true;
+        if (k.key === "backspace") return toggleGuide(), true; // (esc never reaches the page: the deck keeps it)
         if (guide.key(k)) return true;
         if (!s) return false;
       }
@@ -1058,8 +1051,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
             const next = !ins.vintage ? "amiga" : ins.vintage.kind === "amiga" ? "akai" : "off";
             return run(`med vintage ${hex(st.inst + 1)} ${next}`), true;
           }
-          case "KeyL": return selectTrack(), true;
-          case "KeyK": return selectBlock(), true;
+          case "KeyL": return run("med select track"), true;
+          case "KeyK": return run("med select block"), true;
           case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
         }
         return false;

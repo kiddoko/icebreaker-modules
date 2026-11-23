@@ -34,7 +34,7 @@ const roughness = (d: Float32Array) => {
   return s / Math.max(1e-9, e);
 };
 
-describe("breakerMED: the analog synth", () => {
+describe("BreakerMED: the analog synth", () => {
   it("C-3 is middle C (261.6 Hz); an octave up is twice that", () => {
     const one = voice(synth("sine"), 1).l;
     expect(Math.abs(crossings(one) - 262)).toBeLessThanOrEqual(2);
@@ -84,7 +84,7 @@ describe("breakerMED: the analog synth", () => {
   });
 });
 
-describe("breakerMED: a synth in a song", () => {
+describe("BreakerMED: a synth in a song", () => {
   const song = () => {
     const s = newSong(2);
     s.instruments = [synth("pad")];

@@ -1,5 +1,5 @@
 /**
- * breakerMED — the replayer: it reads a song tick by tick, the way OctaMED and
+ * BreakerMED — the replayer: it reads a song tick by tick, the way OctaMED and
  * ProTracker do, and says what each voice does (start this instrument, at
  * this speed, this loud, there). No sound and no clock here: `step()` gives
  * one tick and how long it lasts; engine.ts dates those and sends them to the

@@ -2,23 +2,26 @@
 
 A tracker for ICEBREAKER that works like **OctaMED** and **ProTracker**: blocks of tracks, one
 line a step, each cell a note, an instrument and hex commands; a play sequence makes the song.
-It reads **.med** (MMD0–MMD3) and **.mod** files. In ASCII, in your theme's colours, with the
-keyboard, the mouse and a gamepad.
+It reads and writes **.bmed** (its own: a folder that keeps everything), **.med** (MMD0–MMD3) and
+**.mod** files. In ASCII, in your theme's colours, with the keyboard, the mouse and a gamepad.
 
-> Work in progress: reading, playing, editing, saving, exporting, the sampler, the analog and FM
-> synths, the drum machine, chords and OctaMED's echo are here (8 tracks by default, 16 at most,
-> named), and exports to WAV, AIFF, FLAC — and MP3, M4A, OGG, Opus through the deck's encoder pack.
-> breakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
+> Work in progress: reading, playing, editing, saving (with an **autosave** that never writes over
+> your song), exporting, the sampler (each sound at its own rate, or **vintage**: heard through an
+> Amiga or an old Akai sampler), the analog, FM and **chip** synths, the drum machine, chords and
+> OctaMED's echo are here (8 tracks by default, 16 at most, named), and exports to WAV, AIFF, FLAC —
+> and MP3, M4A, OGG, Opus through the deck's encoder pack.
+> BreakerMED is our own code: it works *like* OctaMED and reads its files, it isn't OctaMED
 > (no code, name, look or samples of it). Credits: below.
 
 ## What it needs
 
 - **`audio`**: it plays its sound through the deck's sampler (`ib.audio`).
-- **`vault:read`**: it reads your songs from the vault (`.bmed`, `.med`, `.mod`, `mod.xxx`).
-- **`vault:write`**: it saves your songs in the vault (`med save`).
-- Nothing online, no account, no AI. ICEBREAKER 0.5.4 or later (`ib.audio` and pages that play the
-  keyboard; on an older deck it says so and stays off); MP3 / M4A / OGG / Opus exports need 0.5.5 and
-  the encoder pack (below).
+- **`notify`**: the little notes it shows ("saved · songs/x.bmed", "copied").
+- **`vault:read:songs/`**: it reads your songs and sounds in `songs/` only (`.bmed`, `.med`, `.mod`, `mod.xxx`, `.wav`…).
+- **`vault:write:songs/`**: it saves your songs in `songs/` (`med save`, and the autosave's copies in `songs/.recovery/`).
+- Nothing online, no account, no AI. ICEBREAKER **0.6.0** or later (on an older deck it says so and
+  stays off) · **0.6.2** hands ⌘S and tab to the page · **0.7.0** F1–F8, ⌘←→, ⇧tab and an autosave
+  that never asks. MP3 / M4A / OGG / Opus exports need the encoder pack (below).
 
 > **Beta.** Everything below works and was tested on macOS and Windows; it may still have rough
 > edges. Tell us what breaks (the deck's Issues on GitHub).
@@ -29,8 +32,14 @@ With no song, the page shows the logo and **START**: **N** new song · **O** ope
 **?** guide · **C** a chiptune song · **S** the sampler (a click, the letter, or the arrows and ⏎).
 
 **Space** (or a click on **edit** in the top line) turns the **edit mode** on and off: "edit"
-becomes a red "● EDIT", the cursor's line turns red, and the keys write notes. Off, the keys only
-play: delete and ⌫ change nothing either.
+becomes a red "● edit", the cursor's line turns red, and the keys write notes. Off, the keys only
+play: delete and ⌫ change nothing either. Edit mode on while the song plays is **recording**: a red
+"● rec" at the top, and each key writes its note on the line being heard. Only the BLOCK screen
+writes: on INSTRUMENT, SONG, EXPORT and the guide the keys only play.
+
+**Line numbers are decimal**, like OctaMED's (000–063); the commands' values stay hex (`0C40`).
+The status line says the command under the cursor in words: "0C20 · volume 32 of 64",
+"0F06 · tempo 6 BPM (the speed is 09xx)".
 
 The **top line** is made of buttons, each with a tip on hover: **▶ play** (■ while it plays: stop),
 **edit**, the **tempo** and the **speed** (the wheel changes them, a click opens SONG), the octave
@@ -57,24 +66,29 @@ every **alt** combination (alt + arrows too, on Mac, Windows and Linux), like an
 **Esc** gives the keys back to the deck (the tree takes them), a click on the page brings them back.
 
 ```
-enter        play the song from the cursor      ⇧ enter    play the block, again and again
-tab          the next track                     ⇧ alt ← →  the position before · after
+⏎            the song, from the top of this block (again while it plays: the block starts over)
+⇧ ⏎          this block, looped, from its top        ⇧ space    play from the cursor's line
+space        stop (playing) · edit mode on / off (stopped: a red ● edit, typing writes in the block)
+tab · ⇧ tab  the next track · the one before         ⌘ ← → · ⇧ alt ← →   the position before · after
 alt F        follow the song while it plays, or not (scroll lock too): off, the cursor stays where you edit
-space        stop (playing) · edit mode on / off (stopped: a red ● EDIT, typing writes in the block)
-↑ ↓ ← →      the cursor (← → column by column)  PgUp PgDn Home End   jump
+↑ ↓ ← →      the cursor (← → column by column)       PgUp PgDn Home End   jump
 the keys     a piano: Z S X D C V… an octave, Q 2 W 3 E… the next (by their place: AZERTY works)
              in edit mode they write the note and the instrument; ` (left of 1), 1 or caps lock: a note off
+F1–F8        the piano's octave (alt ↑ ↓ too)        alt ← →    the instrument it plays
 0–9 A–F      the instrument / command columns, digit by digit (edit mode)
-alt ↑ ↓      the piano's octave                 alt ← →    the instrument it plays
 alt 0–9      the edit step: lines the cursor moves after a note
 delete       clear the column (or the selection)   ⌫ delete the line (⇧: in every track) — edit mode only
-alt enter    insert a line (⇧: in every track)
+alt ⏎ · insert   insert a line (⇧: in every track)
 ⇧ + arrows   select (a drag with the mouse too) alt C / X / V   copy · cut · paste
 alt L · alt K   select the track · the whole block
 alt PgUp / PgDn transpose up / down a semitone (⇧: an octave), the same on every keyboard (alt Q / A too)
+alt M · ⇧ alt M   mute the cursor's track · solo it (again: back)
+alt N · alt D · alt ⌫   a new block after this position · a copy of this block after it · remove the position
+alt R        the instrument's vintage mode: off → amiga → akai (see Vintage)
 ⌘Z · ⌘⇧Z     undo · redo (500 steps): notes, blocks, instruments, the song's settings
-             (tempo, swing, echo…), mutes; a setting nudged step by step is one undo
-alt B I S E  the screens: BLOCK · INSTRUMENT · SONG · EXPORT
+             (tempo, swing, echo…), mutes; the cursor goes where it changed back; one field typed is one undo
+⌘S · ⌘⇧S     save · save as…
+alt B I S E  the screens: BLOCK · INSTRUMENT · SONG · EXPORT · ? or alt G the guide
 chord column    one digit, 1–F (when the song has chords: see Chords)
 mouse        click a cell, drag to select (the view holds still; at the frame's edge it scrolls), the
              wheel scrolls, right-click: a menu (copy, paste, transpose, lines, play from here);
@@ -83,8 +97,11 @@ mouse        click a cell, drag to select (the view holds still; at the frame's 
 sequence     a click goes there, a double-click plays from it; ‹ › or the wheel on the block number:
              another block; drag a position to move it; right-click: use another block…, move up /
              down, insert; "+1 block unused" under it: add those blocks, or delete them
-gamepad      the cross moves, A plays / stops
+gamepad      the cross moves, A plays (the song from this block's top) / stops
 ```
+
+A key plays a sound **to its end** (a looped one or a synth 1.5 s, a drum rings out); the next key on
+the same instrument cuts it, and space (stopped) silences it before it switches the edit mode.
 
 **The view**: the cursor's line stays in the middle of the block (ProTracker's way, the default);
 `med view edges` makes the view scroll only when the cursor nears its edges (OctaMED's), `med view
@@ -92,41 +109,87 @@ center` brings it back.
 
 ## The `med` command
 
+`med -h` and `med help` print this (the list below is written from the same text by `build.mjs`):
+
+<!-- usage: start -->
 ```
-med                         what's loaded, where it is
-med open [file]             a song of the vault (no file: choose one)
-med ls                      the songs in the vault
-med demo                    a little song of ours, to try it right away
-med new [tracks] [--empty]  a new song from the template: 8 named tracks (up to 16), drums, synths, a bar
-                            (new, open, demo: a song with changes asks first · --force: no question)
-med save [file]             my-song.bmed (ours, the default) · song.mod · song.med (for other trackers)
-                            a song never saved asks for its name; another song's file asks before replacing it
-med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100>
+med                        what's loaded, where it is
+med help                   this list (also med -h)
+med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)
+med ls                     the songs in the vault
+med demo                   a little song of ours, to try it right away
+med new [tracks] [--empty] [--force] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page
+med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar
+                           (new, open, demo: a song with changes asks first · --force: replace it, the autosave keeps a copy)
+med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)
+med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page
+                           never over another song without asking (--force: no question) · a new song asks for its name
+med continue               back to the song in memory (after the page was closed)
+med title <text>           the song's title (60 characters at most)
 med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]
-med play [song|block] [position] [line]
+med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)
+med play [song|block] [position] [line]   no position: the cursor's · a position: from its line 0 (or the line given)
+                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor
 med stop
-med pos <position> [line]
-med mute <track> · med solo <track>
-med paula on|off            stepped like the Amiga (on, the default), or smooth
-med edit on|off · med step <0–9>
-med view center|edges · med follow on|off · med click on|off   the view, follow, the metronome
-med note <line> <track> <C-3|^^^|---> [instrument] [command]   (line in hex, track from 1)
-med block                   the blocks: their length, the positions that play them (or "not in the sequence")
-med block new [lines] · med block copy · med block lines <n> · med block rm <block>
-med seq                     the sequence: position → block
-med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <pos> up|down
-med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>
-med chord <line> <track> <0–F> · med chords …   (see Chords)
-med echo off | normal|cross [ms] [depth]       (see The echo)
-med sample … · med bounce · med filter           (see The sampler)
-med synth … · med fm … · med drums …             (see the synths, the drum machine)
+med pos <position> [line] [track]   move the cursor (and where play starts)
+med key <C-3> [instrument]   hear a note (nothing is written: the piano's keys do the same)
+med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page
+med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>
+med paula on|off           stepped like the Amiga (on), or smooth
+med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt R)
+med edit on|off            typing writes in the block (space on the page)
+med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges
+med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)
+med click on|off           the metronome: a click on each beat while playing (or med metronome)
+med step <0–16>            lines the cursor moves after a note (alt 0–9 on the page)
+med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play
+med guide [--text]         the guide on the page (? or the ? tab) · --text: here
+med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)
+med select track|block|none · med select <line> <line> [track] [track]   what copy, cut, clear, transpose work on
+med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>
+med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)
+med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (line in decimal, track from 1, the rest hex)
+med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)
+med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset
+med block                  the blocks: their length, the positions that play them
+med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)
+med seq                    the sequence: position → block
+med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <position> up|down
+med tracks <1–16> · med tempo <n> · med speed <n> · med lpb <n>
+med swing <0–100>          every other line longer (0 straight, 100 triplets)
+med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix
+med sampler [file]         load a sound into a free instrument (no file: choose one)
+med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)
+med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten
+med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one
 med undo · med redo
-med effects                 every command, one line each
-med info                    the song's settings and instruments
+med sample <n|.> load [file] [--amiga]   a sound file in songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…)
+med sample <n|.> chop <slices> | chop onsets    slices become new instruments
+med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)
+med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse
+med sample <n|.> crush [bits] [hold]     destructive 8-bit (default) and lower rate (hold > 1)
+med sample <n|.> normalize · trim · loop <start> <length> | off | pingpong
+med sample <n|.> name <text> · vol <0–64> · fine <-8…7> · transpose <semitones> · clear · info
+med bounce [--tracks 1,3] [--song]       the block (or the song) rendered into a new instrument
+med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8)
+med synth <n|.> new [preset]             the instrument becomes an analog synth (presets: med synth presets)
+med fm <n|.> new [preset]                the instrument becomes an FM synth (presets: med fm presets)
+med synth|fm <n|.> preset <name> · set <setting> <value> · up|down <setting> · show · settings
+med synth|fm <n|.> bake                  the synth as a sample of its C-3 (for the sampler's tools)
+med chip <n|.> new [preset]              the instrument becomes a chip synth (2a03 dmg sid ay psg pce · med chip presets)
+med chip <n|.> set chip|wave|duty|noise|arp|sweep… <value> · table <32 hex digits>   its own wavetable
+med drums <n|.> new [kit]                the instrument becomes a drum machine (med drums kits: classic punch tight lofi boom house…)
+med drums <n|.> kit <name> · set <drum> tune|decay|level|tone <value> · grit <bits> [hold] · show
+med drums <n|.> bake <drum>              one drum as a sample · drums: C kick C# rim D snare D# clap E closed hat
+                                         F low tom F# open hat G mid tom G# cowbell A high tom A# crash B ride
+med effects                every command (00–2E) in one line each
+med info                   the song's settings
 ```
+<!-- usage: end -->
 
 Every command says what it did ("tempo 118 BPM", "position 02 → block 001"), and an error names
-what's wrong ("track 9: the song has 4", "instrument 7F: they are 01–3F").
+what's wrong ("track 9: the song has 4", "instrument 7F: they are 01–3F"). Everything the mouse
+does has its command: a button's tip names it, and the LOG shows it when it runs.
 
 ## Saving
 
@@ -240,7 +303,7 @@ alt I shows the instrument (alt B the block again): its sound in braille dots, a
 tool. Each runs a `med sample` command (the LOG shows it, ⌘Z undoes it):
 
 ```
-med sample <n|.> load [file] [--amiga]   a sound of the vault (wav, aif, iff/8svx, mp3, m4a, ogg…)
+med sample <n|.> load [file] [--amiga]   a sound of songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…), at its own rate
 med sample <n|.> chop <slices> | chop onsets    slices become new instruments
 med sample <n|.> stretch <×> [grain]     longer / shorter, same pitch, the Amiga way (it grinds)
 med sample <n|.> fade in|out [ms] · pitch <semitones> [--smooth] · reverse
@@ -250,6 +313,26 @@ med sample <n|.> name · vol · fine · transpose · clear · info
 med bounce [--tracks 1,3] [--song]       the block (or the song) into a new instrument
 med filter on|off                        the A500's LED filter (also 0FF9 / 0FF8)
 ```
+
+## Vintage
+
+Any instrument (a sound, a synth, a kit) can be heard through an old machine: **alt R** (or the
+"vintage" button at the top right of the INSTRUMENT screen) goes off → amiga → akai → off, and
+`med vintage <n> amiga | akai [rate] | off` does it from the shell. Only the sound changes: the
+instrument's frames, its notes and the song stay as they are (off: exactly the sound before).
+
+- **amiga** — the A500's Paula: 8 bits, each value held for the note's own period (the rate goes up
+  and down with the pitch, up to 28 867 Hz, nothing smoothed in front: the aliasing), then the
+  output's 2-pole low-pass (~4.4 kHz), the warmth of its filter.
+- **akai** — an S900 / S950-style sampler: 12 bits at a fixed, lower rate (22 050 Hz by default,
+  `med vintage 01 akai 15000` for more grit, 7 500–40 000), no anti-alias filter in front, a gentle
+  2-pole after it.
+
+`.bmed` keeps it, and the WAV / FLAC / MP3… exports are what you hear. `.mod` and `.med` can't hold
+it: they get the plain sound (`med save` says so).
+
+A sound you load **keeps its own rate** (a 48 kHz file stays 48 kHz; `--amiga` loads it at the
+Amiga's, smaller and grittier); `.mod` and `.med` get the Amiga's rates when they're saved.
 
 ## The analog synth
 
@@ -379,14 +462,15 @@ Loudness: every synth has a **level** setting (dB), and every preset comes match
 A new song plays every note in the octave written (OctaMED's mixing mode); songs read with the
 Amiga's four voices keep their range for samples, never for our synths.
 
-breakerMED computes its sound itself (every track, every instrument) and streams it to the deck
+BreakerMED computes its sound itself (every track, every instrument) and streams it to the deck
 (`ib.audio.stream`): about 30 ms from a key to the sound, and an export will be exactly what you
 hear. The track headers show the names: double-click one to rename it, right-click to mute or solo.
 
 ## Commands (OctaMED's numbering)
 
 `med effects` lists them: 00 arpeggio · 01/02 slides · 03 slide to note · 04 vibrato · 05/06 ·
-07 tremolo · 09 speed · 0A/0D volume slide · 0B jump · 0C volume · 0F tempo and its specials ·
+07 tremolo · 09 speed (ProTracker's Fxx below 20) · 0A/0D volume slide · 0B jump · 0C volume
+(00–40 hex in a new song) · 0F tempo in BPM and its specials (0FF8 / 0FF9 the LED filter off / on) ·
 11/12 fine slides · 14 ProTracker vibrato · 15 finetune · 16 loop · 18 cut · 19 offset ·
 1A/1B fine volume · 1D next block · 1E repeat line · 1F delay / retrigger · 2E pan.
 Not yet: 08 hold/decay as a command, 0E synth jump, 20 reverse, the synth instruments' programs.
@@ -400,20 +484,20 @@ npm run check    # types + tests
 npm run build    # → main.js, one readable file (the STORE reads every line)
 ```
 
-`src/icebreaker.ts` holds the types of ICEBREAKER's module API that breakerMED uses (the full
+`src/icebreaker.ts` holds the types of ICEBREAKER's module API that BreakerMED uses (the full
 API: ICEBREAKER's `src/plugins/api.ts` and docs/PLUGINS.md). The CI checks that `main.js` is
 exactly what the sources build.
 
 ## Credits and licenses
 
-breakerMED is our own code, under the MIT license (this repository's). What it reads is public:
+BreakerMED is our own code, under the MIT license (this repository's). What it reads is public:
 the `.mod` format (ProTracker's, documented everywhere) and OctaMED's MMD0 / MMD1 as Teijo
 Kinnunen described them in MED-FORM.TXT. For MMD2 / MMD3, the command pages, the tempo modes and
 the octave folding of the Amiga's voices, we checked our reader against
 [libopenmpt](https://lib.openmpt.org)'s (`soundlib/Load_med.cpp`, BSD-3-Clause, © OpenMPT Devs):
-read for reference, not copied. OctaMED's name, code, look and samples aren't used: breakerMED
+read for reference, not copied. OctaMED's name, code, look and samples aren't used: BreakerMED
 works *like* it and reads its files (interoperability), nothing more. The demo song (`med demo`,
 `src/demo.ts`) is ours: its samples are computed, its notes written here.
 The MP3 / M4A / OGG / Opus exports use the deck's encoder pack (FFmpeg and LAME under the LGPL,
 libogg / libvorbis / libopus under BSD-3-Clause, run by ICEBREAKER as a separate program — see
-ICEBREAKER's `docs/CREDITS.md`); breakerMED itself contains none of their code.
+ICEBREAKER's `docs/CREDITS.md`); BreakerMED itself contains none of their code.

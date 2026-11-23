@@ -1,5 +1,5 @@
 /**
- * breakerMED — exports: the song computed again, here, at the rate you choose
+ * BreakerMED — exports: the song computed again, here, at the rate you choose
  * (independent of the sound card), as fast as the computer goes, then written
  * as WAV (16 / 24 bits, 32-bit float), AIFF or FLAC — or, through the deck's
  * encoder pack (`encoders install`, then ib.audio.encode), MP3, M4A, OGG or Opus.
@@ -81,7 +81,7 @@ export function interleave(pcm: Pcm): Float32Array {
   return out;
 }
 
-/** the deck's encoder pack, as breakerMED sees it */
+/** the deck's encoder pack, as BreakerMED sees it */
 export interface Encoder {
   encode?(pcm: Float32Array, opts: { format: LossyFormat; quality?: string; rate: number; channels: 1 | 2; title?: string }): Promise<Uint8Array>;
   encoders?(): Promise<{ installed: boolean; supported: boolean; formats: string[] }>;

@@ -1,5 +1,5 @@
 /**
- * breakerMED — each preset's level (dB), so they all sound about as loud as each
+ * BreakerMED — each preset's level (dB), so they all sound about as loud as each
  * other (a hat as loud as a pad, by its loudest 100 ms). Measured by
  * tests/levels.test.ts, which says what to put here when a preset changes.
  */

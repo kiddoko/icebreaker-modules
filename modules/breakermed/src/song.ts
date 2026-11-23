@@ -1,5 +1,5 @@
 /**
- * breakerMED — what a song is, in memory. One model for .med (MMD0–MMD3) and
+ * BreakerMED — what a song is, in memory. One model for .med (MMD0–MMD3) and
  * .mod: tracks, blocks (patterns) of any length, a play sequence, instruments,
  * the tempo. Commands are kept in OctaMED's numbering (00–FF, hex parameter),
  * whatever file they came from: a .mod's effects are translated when it's read

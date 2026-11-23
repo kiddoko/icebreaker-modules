@@ -1,5 +1,5 @@
 /**
- * breakerMED — the last thing on the mix: a peak limiter, so a louder song never
+ * BreakerMED — the last thing on the mix: a peak limiter, so a louder song never
  * clips. Below the ceiling it does nothing; a peak over it turns the gain down at
  * once (the same gain on both sides, no distortion), and the gain comes back slowly.
  */

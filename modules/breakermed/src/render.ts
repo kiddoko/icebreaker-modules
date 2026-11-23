@@ -1,5 +1,5 @@
 /**
- * breakerMED — the renderer: the song turned into sound, frame by frame, here
+ * BreakerMED — the renderer: the song turned into sound, frame by frame, here
  * in the module (the deck only plays what we hand it: ib.audio.stream). The
  * replayer says what each track does on each tick; the renderer starts and
  * changes the voices exactly on the tick's first frame and mixes them.

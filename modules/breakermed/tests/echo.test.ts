@@ -18,7 +18,7 @@ function impulse(type: "normal" | "cross", ms: number, depth: number) {
   return { l, r: rr, d: Math.round((ms / 1000) * RATE), r2: r };
 }
 
-describe("breakerMED: the echo", () => {
+describe("BreakerMED: the echo", () => {
   it("normal: the sound comes back after its length, each time 1/2^depth as loud", () => {
     const { l, r, d } = impulse("normal", 100, 1);
     expect(l[d]).toBeCloseTo(0.5);
@@ -50,7 +50,7 @@ describe("breakerMED: the echo", () => {
   });
 });
 
-describe("breakerMED: silenced by the deck", () => {
+describe("BreakerMED: silenced by the deck", () => {
   it("silence(): no song, no tail, no echo", () => {
     const s = newSong(2);
     s.echo = { type: "normal", ms: 400, depth: 1 };

@@ -1,12 +1,14 @@
 /**
- * The part of ICEBREAKER's module API that breakerMED uses, as types only
+ * The part of ICEBREAKER's module API that BreakerMED uses, as types only
  * (nothing here runs). The full API is ICEBREAKER's `src/plugins/api.ts` and
  * docs/PLUGINS.md; these lines follow it, so the module builds and is tested
  * on its own, in this repository.
  *
- * breakerMED needs an ICEBREAKER with `ib.audio` (the modules' sampler) and
- * pages that play the keyboard (`rawKeys`): not released yet (ICEBREAKER's
- * branch `claude/breakermed-core`).
+ * BreakerMED needs ICEBREAKER 0.6.0 or later (`ib.audio`, the modules' sampler,
+ * and pages that play the keyboard, `rawKeys`); 0.6.2 hands ⌘S and tab to the
+ * page; 0.7.0 F1–F8, ⌘←→, ⇧tab and an autosave that never asks. Still to come
+ * from the deck (none typed here yet): `ui.pickFileBytes` (a sound from
+ * anywhere), a full-window page, `ui.art` for sandboxed modules.
  */
 
 export interface Rect {

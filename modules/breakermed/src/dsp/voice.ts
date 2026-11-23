@@ -1,5 +1,5 @@
 /**
- * breakerMED — a voice: one sound playing on a track (or one note of a
+ * BreakerMED — a voice: one sound playing on a track (or one note of a
  * chord). Every kind of instrument has its own (a sample, an analog synth, an
  * FM synth, a drum): the renderer only knows this shape, so a new kind of
  * instrument plugs in without touching the rest.

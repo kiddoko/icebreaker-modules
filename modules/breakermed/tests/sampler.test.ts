@@ -13,7 +13,7 @@ import { newSong } from "../src/song";
 
 const ramp = (n: number) => Float32Array.from({ length: n }, (_, i) => i / n);
 
-describe("breakerMED: the sampler's tools", () => {
+describe("BreakerMED: the sampler's tools", () => {
   it("chop: equal slices covering everything; slices at cuts", () => {
     const parts = chop(ramp(10), 3);
     expect(parts.map((p) => p.length)).toEqual([3, 3, 4]);
@@ -54,7 +54,7 @@ describe("breakerMED: the sampler's tools", () => {
   });
 });
 
-describe("breakerMED: reading sounds", () => {
+describe("BreakerMED: reading sounds", () => {
   it("AIFF (16 bits, AIFF-C float) back from our writer", () => {
     const ch = [Float32Array.from([0, 0.5, -0.5, 0.25])];
     for (const bits of [16, 24, 32] as const) {
@@ -89,7 +89,7 @@ describe("breakerMED: reading sounds", () => {
   });
 });
 
-describe("breakerMED: instruments in the editor", () => {
+describe("BreakerMED: instruments in the editor", () => {
   it("changes are undoable; new instruments go to free slots", () => {
     const song = newSong(4);
     song.instruments = readSong(demoMod()).instruments;

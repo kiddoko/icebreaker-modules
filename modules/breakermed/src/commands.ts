@@ -1,5 +1,5 @@
 /**
- * breakerMED — the `med` command: the source of truth. The page runs these
+ * BreakerMED — the `med` command: the source of truth. The page runs these
  * (the LOG shows them), and so can keys, macros, scripts and THE MENU.
  */
 import type { IcebreakerAPI, ShellContext } from "./icebreaker";
@@ -16,7 +16,7 @@ import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
 import { AKAI_RATE, AKAI_RATES, VINTAGE_KINDS, VINTAGE_SAID, type VintageKind, type VintageSettings } from "./dsp/vintage";
 import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
-import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, lineNo, MAX_TRACKS, newSong, noteName, trackName, type Song } from "./song";
+import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, hex, lineNo, MAX_TRACKS, newSong, NOTE_OFF, noteName, PAULA_CLOCK, periodOf, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
 import { undoRedo, type State } from "./app";
 import { EFFECTS, GUIDE } from "./guide";
@@ -25,6 +25,82 @@ import { placeholderFor } from "./placeholder";
 import { RECOVERY_DIR, type Recovery } from "./autosave";
 import { SCREENS, type Screen } from "./screens";
 
+
+export const SUMMARY = "BreakerMED: a tracker — .bmed, .med and .mod songs";
+
+/**
+ * `med -h` (and `med help`): every sub-command in one place. The completion and
+ * the README's command block are made from it (build.mjs; tests/docs.test.ts
+ * checks they agree), so a command added here is said everywhere.
+ */
+export const USAGE: string[] = [
+  "med                        what's loaded, where it is",
+  "med help                   this list (also med -h)",
+  "med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
+  "med ls                     the songs in the vault",
+  "med demo                   a little song of ours, to try it right away",
+  "med new [tracks] [--empty] [--force] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
+  "med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
+  "                           (new, open, demo: a song with changes asks first · --force: replace it, the autosave keeps a copy)",
+  "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
+  "med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
+  "                           never over another song without asking (--force: no question) · a new song asks for its name",
+  "med continue               back to the song in memory (after the page was closed)",
+  "med title <text>           the song's title (60 characters at most)",
+  "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
+  "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
+  "med play [song|block] [position] [line]   no position: the cursor's · a position: from its line 0 (or the line given)",
+  "                           the page: ⏎ the song from this block's top · ⇧⏎ this block, looped · ⇧space from the cursor",
+  "med stop",
+  "med pos <position> [line] [track]   move the cursor (and where play starts)",
+  "med key <C-3> [instrument]   hear a note (nothing is written: the piano's keys do the same)",
+  "med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page",
+  "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
+  "med paula on|off           stepped like the Amiga (on), or smooth",
+  "med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt R)",
+  "med edit on|off            typing writes in the block (space on the page)",
+  "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
+  "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
+  "med click on|off           the metronome: a click on each beat while playing (or med metronome)",
+  "med step <0–16>            lines the cursor moves after a note (alt 0–9 on the page)",
+  "med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
+  "med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
+  "med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)",
+  "med select track|block|none · med select <line> <line> [track] [track]   what copy, cut, clear, transpose work on",
+  "med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
+  "med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
+  "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (line in decimal, track from 1, the rest hex)",
+  "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
+  "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
+  "med block                  the blocks: their length, the positions that play them",
+  "med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)",
+  "med seq                    the sequence: position → block",
+  "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <position> up|down",
+  "med tracks <1–16> · med tempo <n> · med speed <n> · med lpb <n>",
+  "med swing <0–100>          every other line longer (0 straight, 100 triplets)",
+  "med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
+  "med sampler [file]         load a sound into a free instrument (no file: choose one)",
+  "med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)",
+  "med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
+  "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
+  "med undo · med redo",
+  ...SAMPLE_USAGE,
+  ...SYNTH_USAGE,
+  ...DRUMS_USAGE,
+  "med effects                every command (00–2E) in one line each",
+  "med info                   the song's settings",
+];
+
+/** every word `med` takes first (the dispatcher's switch, and what goes to sample / the synths / drums / bounce) */
+export const SUBS = [
+  "", "help", "ls", "open", "demo", "new", "save", "saveas", "continue", "title", "export", "play", "stop", "pos", "key", "mute", "solo", "track",
+  "paula", "vintage", "edit", "view", "follow", "click", "metronome", "step", "octave", "ins", "guide", "screen", "select", "copy", "cut", "paste",
+  "clear", "transpose", "line", "note", "chord", "chords", "block", "seq", "tracks", "tempo", "speed", "lpb", "swing", "echo", "sampler", "autosave",
+  "recover", "pack", "undo", "redo", "effects", "info", "filter", "sample", "smp", "synth", "fm", "chip", "drums", "bounce",
+];
+
+/** the completion: the words of USAGE (sub-commands, their words, the flags) — it can't drift from the help */
+export const COMPLETE: string[] = [...new Set(USAGE.join(" ").split(/[\s·|,()[\]<>…]+/).map((w) => w.replace(/[:;.]+$/, "")).filter((w) => /^(--)?[a-z][a-z0-9-]*$/.test(w) && w !== "med"))];
 
 export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): void {
   const { fmt, parseFlags, t } = ib.lib;
@@ -244,60 +320,10 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
 
   ib.commands.register({
     name: "med",
-    summary: "breakerMED: a tracker for .med (OctaMED) and .mod (ProTracker) songs",
-    usage: [
-      "med                        what's loaded, where it is",
-      "med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
-      "med ls                     the songs in the vault",
-      "med demo                   a little song of ours, to try it right away",
-      "med new [tracks] [--empty] [--force] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
-      "med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
-      "                           (new, open, demo: a song with changes asks first · --force: replace it, the autosave keeps a copy)",
-      "med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
-      "                           never over another song without asking (--force: no question) · a new song asks for its name",
-      "med continue               back to the song in memory (after the page was closed)",
-      "med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
-      "med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
-      "med export file.mp3|.m4a|.ogg|.opus [--quality …]   through the deck's encoder pack (encoders install, once)",
-      "med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
-      "med play [song|block] [position] [line]",
-      "med stop",
-      "med pos <position> [line] [track]   move the cursor (and where play starts)",
-      "med mute <track> · med solo <track>   (again: back)",
-      "med paula on|off           stepped like the Amiga (on), or smooth",
-      "med edit on|off            typing writes in the block (space on the page)",
-      "med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
-      "med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
-      "med click on|off           the metronome: a click on each beat while playing",
-      "med step <0–16>            lines the cursor moves after a note (alt 0–9 on the page)",
-      "med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
-      "med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
-      "med screen block|instrument|song|export|guide   what the page shows (the tabs, alt B I S E, ?)",
-      "med copy · cut · paste · clear   the selection (or the cell under the cursor) · med transpose <±semitones>",
-      "med line insert|delete [--all]   a line at the cursor, in its track (--all: every track)",
-      "med sampler [file]         load a sound into a free instrument (no file: choose one)",
-      "med autosave [on|off] [every <10–300 s>]   a copy after each change, in songs/.recovery/ (never over the song)",
-      "med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
-      "med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
-      "med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (line in decimal, track from 1)",
-      "med block                  the blocks: their length, the positions that play them",
-      "med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)",
-      "med seq                    the sequence: position → block",
-      "med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <position> up|down",
-      "med tracks <1–16> · med tempo <n> · med speed <n> · med lpb <n>",
-      "med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
-      "med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
-      "med swing <0–100>          every other line longer (0 straight, 100 triplets)",
-      "med echo off | normal|cross [ms] [depth 1–6]   OctaMED's echo on the whole mix",
-      "med undo · med redo",
-      ...SAMPLE_USAGE,
-      ...SYNTH_USAGE,
-      ...DRUMS_USAGE,
-      "med effects                every command (00–2E) in one line each",
-      "med info                   the song's settings",
-    ].join("\n"),
-    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "play from the cursor"], ["med play block", "play this block again and again"], "med mute 2", "med effects"],
-    complete: () => ["open", "ls", "demo", "new", "save", "export", "sample", "bounce", "synth", "fm", "drums", "kits", "kit", "grit", "presets", "settings", "preset", "bake", "show", "up", "down", "filter", "load", "chop", "onsets", "stretch", "fade", "pitch", "reverse", "crush", "normalize", "trim", "loop", "pingpong", "--rate", "--bits", "--quality", "--stems", "--only-stems", "--tracks", "--normalize", "track", "name", "vol", "pan", "edit", "step", "note", "chord", "chords", "reset", "echo", "normal", "cross", "swing", "strum", "invert", "--empty", "--chip", "chip", "table", "block", "seq", "tracks", "tempo", "speed", "lpb", "undo", "redo", "new", "copy", "rm", "set", "add", "lines", "play", "stop", "pos", "mute", "solo", "paula", "effects", "info", "song", "block", "on", "off"],
+    summary: SUMMARY,
+    usage: USAGE.join("\n"),
+    examples: [["med export --stems", "the song as WAV (24 bits, 48 kHz), and each track on its own"], ["med export songs/x.flac --rate 44100", "FLAC, CD quality"], ["med export songs/x.mp3 --stems", "MP3 (V0), and each track on its own (encoders install first)"], ["med play", "the song, from the top of the block the cursor is in"], ["med play block", "this block again and again"], ["med vintage 01 amiga", "instrument 01 through an Amiga's Paula"], "med mute 2", "med effects"],
+    complete: () => COMPLETE,
     async run(ctx: ShellContext) {
       const { rest: positional, flags } = parseFlags(ctx.args, ["rate", "bits", "tracks", "tail", "quality"]);
       if (positional[0] === "sample" || positional[0] === "smp") {
@@ -652,6 +678,52 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             void ib.apps.open("breakermed");
             return 0;
           }
+          case "help":
+            ctx.out(`${SUMMARY}\n${USAGE.map((l) => `  ${l}`).join("\n")}\n`);
+            return 0;
+          case "title": {
+            // med title <text>: the song's title (the SONG screen's row runs it)
+            need();
+            const text = rest.join(" ").replace(/[\u0000-\u001f]/g, "").slice(0, 60);
+            if (!rest.length) return ctx.out(`title: ${need().title || "—"} · med title <text>\n`), 0;
+            st.editor!.settings("title", (x) => (x.title = text));
+            ctx.out(`title: ${text || "—"}\n`);
+            return 0;
+          }
+          case "key": {
+            // med key <C-3> [instrument]: hear a note, nothing written (what the piano's keys do)
+            const s = need();
+            const note = parseNote(rest[0] ?? "");
+            const n = rest[1] !== undefined ? parseInt(rest[1], 16) - 1 : st.inst;
+            const ins = s.instruments[n];
+            if (!note || note === NOTE_OFF) return ctx.err("med key <C-3> [instrument 01–3F]   hear a note (nothing is written)\n"), 1;
+            if (!ins || ins.kind === "empty") return ctx.err(`med key: instrument ${hex(n + 1)} is empty\n`), 1;
+            await engine.preview(n, PAULA_CLOCK / periodOf(note - 1 + ins.transpose + s.transpose, ins.finetune));
+            ctx.out(`♪ ${noteName(note)} · ${hex(n + 1)} ${ins.name || ins.kind}\n`);
+            return 0;
+          }
+          case "select": {
+            // med select track | block | none | <line> <line> [track] [track]: what copy / cut / clear / transpose work on
+            const s = need();
+            const bn = s.sequence[st.seq] ?? 0, b = s.blocks[bn];
+            const usage = "med select track | block | none | <line> <line> [track] [track]   (lines in decimal, tracks from 1)";
+            if (!b) return ctx.err("med select: no block here\n"), 1;
+            const [a, z, t0, t1] = rest;
+            if (a === "none") return (st.sel = null), ctx.out("nothing selected\n"), 0;
+            if (a === "track") st.sel = { block: bn, line0: 0, line1: b.lines - 1, track0: st.track, track1: st.track };
+            else if (a === "block") st.sel = { block: bn, line0: 0, line1: b.lines - 1, track0: 0, track1: s.tracks - 1 };
+            else {
+              const l0 = parseInt(a ?? "", 10), l1 = parseInt(z ?? "", 10);
+              const k0 = t0 !== undefined ? parseInt(t0, 10) - 1 : st.track, k1 = t1 !== undefined ? parseInt(t1, 10) - 1 : k0;
+              const ok = (l: number) => l >= 0 && l < b.lines, okT = (k: number) => k >= 0 && k < s.tracks;
+              if (!ok(l0) || !ok(l1) || !okT(k0) || !okT(k1)) return ctx.err(`${usage}\n  this block: lines 0–${b.lines - 1}, tracks 1–${s.tracks}\n`), 1;
+              st.sel = { block: bn, line0: Math.min(l0, l1), line1: Math.max(l0, l1), track0: Math.min(k0, k1), track1: Math.max(k0, k1) };
+            }
+            const sl = st.sel!;
+            const nl = sl.line1 - sl.line0 + 1, nt = sl.track1 - sl.track0 + 1;
+            ctx.out(`selected ${nl} line${nl === 1 ? "" : "s"} × ${nt} track${nt === 1 ? "" : "s"}\n`);
+            return 0;
+          }
           case "copy":
           case "cut":
           case "paste":
@@ -931,11 +1003,6 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
                 ...s.instruments.map((i, n) => (i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" || i.kind === "chip" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`)).filter(Boolean),
               ].join("\n") + "\n",
             );
-            return 0;
-          }
-          case "note": {
-            // med note: the name of a note number (for scripts)
-            ctx.out(noteName(parseInt(rest[0] ?? "0", 10)) + "\n");
             return 0;
           }
           default:

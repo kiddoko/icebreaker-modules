@@ -83,7 +83,7 @@ function makeMed(version: 0 | 1, cells: Record<string, [number, number, number, 
 
 // ── reading ────────────────────────────────────────────────────────────────
 
-describe("breakerMED: reading .mod", () => {
+describe("BreakerMED: reading .mod", () => {
   it("reads the header, the instruments, the cells", () => {
     const song = readSong(makeMod([{ "0:0": { period: 428, inst: 1, e: 0xc, p: 0x20 }, "1:1": { period: 856, inst: 1 } }]));
     expect(song.format).toBe("MOD M.K.");
@@ -117,7 +117,7 @@ describe("breakerMED: reading .mod", () => {
   });
 });
 
-describe("breakerMED: reading .med", () => {
+describe("BreakerMED: reading .med", () => {
   it("MMD0: 3-byte cells, 6-bit notes, instruments past 15", () => {
     const song = readSong(makeMed(0, { "0:0": [13, 1, 0x0c, 0x40], "2:3": [1, 33, 0, 0] }));
     expect(song.format).toBe("MMD0");
@@ -154,7 +154,7 @@ describe("breakerMED: reading .med", () => {
 
 // ── time ───────────────────────────────────────────────────────────────────
 
-describe("breakerMED: tempo", () => {
+describe("BreakerMED: tempo", () => {
   it("ProTracker: a tick is 2.5 / BPM", () => {
     expect(tickSeconds("pt", 125, 4)).toBeCloseTo(0.02);
   });
@@ -180,7 +180,7 @@ describe("breakerMED: tempo", () => {
 
 // ── what the voices do ─────────────────────────────────────────────────────
 
-describe("breakerMED: the replayer", () => {
+describe("BreakerMED: the replayer", () => {
   it("a note starts its instrument at the Amiga's speed, at its volume", () => {
     const p = new Player(readSong(makeMod([{ "0:0": { period: 428, inst: 1 } }])));
     const t = p.step();
@@ -235,7 +235,7 @@ describe("breakerMED: the replayer", () => {
 
 // ── the renderer and the engine, with a fake sound line ────────────────────
 
-describe("breakerMED: the renderer", () => {
+describe("BreakerMED: the renderer", () => {
   it("a note starts on its tick's first frame, lines last speed × tick", () => {
     const song = readSong(makeMod([{ "0:0": { period: 428, inst: 1 }, "1:0": { period: 428, inst: 1 } }]));
     const r = new Renderer(song, 50_000);
@@ -281,7 +281,7 @@ describe("breakerMED: the renderer", () => {
   });
 });
 
-describe("breakerMED: the engine", () => {
+describe("BreakerMED: the engine", () => {
   it("opens the line, writes ahead, answers the deck's requests, follows the line heard, stops", async () => {
     const written: number[] = [];
     let stopped = 0;
@@ -300,7 +300,7 @@ describe("breakerMED: the engine", () => {
   });
 });
 
-describe("breakerMED: the demo song", () => {
+describe("BreakerMED: the demo song", () => {
   it("is a real .mod, read by the same reader, ~25 s long", () => {
     const s = readSong(demoMod());
     expect(s.format).toBe("MOD M.K.");
@@ -310,7 +310,7 @@ describe("breakerMED: the demo song", () => {
   });
 });
 
-describe("breakerMED: the piano", () => {
+describe("BreakerMED: the piano", () => {
   it("reads the key's place, not its letter", () => {
     expect(pianoKey("KeyZ")).toBe(0);
     expect(pianoKey("KeyQ")).toBe(12);

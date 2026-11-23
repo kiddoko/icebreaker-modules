@@ -1,5 +1,5 @@
 /**
- * breakerMED — our computed instruments turned into samples, for the files
+ * BreakerMED — our computed instruments turned into samples, for the files
  * other trackers read (.mod, .med hold samples only):
  *   a synth  → its middle C, held for a while, then released;
  *   a kit    → each drum the song plays becomes an instrument of its own, and
