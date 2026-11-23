@@ -768,6 +768,26 @@ var Editor = class {
 		if (this.song.sequence.length <= 1 || pos < 0 || pos >= this.song.sequence.length) return;
 		this.shape("sequence", () => this.song.sequence.splice(pos, 1));
 	}
+	/** take a block out of the song (one in no position only): the blocks after it move down a number */
+	blockDelete(block) {
+		const s = this.song;
+		if (s.blocks.length <= 1 || !s.blocks[block] || s.sequence.includes(block)) return false;
+		this.shape("delete block", () => {
+			s.blocks.splice(block, 1);
+			s.sequence = s.sequence.map((b) => b > block ? b - 1 : b);
+		});
+		return true;
+	}
+	/** a position moved one place up (-1) or down (+1) */
+	seqMove(pos, d) {
+		const n = this.song.sequence.length, to = pos + d;
+		if (pos < 0 || pos >= n || to < 0 || to >= n) return false;
+		this.shape("sequence", () => {
+			const q = this.song.sequence;
+			[q[pos], q[to]] = [q[to], q[pos]];
+		});
+		return true;
+	}
 	/** which block a position plays */
 	seqSet(pos, block) {
 		if (!this.song.blocks[block] || pos < 0 || pos >= this.song.sequence.length) return;
@@ -2153,30 +2173,6 @@ var FmVoice = class {
 		}
 	}
 };
-// src/dsp/chip.ts
-/**
-* BreakerMED — CHIP: the sound chips of old consoles and home computers, for
-* chiptune. One instrument, a mode per chip; everything is computed here from
-* how the chips worked (their clocks, period registers, DACs, noise shift
-* registers) — no sample or ROM taken from any machine. Our own code.
-*
-*   2a03   (NES-style)            pulse 12.5 / 25 / 50 / 75 %, a 4-bit stepped triangle,
-*                                 noise from a 15-bit LFSR, long or short (metallic)
-*   dmg    (Game Boy-style)       pulse, a 32-step 4-bit wave channel, 15/7-bit noise
-*   sid    (C64-style)            saw, triangle, pulse of any width (and its sweep),
-*                                 ring mod and hard sync, a LP / BP / HP filter
-*   ay     (ZX / MSX / ST-style)  square, noise, and the envelope "buzzer"
-*   psg    (SN76489, Master System-style)  square, white or periodic noise
-*   pce    (PC Engine-style)      a 32-step 5-bit wavetable
-*
-* What makes them sound like chips: the pitch snaps to each chip's period grid
-* (high notes go a little out of tune, like on the real thing), the volume moves
-* in 16 steps (SID: 256), the waves come out of a few-bit DAC. Plus what chiptune
-* musicians did by hand: an automatic vibrato (after a delay), a pitch sweep
-* (kicks, lasers), a pulse-width sweep, and chords played as a fast arpeggio.
-*
-* The pitch comes from the tracker like a sample's (a "rate"): C-3 is middle C.
-*/
 var CHIPS = [
 	"2a03",
 	"dmg",
@@ -2741,7 +2737,7 @@ var CHIP_PRESETS = {
 function chipPreset(name) {
 	const p = defaultChip();
 	CHIP_PRESETS[name ?? ""]?.(p);
-	p.level = PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0;
+	p.level = (PRESET_LEVELS[`chip:${name ?? ""}`] ?? 0) - 3;
 	return structuredClone(p);
 }
 /** the presets of one chip (the INSTRUMENT screen shows those) */
@@ -4949,17 +4945,20 @@ var Limiter = class Limiter {
 		_defineProperty(this, "back", void 0);
 		this.back = 1 - Math.exp(-1 / (releaseSeconds * rate));
 	}
+	/** returns the least gain it used (1: it did nothing) */
 	process(left, right, from, to) {
 		const c = Limiter.CEILING;
-		let g = this.gain;
+		let g = this.gain, least = 1;
 		for (let i = from; i < to; i++) {
 			const peak = Math.max(Math.abs(left[i]), Math.abs(right[i]));
 			const want = peak > c ? c / peak : 1;
 			g = want < g ? want : g + (want - g) * this.back;
 			left[i] *= g;
 			right[i] *= g;
+			if (g < least) least = g;
 		}
 		this.gain = g;
+		return least;
 	}
 };
 _defineProperty(Limiter, "CEILING", .891);
@@ -5051,11 +5050,50 @@ var Renderer = class {
 		);
 		_defineProperty(
 			this,
-			/** the limiter on (tests of the echo or the mix turn it off to measure them) */
+			/** the mix's last stage on: the DC blocker and the limiter (tests of the echo or the mix turn it off to measure them) */
 			"limit",
 			true
 		);
 		_defineProperty(this, "carry", 0);
+		_defineProperty(
+			this,
+			/** the metronome: a click on each beat (live only: an export never has it) */
+			"metronome",
+			false
+		);
+		_defineProperty(this, "click", {
+			left: 0,
+			phase: 0,
+			step: 0,
+			gain: 0
+		});
+		_defineProperty(
+			this,
+			/** a DC blocker a side, before the limiter (a ~10 Hz high-pass: no offset in the mix) */
+			"dc",
+			{
+				xl: 0,
+				yl: 0,
+				xr: 0,
+				yr: 0,
+				k: 0
+			}
+		);
+		_defineProperty(
+			this,
+			/** each track's last note: when (frame) and how loud (0–1), for the page's meters */
+			"hits",
+			[]
+		);
+		_defineProperty(
+			this,
+			/** the mix after the limiter: its peak and the limiter's least gain since the page last asked */
+			"meter",
+			{
+				peak: 0,
+				gain: 1
+			}
+		);
 		_defineProperty(
 			this,
 			/** OctaMED's echo: a delay line a side, fed back softer each time (cross: from one side to the other) */
@@ -5068,6 +5106,7 @@ var Renderer = class {
 		this.rate = rate;
 		this.paula = paula;
 		this.limiter = new Limiter(rate);
+		this.dc.k = 1 - 2 * Math.PI * 10 / rate;
 		const w = Math.tan(Math.PI * Math.min(3275, rate * .45) / rate);
 		const n = 1 / (1 + Math.SQRT2 * w + w * w);
 		this.led.b0 = w * w * n;
@@ -5098,6 +5137,14 @@ var Renderer = class {
 		this.chordSteps = [];
 		this.previews = [];
 		this.echoL = this.echoR = null;
+		this.dc = {
+			xl: 0,
+			yl: 0,
+			xr: 0,
+			yr: 0,
+			k: this.dc.k
+		};
+		this.click.left = 0;
 	}
 	stopAll() {
 		for (const v of this.voices) v?.stop();
@@ -5150,11 +5197,52 @@ var Renderer = class {
 			if (this.song.flags.filter) this.filter(left, right, at, at + span);
 			if (this.song.echo) this.echo(left, right, at, at + span, this.song.echo);
 			else if (this.echoL) this.echoL = this.echoR = null;
-			if (this.limit) this.limiter.process(left, right, at, at + span);
+			if (this.limit) {
+				this.dcBlock(left, right, at, at + span);
+				const g = this.limiter.process(left, right, at, at + span);
+				if (g < this.meter.gain) this.meter.gain = g;
+			}
+			if (this.click.left > 0) this.clickInto(left, right, at, at + span);
+			for (let i = at; i < at + span; i++) {
+				const a = Math.max(Math.abs(left[i]), Math.abs(right[i]));
+				if (a > this.meter.peak) this.meter.peak = a;
+			}
 			at += span;
 			this.tickLeft -= span;
 		}
 		this.frame += n;
+	}
+	/** y = x − x₁ + k·y₁ on each side: takes out an offset (DC) a sound may have, and nothing one can hear */
+	dcBlock(left, right, from, to) {
+		const d = this.dc;
+		let { xl, yl, xr, yr } = d;
+		for (let i = from; i < to; i++) {
+			const l = left[i], r = right[i];
+			yl = l - xl + d.k * yl;
+			xl = l;
+			yr = r - xr + d.k * yr;
+			xr = r;
+			left[i] = yl;
+			right[i] = yr;
+		}
+		Object.assign(d, {
+			xl,
+			yl,
+			xr,
+			yr
+		});
+	}
+	/** the metronome's click: 25 ms of a sine, higher on the bar's first beat */
+	clickInto(left, right, from, to) {
+		const c = this.click;
+		const len = Math.round(this.rate * .025);
+		for (let i = from; i < to && c.left > 0; i++, c.left--) {
+			const env = c.left / len;
+			const x = Math.sin(c.phase) * c.gain * env * env;
+			c.phase += c.step;
+			left[i] += x;
+			right[i] += x;
+		}
 	}
 	echo(left, right, from, to, e) {
 		const size = Math.ceil(ECHO_MAX_MS / 1e3 * this.rate) + 1;
@@ -5209,10 +5297,22 @@ var Renderer = class {
 	}
 	tick(at) {
 		const t = this.player.step();
-		if (t.line) this.marks.push({
-			frame: this.frame + at,
-			...t.line
-		});
+		if (t.line) {
+			this.marks.push({
+				frame: this.frame + at,
+				...t.line
+			});
+			const lpb = Math.max(1, this.song.lpb);
+			if (this.metronome && t.line.line % lpb === 0) {
+				const bar = t.line.line % (lpb * 4) === 0;
+				this.click = {
+					left: Math.round(this.rate * .025),
+					phase: 0,
+					step: 2 * Math.PI * (bar ? 1760 : 1320) / this.rate,
+					gain: bar ? .35 : .22
+				};
+			}
+		}
 		for (const e of t.events) this.apply(e);
 		if (t.ended) {
 			this.ended = true;
@@ -5253,6 +5353,10 @@ var Renderer = class {
 				});
 				this.voices[e.voice] = v;
 			}
+			this.hits[e.voice] = {
+				frame: this.frame,
+				vol: Math.max(0, Math.min(1, (this.song.trackVolume[e.voice] ?? 64) / 64))
+			};
 			for (const old of this.chordVoices[e.voice] ?? []) {
 				if (!old.on || !old.rings) continue;
 				if (!(old instanceof DrumVoice || old instanceof Strummed && old.inner instanceof DrumVoice)) old.stop();
@@ -5430,6 +5534,7 @@ async function encodeLossy(audio, pcm, format, quality, title) {
 /** The song as sound: once through, plus its tail. `onProgress(0…1)`; it yields now and then. */
 async function renderSong(song, o, onProgress) {
 	const r = new Renderer(song, o.rate, o.paula);
+	r.limit = o.limit !== false;
 	const muted = new Set(o.muted ?? []);
 	if (o.solo?.length) {
 		for (let t = 0; t < song.tracks; t++) if (!o.solo.includes(t)) muted.add(t);
@@ -5545,7 +5650,7 @@ var newExportChoices = () => ({
 	rate: 48e3,
 	bits: 24,
 	quality: "",
-	what: "master + stems",
+	what: "master",
 	normalize: false,
 	tail: 1.5
 });
@@ -5767,10 +5872,10 @@ function makeScreens(ib, engine, st) {
 				muted ? "×" : "·",
 				solo ? "S" : "·"
 			];
-			ui.text(inner.x + 1, y, String(tr + 1).padStart(2), { fg: c.faint });
+			ui.text(inner.x + 1, y, String(tr + 1).padStart(2), { fg: c.subtle });
 			cells.forEach((v, i) => {
 				const on = here && st.songCol === i;
-				const fg = i === 0 ? muted ? c.faint : c.fg : i === 4 && muted ? c.warning : i === 5 && solo ? c.success : c.muted;
+				const fg = i === 0 ? muted ? c.subtle : c.fg : i === 4 && muted ? c.warning : i === 5 && solo ? c.success : c.muted;
 				ui.text(colX[i], y, v, {
 					fg: on ? c.accent : fg,
 					attrs: on ? BOLD : 0
@@ -5968,7 +6073,6 @@ function makeScreens(ib, engine, st) {
 		y += 2;
 		if (last && last.kind !== "busy" && last.line !== exportLine(x, q)) last = null;
 		if (last && y < inner.y + inner.h) ui.text(inner.x + 1, y++, truncate(last.text, inner.w - 2), { fg: last.kind === "ok" ? c.success : last.kind === "error" ? c.error : c.accent });
-		if (y < inner.y + inner.h) ui.text(inner.x + 1, y, truncate(exportLine(x, q), inner.w - 2), { fg: c.faint });
 	};
 	const keyExport = (k) => {
 		const rows = expRows();
@@ -6070,25 +6174,41 @@ var GUIDE = [
 			["med new --chip", "a chiptune song: 2 pulses, a triangle, a noise (NES-style)"],
 			["med open", "open a .med, .mod or .bmed in songs/"],
 			["med demo", "the demo song"],
-			["med save", "save (a new song becomes a .bmed in songs/)"],
+			["med save · ⌘S", "save (a new song asks for its name: never over another song)"],
 			["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
 			["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
 			["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
-			["space", "stop · when stopped: EDIT MODE on / off"]
+			["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
+			["med new, open, demo", "a song with changes asks first: save, don't save (the autosave keeps a copy), cancel"]
 		]
 	},
 	{
 		title: "EDIT MODE (space: the line turns red, ● EDIT at the top)",
 		rows: [
 			["the letter keys", "a piano: Z S X D C V… (bottom row) and Q 2 W 3 E R… (top row), by place"],
-			["`", "note off (^^^): the note stops, a synth releases"],
+			["` · 1 · caps lock", "note off (^^^): the note stops, a synth releases"],
 			["0–9 A–F", "the hex columns: the instrument (2 digits), the chord, the command (4)"],
-			["delete · ⌫", "clear the column · delete the line (⇧: in every track)"],
+			["delete · ⌫", "clear the column · delete the line (⇧: in every track) — in edit mode only"],
 			["alt enter", "insert a line (⇧: in every track)"],
-			["alt ↑↓ · alt ←→", "the octave · the instrument the keys play"],
+			["alt ↑↓ · F1–F8 · alt ←→", "the octave · the instrument the keys play"],
 			["alt 0–9", "the step: lines the cursor moves after a note"],
-			["⇧ arrows · drag", "select · alt C / X / V copy cut paste · alt Q / A transpose"],
+			["⇧ arrows · drag", "select · alt L the track · alt K the block · alt C / X / V copy cut paste"],
+			["alt PgUp · alt PgDn", "transpose a semitone (⇧: an octave) — the same on every keyboard (alt Q / A too)"],
 			["⌘Z · ⌘⇧Z", "undo · redo (notes, instruments, settings, mutes)"]
+		]
+	},
+	{
+		title: "MOVING AROUND",
+		rows: [
+			["↑↓ ←→ · PgUp PgDn", "the cursor · 16 lines"],
+			["tab · ⇧tab", "the next track · the one before"],
+			["⌘← · ⌘→", "the position before · after in the sequence (ctrl on Windows, Linux)"],
+			["alt F · scroll lock", "follow the song while it plays, or not (the cursor stays where you edit)"],
+			["med view center|edges", "the cursor's line in the middle (the default), or a view that scrolls at its edges"],
+			["med click on", "the metronome: a click on each beat while playing"],
+			["the sequence", "‹ › or the wheel: another block · drag: move it · right-click: use block…, move, insert"],
+			["the track's ■", "mute (lit while it plays) · right-click the name: solo, rename"],
+			["the top line", "each part clicks (▶ play, edit, the tempo, stepped / smooth, follow…), the wheel changes them"]
 		]
 	},
 	{
@@ -6112,7 +6232,7 @@ var GUIDE = [
 			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n"],
 			["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
 			["med bounce", "this block, rendered into a new instrument"],
-			["med pack", "the starter sounds, recorded by people: which are there (med pack load <name>)"]
+			["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"]
 		]
 	},
 	{
@@ -6292,7 +6412,7 @@ function makeStart(ib) {
 		const p = Math.min(1, (now - since) / INTRO_MS);
 		if (p < 1) ui.animate(33);
 		const w = LOGO[0].length;
-		const boxW = Math.min(r.w - 2, 46), boxH = 9;
+		const boxW = Math.min(r.w - 2, 46), boxH = 8;
 		const tall = r.h >= LOGO.length + boxH + 5;
 		let y = r.y + Math.max(1, Math.floor((r.h - (tall ? LOGO.length + 3 : 0) - boxH) / 2));
 		if (tall && w <= r.w - 2) {
@@ -6340,7 +6460,6 @@ function makeStart(ib) {
 				quiet: i >= 4 && i !== row
 			});
 		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("N O D ? C S, or the arrows and ⏎"), { fg: c.subtle }, inner.w - 2);
 		let below = box.y + box.h + 1;
 		if (song && below < r.y + r.h) {
 			const label = `L  ${t("continue")} “${song.title}”${song.dirty ? " ●" : ""}`;
@@ -6440,7 +6559,11 @@ function newState() {
 		expRow: 0,
 		synthRow: 0,
 		drumRow: 0,
-		drumCol: 0
+		drumCol: 0,
+		view: "center",
+		follow: true,
+		savedAt: 0,
+		metronome: false
 	};
 }
 /** a cell's width: "C-3 01 0C20" and 5 more a command page; where each column starts in it */
@@ -6460,26 +6583,90 @@ function makeApp(ib, engine, st) {
 	const instList = new ListView();
 	seqList.cmdOf = (i) => `med pos ${hex(i)}`;
 	seqList.onActivate = (i) => run(`med play song ${hex(i)}`);
-	seqList.menuOf = (i) => [
-		{
-			label: t("play from here"),
-			cmd: `med play song ${hex(i)}`
-		},
-		"-",
-		{
-			label: t("insert a new block here"),
-			cmd: `med seq new ${hex(i)}`
-		},
-		{
-			label: t("insert a copy of this block"),
-			cmd: `med seq copy ${hex(i)}`
-		},
-		{
-			label: t("remove this position"),
-			cmd: `med seq rm ${hex(i)}`,
-			danger: true
-		}
-	];
+	seqList.menuOf = (i) => {
+		const s = st.song;
+		const n = s?.sequence.length ?? 0;
+		return [
+			{
+				label: t("play from here"),
+				cmd: `med play song ${hex(i)}`
+			},
+			"-",
+			{
+				label: t("use another block…"),
+				hint: "wheel · ‹ ›",
+				run: () => void useBlock(i)
+			},
+			{
+				label: t("the next block"),
+				cmd: `med seq set ${hex(i)} ${hex(Math.min((s?.blocks.length ?? 1) - 1, (s?.sequence[i] ?? 0) + 1), 3)}`,
+				disabled: !s || (s.sequence[i] ?? 0) >= s.blocks.length - 1
+			},
+			{
+				label: t("move up"),
+				cmd: `med seq move ${hex(i)} up`,
+				disabled: i === 0
+			},
+			{
+				label: t("move down"),
+				cmd: `med seq move ${hex(i)} down`,
+				disabled: i >= n - 1
+			},
+			"-",
+			{
+				label: t("add a position after it, same block"),
+				cmd: `med seq add ${hex(s?.sequence[i] ?? 0, 3)}`
+			},
+			{
+				label: t("insert a new block here"),
+				cmd: `med seq new ${hex(i)}`
+			},
+			{
+				label: t("insert a copy of this block"),
+				cmd: `med seq copy ${hex(i)}`
+			},
+			{
+				label: t("remove this position"),
+				cmd: `med seq rm ${hex(i)}`,
+				danger: true,
+				disabled: n <= 1
+			}
+		];
+	};
+	seqList.tipOf = () => t("click: go there · double-click: play from here · wheel on the block: another block · drag: move it · right-click: more");
+	seqList.onDrop = (from, to) => {
+		if (to === void 0 || to === from) return;
+		(async () => {
+			const d = to > from ? 1 : -1;
+			for (let p = from; p !== to; p += d) await ib.shell.run(`med seq move ${hex(p)} ${d > 0 ? "down" : "up"}`);
+		})();
+	};
+	/** a position plays another block: the list of blocks, the unused ones said */
+	const useBlock = async (pos) => {
+		const s = st.song;
+		if (!s) return;
+		const opts = s.blocks.map((b, i) => ({ label: `${hex(i, 3)}  ${b.lines} ${t("lines")}${b.name ? ` · ${b.name}` : ""}${s.sequence.includes(i) ? "" : ` · ${t("not in the sequence")}`}` }));
+		const pick = await ib.ui.choose(`${t("POSITION")} ${hex(pos)}: ${t("which block?")}`, opts, { selected: s.sequence[pos] });
+		if (pick !== null) run(`med seq set ${hex(pos)} ${hex(pick, 3)}`);
+	};
+	/** the blocks no position plays: add one to the sequence, or delete it */
+	const unusedBlocks = async () => {
+		const s = st.song;
+		if (!s) return;
+		const free = s.blocks.flatMap((_, i) => s.sequence.includes(i) ? [] : [i]);
+		const opts = free.flatMap((i) => [{ label: `${t("add block")} ${hex(i, 3)} ${t("at the end of the sequence")}` }, { label: `${t("delete block")} ${hex(i, 3)}` }]);
+		const pick = await ib.ui.choose(t("BLOCKS IN NO POSITION"), opts);
+		if (pick === null) return;
+		const b = free[Math.floor(pick / 2)];
+		run(pick % 2 ? `med block rm ${hex(b, 3)}` : `med seq add ${hex(b, 3)}`);
+	};
+	/** one block more or less at a position (the wheel, ‹ ›) */
+	const nudgeBlock = (pos, d) => {
+		const s = st.song;
+		if (!s) return;
+		const b = Math.max(0, Math.min(s.blocks.length - 1, (s.sequence[pos] ?? 0) + d));
+		if (b !== s.sequence[pos]) run(`med seq set ${hex(pos)} ${hex(b, 3)}`);
+	};
 	const screens = makeScreens(ib, engine, st);
 	/** this page (State.page says which one is on screen) */
 	const me = {};
@@ -6543,6 +6730,46 @@ function makeApp(ib, engine, st) {
 	/** where the block was drawn (mouse → cell) */
 	let geo = null;
 	let anchor = null;
+	/** while the mouse drags a selection: the view stays put (the line under the mouse is the one drawn) */
+	let dragTop = null;
+	/** the master meter, held a little between frames */
+	let meterPeak = 0, meterLim = 0;
+	/** the first line on screen when the view scrolls at the edges */
+	let viewTop = 0;
+	/** a drag, whichever hit of the block gets the moves (the deck sends them to the hit where it started) */
+	const dragTo = (m) => {
+		const g = geo, b = block();
+		if (!g || !b || !anchor || dragTop === null) return;
+		if (m.y <= g.y && dragTop > 0) dragTop--;
+		else if (m.y >= g.y + g.h - 1 && dragTop + g.h < b.lines) dragTop++;
+		g.top = dragTop;
+		const at = cellAt(m.x, Math.max(g.y, Math.min(g.y + g.h - 1, m.y)));
+		if (!at) return;
+		dragEnd = {
+			line: at.line,
+			track: at.track
+		};
+		st.sel = {
+			block: blockNo(),
+			line0: Math.min(anchor.line, at.line),
+			line1: Math.max(anchor.line, at.line),
+			track0: Math.min(anchor.track, at.track),
+			track1: Math.max(anchor.track, at.track)
+		};
+	};
+	let dragEnd = null;
+	/** the mouse let go: the cursor goes to where the drag ended */
+	const dragDone = () => {
+		if (dragTop === null) return;
+		viewTop = dragTop;
+		dragTop = null;
+		if (dragEnd) st.line = dragEnd.line, st.track = dragEnd.track;
+		dragEnd = null;
+	};
+	const drag = {
+		onDrag: dragTo,
+		onUp: dragDone
+	};
 	const song = () => st.song;
 	const blockNo = () => st.song?.sequence[st.seq] ?? 0;
 	const block = () => st.song?.blocks[blockNo()];
@@ -6593,6 +6820,36 @@ function makeApp(ib, engine, st) {
 		};
 	};
 	const unselect = () => (st.sel = null, anchor = null);
+	/** alt L: the whole track · alt K: the whole block (again: nothing) */
+	const selectTrack = () => {
+		const b = block();
+		if (b) st.sel = {
+			block: blockNo(),
+			line0: 0,
+			line1: b.lines - 1,
+			track0: st.track,
+			track1: st.track
+		};
+	};
+	const selectBlock = () => {
+		const s = song(), b = block();
+		if (s && b) st.sel = {
+			block: blockNo(),
+			line0: 0,
+			line1: b.lines - 1,
+			track0: 0,
+			track1: s.tracks - 1
+		};
+	};
+	/** the position before / after in the sequence (the cursor's line stays when it fits) */
+	const goPos = (d) => {
+		const s = song();
+		if (!s) return;
+		const to = Math.max(0, Math.min(s.sequence.length - 1, st.seq + d));
+		if (to === st.seq) return;
+		unselect();
+		run(`med pos ${hex(to)} ${hex(st.line)}`);
+	};
 	/** what an operation works on: the selection, or the cell under the cursor */
 	const target = () => st.sel && st.sel.block === blockNo() ? st.sel : {
 		block: blockNo(),
@@ -6605,6 +6862,8 @@ function makeApp(ib, engine, st) {
 	const typeNote = (note) => {
 		const e = ed();
 		if (!e) return;
+		const ins = st.song?.instruments[st.inst];
+		if (note !== 128 && (!ins || ins.kind === "empty")) ib.ui.notify(`${t("instrument")} ${hex(st.inst + 1)} ${t("is empty: no sound (alt ←→ another, or make one: alt I)")}`, "warning");
 		e.writeNote(blockNo(), st.line, st.track, note, note === 128 ? 0 : st.inst + 1);
 		advance();
 	};
@@ -6816,7 +7075,12 @@ function makeApp(ib, engine, st) {
 				tip: tip ? t(tip) : void 0
 			}) + 1;
 		}
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · alt ←→ another · alt B the block · med sample -h"), { fg: c.subtle }, inner.w - 2);
+		ui.hit({
+			x: inner.x,
+			y: inner.y,
+			w: inner.w,
+			h: waveH
+		}, { tip: t("the keys play it · alt ←→ another instrument · alt B the block · med sample -h") });
 	};
 	/** one step of a synth setting (←→, the ‹ › buttons, the wheel): straight to the editor, undoable */
 	const nudge = (row, dir, big = false) => {
@@ -6856,7 +7120,7 @@ function makeApp(ib, engine, st) {
 			}) + 1;
 		}
 		const top = inner.y + 2;
-		const h = Math.max(1, inner.h - 3);
+		const h = Math.max(1, inner.h - 2);
 		const colW = 36;
 		const cols = Math.max(1, Math.min(2, Math.floor((inner.w - 1) / colW)));
 		const perCol = Math.ceil(PARAMS.length / cols);
@@ -6871,6 +7135,7 @@ function makeApp(ib, engine, st) {
 			ui.button(x0 + 19, y, "‹", () => (st.synthRow = i, nudge(i, -1)), { quiet: !on });
 			ui.text(x0 + 23, y, showIn(p, def).padEnd(9).slice(0, 9), { fg: on ? c.accent : c.fg });
 			ui.button(x0 + 32, y, "›", () => (st.synthRow = i, nudge(i, 1)), { quiet: !on });
+			const tip = t("the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)");
 			ui.hit({
 				x: x0,
 				y,
@@ -6878,7 +7143,8 @@ function makeApp(ib, engine, st) {
 				h: 1
 			}, {
 				onClick: () => st.synthRow = i,
-				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1),
+				tip
 			});
 			ui.hit({
 				x: x0 + 22,
@@ -6887,7 +7153,8 @@ function makeApp(ib, engine, st) {
 				h: 1
 			}, {
 				onClick: () => st.synthRow = i,
-				onWheel: (d) => nudge(i, d < 0 ? 1 : -1)
+				onWheel: (d) => nudge(i, d < 0 ? 1 : -1),
+				tip
 			});
 			if (on && focused) ui.tint({
 				x: x0,
@@ -6896,7 +7163,6 @@ function makeApp(ib, engine, st) {
 				h: 1
 			}, void 0, c.highlight);
 		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("the keys play it · ↑↓ a setting · ←→ change it (⇧ more) · med -h"), { fg: c.subtle }, inner.w - 2);
 	};
 	/** one step of a drum's setting (⇧←→, the ‹ › buttons, the wheel); the kit's grit */
 	const nudgeKit = (drum, col, dir, big = false) => {
@@ -6951,11 +7217,11 @@ function makeApp(ib, engine, st) {
 		DRUM_SETTINGS.forEach((s, k) => ui.text(valX + k * cellW + (wide ? 3 : 0), inner.y + 2, t(s.key), { fg: k === st.drumCol ? c.accent : c.subtle }));
 		st.drumRow = Math.max(0, Math.min(11, st.drumRow));
 		st.drumCol = Math.max(0, Math.min(3, st.drumCol));
-		const rows = Math.max(1, inner.h - 4);
+		const rows = Math.max(1, inner.h - 3);
 		const scroll = Math.max(0, Math.min(12 - rows, st.drumRow - rows + 1));
 		kit.drums.forEach((d, i) => {
 			const y = inner.y + 3 + i - scroll;
-			if (y < inner.y + 3 || y >= inner.y + inner.h - 1) return;
+			if (y < inner.y + 3 || y >= inner.y + inner.h) return;
 			const on = i === st.drumRow;
 			ui.text(x0, y, DRUM_NOTES[i], { fg: c.muted });
 			ui.text(x0 + 4, y, t(DRUM_NAMES[i]).padEnd(11).slice(0, 11), { fg: on ? c.fg : c.muted });
@@ -6985,7 +7251,8 @@ function makeApp(ib, engine, st) {
 					h: 1
 				}, {
 					onClick: () => (st.drumRow = i, st.drumCol = k),
-					onWheel: (dl) => nudgeKit(i, k, dl < 0 ? 1 : -1)
+					onWheel: (dl) => nudgeKit(i, k, dl < 0 ? 1 : -1),
+					tip: t("←→ a setting · ⇧←→ or the wheel: change it")
 				});
 			});
 			ui.hit({
@@ -6993,9 +7260,11 @@ function makeApp(ib, engine, st) {
 				y,
 				w: 15,
 				h: 1
-			}, { onClick: () => st.drumRow = i });
+			}, {
+				onClick: () => st.drumRow = i,
+				tip: t("one drum a note (the keys play them) · ↑↓ a drum")
+			});
 		});
-		ui.text(inner.x + 1, inner.y + inner.h - 1, t("keys: one drum a note · ↑↓ a drum · ←→ a setting · ⇧←→ change it"), { fg: c.subtle }, inner.w - 2);
 	};
 	/** a track's new name, asked in a window (the command does it) */
 	const rename = async (tr) => {
@@ -7038,29 +7307,39 @@ function makeApp(ib, engine, st) {
 		},
 		{
 			label: t("clear"),
-			hint: "del",
+			hint: "del (edit mode)",
 			cmd: "med clear"
 		},
 		"-",
 		{
 			label: t("transpose up"),
-			hint: "alt Q",
+			hint: "alt PgUp",
 			cmd: "med transpose 1"
 		},
 		{
 			label: t("transpose down"),
-			hint: "alt A",
+			hint: "alt PgDn",
 			cmd: "med transpose -1"
 		},
 		{
 			label: t("an octave up"),
-			hint: "⇧ alt Q",
+			hint: "⇧ alt PgUp",
 			cmd: "med transpose 12"
 		},
 		{
 			label: t("an octave down"),
-			hint: "⇧ alt A",
+			hint: "⇧ alt PgDn",
 			cmd: "med transpose -12"
+		},
+		{
+			label: t("select the track"),
+			hint: "alt L",
+			run: () => selectTrack()
+		},
+		{
+			label: t("select the block"),
+			hint: "alt K",
+			run: () => selectBlock()
 		},
 		"-",
 		{
@@ -7070,7 +7349,7 @@ function makeApp(ib, engine, st) {
 		},
 		{
 			label: t("delete the line"),
-			hint: "⌫",
+			hint: "⌫ (edit mode)",
 			cmd: "med line delete"
 		},
 		{
@@ -7081,6 +7360,15 @@ function makeApp(ib, engine, st) {
 			label: st.edit ? t("edit mode off") : t("edit mode on"),
 			hint: "space",
 			cmd: `med edit ${st.edit ? "off" : "on"}`
+		},
+		{
+			label: st.follow ? t("follow the song: off") : t("follow the song: on"),
+			hint: "alt F",
+			cmd: `med follow ${st.follow ? "off" : "on"}`
+		},
+		{
+			label: st.metronome ? t("metronome off") : t("metronome on"),
+			cmd: `med click ${st.metronome ? "off" : "on"}`
 		},
 		"-",
 		{
@@ -7094,9 +7382,9 @@ function makeApp(ib, engine, st) {
 			cmd: "med saveas"
 		},
 		{
-			label: t("export (WAV + tracks)"),
+			label: t("export (WAV)"),
 			hint: "med export",
-			cmd: "med export --stems"
+			cmd: "med export"
 		},
 		{
 			label: t("export…"),
@@ -7152,6 +7440,7 @@ function makeApp(ib, engine, st) {
 			const e = st.editor, a = st.autosave;
 			engine.stop();
 			st.home = true;
+			if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
 			if (!st.song || !e?.dirty) return true;
 			await a?.flush();
 			const name = st.song.title || st.path.split("/").pop() || "untitled";
@@ -7178,7 +7467,7 @@ function makeApp(ib, engine, st) {
 			const s = st.song;
 			const now = engine.current();
 			if (engine.playing) ui.animate(16);
-			if (now) {
+			if (now && st.follow && dragTop === null) {
 				st.seq = now.seq;
 				st.line = now.line;
 			}
@@ -7191,32 +7480,197 @@ function makeApp(ib, engine, st) {
 			if (s) {
 				const f = s.flags;
 				const bpm = ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix);
-				const state = engine.playing ? engine.mode === "block" ? "▶ BLOCK" : "▶ SONG" : st.edit ? ` ● ${t("EDIT")} ` : "■ STOP";
-				const parts = [
-					[0, `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${bpm.toFixed(0)})`],
-					[3, `${t("speed")} ${hex(s.speed)}`],
-					[2, `${t("oct")} ${st.octave + 1}`],
-					[4, `${t("step")} ${st.step}`],
-					[6, s.format],
-					[5, engine.paula ? "PAULA" : "SMOOTH"],
-					...s.echo ? [[1, `${t("ECHO")} ${s.echo.ms}`]] : [],
-					...st.editor?.dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate ? [[2, `✓ ${t("autosaved")} ${new Date(st.autosave.lastAt).toLocaleTimeString([], {
-						hour: "2-digit",
-						minute: "2-digit"
-					})}`]] : st.autosave?.error ? [[2, t("autosave off")]] : []
-				];
-				const space = r.w - 2 - (x - r.x) - state.length - 6;
+				const hm = (at) => new Date(at).toLocaleTimeString([], {
+					hour: "2-digit",
+					minute: "2-digit"
+				});
+				const tempo = s.tempoMode === "spd" ? `SPD ${s.tempo} (${bpm.toFixed(0)} BPM)` : `${s.tempo} BPM${Math.round(bpm) !== s.tempo ? ` (${bpm.toFixed(0)})` : ""}`;
+				const dirty = !!st.editor?.dirty;
+				const parts = [];
+				const wheel = (cmd) => (d) => {
+					const line = cmd(d < 0 ? 1 : -1);
+					if (line) run(line);
+				};
+				if (engine.playing) parts.push({
+					k: -1,
+					label: `■ ▶ ${engine.mode === "block" ? t("BLOCK") : t("SONG")}`,
+					style: {
+						fg: c.success,
+						attrs: BOLD
+					},
+					hit: {
+						cmd: "med stop",
+						tip: t("playing · click or space: stop")
+					}
+				});
+				else {
+					parts.push({
+						k: -1,
+						label: `▶ ${t("play")}`,
+						style: { fg: c.success },
+						hit: {
+							cmd: `med play song ${hex(st.seq)} ${hex(st.line)}`,
+							tip: t("play the song from the cursor · enter (⇧enter: this block, again and again)")
+						}
+					});
+					parts.push({
+						k: -1,
+						label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"),
+						style: st.edit ? {
+							fg: c.bg,
+							bg: c.error,
+							attrs: BOLD
+						} : { fg: c.fg },
+						hit: {
+							cmd: `med edit ${st.edit ? "off" : "on"}`,
+							tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block")
+						}
+					});
+				}
+				const m = engine.master?.() ?? null;
+				if (m) {
+					meterPeak = Math.max(m.peak, meterPeak * .85);
+					meterLim = m.limitDb > 1 ? 12 : Math.max(0, meterLim - 1);
+					const db = 20 * Math.log10(Math.max(1e-6, meterPeak));
+					const n = Math.max(0, Math.min(6, Math.round((db + 36) / 6)));
+					parts.push({
+						k: 1,
+						label: `${"▮".repeat(n)}${"▯".repeat(6 - n)}${meterLim ? " LIM" : ""}`,
+						style: { fg: meterLim ? c.warning : c.success },
+						hit: { tip: t("the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips") }
+					});
+				} else meterPeak = 0, meterLim = 0;
+				parts.push({
+					k: 0,
+					label: tempo,
+					style: { fg: c.fg },
+					hit: {
+						cmd: "med screen song",
+						tip: t("the tempo · the wheel changes it · click: the SONG screen"),
+						onWheel: wheel((d) => `med tempo ${Math.max(1, Math.min(255, s.tempo + d))}`)
+					}
+				});
+				parts.push({
+					k: 3,
+					label: `${t("speed")} ${hex(s.speed)}`,
+					style: { fg: c.muted },
+					hit: {
+						cmd: "med screen song",
+						tip: t("ticks a line (the effects' clock) · the wheel changes it"),
+						onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`)
+					}
+				});
+				parts.push({
+					k: 2,
+					label: `${t("oct")} ${st.octave + 1}`,
+					style: { fg: c.muted },
+					hit: {
+						tip: t("the octave the keys play · alt ↑↓ or F1–F8 · the wheel"),
+						onWheel: (d) => st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1))),
+						onClick: () => {}
+					}
+				});
+				parts.push({
+					k: 4,
+					label: `${t("step")} ${st.step}`,
+					style: { fg: c.muted },
+					hit: {
+						tip: t("lines the cursor moves after a note · alt 0–9 · the wheel"),
+						onWheel: (d) => st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1))),
+						onClick: () => {}
+					}
+				});
+				parts.push({
+					k: 5,
+					label: engine.paula ? t("stepped") : t("smooth"),
+					style: { fg: c.muted },
+					hit: {
+						cmd: `med paula ${engine.paula ? "off" : "on"}`,
+						tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga")
+					}
+				});
+				if (s.echo) parts.push({
+					k: 1,
+					label: `${t("echo")} ${s.echo.ms}`,
+					style: { fg: c.muted },
+					hit: {
+						cmd: "med screen song",
+						tip: t("the echo on the whole mix (ms) · click: the SONG screen")
+					}
+				});
+				parts.push({
+					k: 2,
+					label: st.follow ? t("follow") : t("follow off"),
+					style: { fg: st.follow ? c.muted : c.warning },
+					hit: {
+						cmd: `med follow ${st.follow ? "off" : "on"}`,
+						tip: st.follow ? t("the cursor follows the song as it plays · click or alt F: it stays where you edit") : t("the cursor stays where you edit while the song plays · click or alt F: follow it")
+					}
+				});
+				if (st.metronome) parts.push({
+					k: 3,
+					label: t("click"),
+					style: { fg: c.accent },
+					hit: {
+						cmd: "med click off",
+						tip: t("the metronome: a click on each beat while playing · click: off")
+					}
+				});
+				if (!dirty && st.savedAt) parts.push({
+					k: 2,
+					label: `✓ ${t("saved")} ${hm(st.savedAt)}`,
+					style: { fg: c.success },
+					hit: { tip: st.path }
+				});
+				else if (dirty && st.autosave?.on && st.autosave.lastAt && st.autosave.upToDate) parts.push({
+					k: 2,
+					label: `✓ ${t("autosaved")} ${hm(st.autosave.lastAt)}`,
+					style: { fg: c.muted },
+					hit: {
+						cmd: "med save",
+						tip: t("a copy of the changes is in songs/.recovery/ · click or ⌘S: save the song")
+					}
+				});
+				else if (st.autosave?.error) parts.push({
+					k: 2,
+					label: t("autosave off"),
+					style: { fg: c.warning },
+					hit: {
+						cmd: "med autosave on",
+						tip: st.autosave.error
+					}
+				});
+				const width = (list) => list.reduce((n, p) => n + p.label.length + 2, 0);
 				let shown = parts;
-				const width = (list) => list.reduce((n, [, p]) => n + p.length + 2, 0);
-				for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter(([k]) => k < drop);
-				const rest = shown.length ? `  ${shown.map(([, p]) => p).join("  ")}` : "";
-				const rx = rest ? ui.textRight(r.x + r.w - 1, r.y, rest, { fg: engine.playing ? c.success : c.muted }) : r.x + r.w - 1;
-				const room = ui.textRight(rx, r.y, state, st.edit && !engine.playing ? {
-					fg: c.bg,
-					bg: c.error,
-					attrs: BOLD
-				} : { fg: engine.playing ? c.success : c.muted }) - (x + 2) - 1;
-				if (room >= 3) ui.text(x + 2, r.y, truncate(name, room), { fg: c.fg }, room);
+				const space = r.w - 2 - (x - r.x) - 12;
+				for (let drop = 6; drop >= 0 && width(shown) > space; drop--) shown = shown.filter((p) => p.k < drop);
+				let px = r.x + r.w - 1 - width(shown) + 2;
+				const sx = px;
+				for (const p of shown) {
+					const end = ui.text(px, r.y, p.label, p.style);
+					ui.hit({
+						x: px,
+						y: r.y,
+						w: p.label.length,
+						h: 1
+					}, p.hit);
+					px = end + 2;
+				}
+				const room = sx - (x + 2) - 1;
+				if (room >= 3) {
+					let nx = x + 2;
+					if (dirty) nx = ui.text(nx, r.y, "● ", { fg: c.warning });
+					ui.text(nx, r.y, truncate(name, room - (dirty ? 2 : 0)), { fg: c.fg }, room - (dirty ? 2 : 0));
+					ui.hit({
+						x: x + 2,
+						y: r.y,
+						w: Math.min(room, name.length + (dirty ? 2 : 0)),
+						h: 1
+					}, {
+						cmd: dirty ? "med save" : "med screen song",
+						tip: `${st.path}${dirty ? ` · ${t("changes not saved · click or ⌘S: save")}` : ""}`
+					});
+				}
 			}
 			if (!s || st.home) {
 				const page = {
@@ -7252,12 +7706,49 @@ function makeApp(ib, engine, st) {
 			});
 			seqList.items = s.sequence.map((_, i) => i);
 			if (seqList.selected !== st.seq) seqList.select(st.seq);
-			seqList.render(ui, seqBox, false, (i, row, sel) => {
-				const b = s.blocks[s.sequence[i]];
-				ui.text(row.x, row.y, `${hex(i)} ${hex(s.sequence[i], 3)} ${b?.name ?? ""}`, {
+			ui.text(seqBox.x, seqBox.y, "pos  block", { fg: c.subtle });
+			const free = s.blocks.length - new Set(s.sequence).size;
+			const listBox = {
+				x: seqBox.x,
+				y: seqBox.y + 1,
+				w: seqBox.w,
+				h: Math.max(1, seqBox.h - 1 - (free > 0 ? 1 : 0))
+			};
+			seqList.render(ui, listBox, false, (i, row, sel) => {
+				const bn = s.sequence[i];
+				const b = s.blocks[bn];
+				ui.text(row.x, row.y, hex(i), {
 					fg: sel ? c.accent : c.muted,
 					attrs: sel ? BOLD : 0
-				}, row.w);
+				});
+				const bx = row.x + 3;
+				if (sel) ui.button(bx, row.y, "‹", () => nudgeBlock(i, -1), {
+					quiet: true,
+					tip: t("the block before")
+				});
+				ui.text(bx + 2, row.y, hex(bn, 3), {
+					fg: sel ? c.accent : c.fg,
+					attrs: sel ? BOLD : 0
+				});
+				ui.hit({
+					x: bx + 2,
+					y: row.y,
+					w: 3,
+					h: 1
+				}, {
+					onWheel: (d) => nudgeBlock(i, d < 0 ? 1 : -1),
+					onClick: () => run(`med pos ${hex(i)}`),
+					tip: t("the block this position plays · the wheel: another · right-click: use block…, move")
+				});
+				if (sel) ui.button(bx + 5, row.y, "›", () => nudgeBlock(i, 1), {
+					quiet: true,
+					tip: t("the next block")
+				});
+				if (b?.name) ui.text(bx + 9, row.y, b.name, { fg: c.muted }, Math.max(0, row.w - 12));
+			});
+			if (free > 0) ui.button(seqBox.x, seqBox.y + seqBox.h - 1, `+${free} ${free > 1 ? t("blocks") : t("block")} ${t("unused")}`, () => void unusedBlocks(), {
+				quiet: true,
+				tip: t("blocks no position plays: add one to the sequence, or delete it")
 			});
 			const instBox = ui.box({
 				x: body.x,
@@ -7301,12 +7792,6 @@ function makeApp(ib, engine, st) {
 				focused
 			});
 			if (!b) return;
-			const badge = engine.playing ? ` ${t("space: stop")} ` : st.edit ? ` ● ${t("EDIT")} · ${t("space: stop editing")} ` : ` ${t("space: edit mode")} `;
-			if (right.w > badge.length + 30) ui.textRight(right.x + right.w - 2, right.y, badge, st.edit && !engine.playing ? {
-				fg: c.bg,
-				bg: c.error,
-				attrs: BOLD
-			} : { fg: engine.playing ? c.success : c.warning });
 			const chords = !!s.chordColumn;
 			if (!chords && st.col === 3) st.col = 4;
 			const cw = cellW(b.pages, chords) + 1;
@@ -7315,25 +7800,45 @@ function makeApp(ib, engine, st) {
 			if (st.track < firstTrack) firstTrack = st.track;
 			if (st.track >= firstTrack + fits) firstTrack = st.track - fits + 1;
 			firstTrack = Math.max(0, Math.min(firstTrack, Math.max(0, s.tracks - fits)));
-			ui.hit(inner, { onWheel: (d) => moveLine(Math.sign(d) * 2) });
+			ui.hit(inner, {
+				onWheel: (d) => moveLine(Math.sign(d) * 2),
+				...drag
+			});
+			const level = engine.levels?.() ?? null;
 			for (let k = 0; k < fits && firstTrack + k < s.tracks; k++) {
 				const tr = firstTrack + k;
 				const muted = engine.muted.has(tr);
 				const hx = inner.x + numW + k * cw;
 				const name = s.trackNames[tr]?.trim() || `${t("track")} ${tr + 1}`;
-				ui.text(hx, inner.y, `${muted ? "×" : "▪"} ${truncate(name, cw - 3)}`, {
-					fg: muted ? c.faint : tr === st.track ? c.accent : c.subtle,
-					attrs: tr === st.track ? BOLD : 0
-				}, cw - 1);
+				const here = tr === st.track;
+				const lit = level ? Math.min(1, (level[tr] ?? 0) * 1.6) : 0;
+				ui.text(hx, inner.y, muted ? "M" : "■", {
+					fg: muted ? c.warning : lit > .02 ? mix(c.subtle, c.success, .35 + lit * .65) : c.subtle,
+					attrs: muted ? BOLD : 0
+				});
 				ui.hit({
 					x: hx,
 					y: inner.y,
-					w: cw - 1,
+					w: 1,
+					h: 1
+				}, {
+					cmd: `med mute ${tr + 1}`,
+					tip: muted ? t("muted · click: unmute · right-click: solo, rename") : t("mute · right-click: solo, rename"),
+					...drag
+				});
+				ui.text(hx + 2, inner.y, truncate(name, cw - 3), {
+					fg: muted ? c.subtle : here ? c.accent : c.muted,
+					attrs: here ? BOLD : 0
+				}, cw - 3);
+				ui.hit({
+					x: hx + 2,
+					y: inner.y,
+					w: cw - 3,
 					h: 1
 				}, {
 					onClick: () => st.track = tr,
 					onDouble: () => void rename(tr),
-					tip: t("double-click: rename · right-click: mute, solo"),
+					tip: t("click: the cursor goes there · double-click: rename · right-click: mute, solo"),
 					menu: () => [
 						{
 							label: t("rename…"),
@@ -7347,7 +7852,8 @@ function makeApp(ib, engine, st) {
 							label: t("solo"),
 							cmd: `med solo ${tr + 1}`
 						}
-					]
+					],
+					...drag
 				});
 			}
 			if (firstTrack > 0) {
@@ -7384,6 +7890,15 @@ function makeApp(ib, engine, st) {
 			}
 			const rows = inner.h - 1;
 			const mid = Math.floor(rows / 2);
+			let top;
+			if (dragTop !== null) top = dragTop;
+			else if (st.view === "edges") {
+				const margin = Math.min(2, Math.floor(rows / 4));
+				if (st.line < viewTop + margin) viewTop = st.line - margin;
+				if (st.line > viewTop + rows - 1 - margin) viewTop = st.line - rows + 1 + margin;
+				viewTop = Math.max(0, Math.min(viewTop, Math.max(0, b.lines - rows)));
+				top = viewTop;
+			} else top = st.line - mid;
 			geo = {
 				x: inner.x,
 				y: inner.y + 1,
@@ -7391,17 +7906,18 @@ function makeApp(ib, engine, st) {
 				h: rows,
 				numW,
 				cw,
-				top: st.line - mid,
+				top,
 				fits
 			};
 			const sel = st.sel && st.sel.block === bn ? st.sel : null;
+			const heard = now && !st.follow && s.sequence[now.seq] === bn ? now.line : -1;
 			for (let k = 0; k < rows; k++) {
-				const line = st.line - mid + k;
+				const line = top + k;
 				const y = inner.y + 1 + k;
 				if (line < 0 || line >= b.lines) continue;
 				const here = line === st.line;
 				const beat = line % Math.max(1, s.lpb) === 0;
-				const bg = here ? engine.playing ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : beat ? c.panelAlt : void 0;
+				const bg = here ? engine.playing && st.follow ? mix(c.panel, c.accent, .28) : st.edit ? mix(c.panel, c.error, .22) : c.highlight : line === heard ? mix(c.panel, c.success, .22) : beat ? c.panelAlt : void 0;
 				if (bg !== void 0) ui.fill({
 					x: inner.x,
 					y,
@@ -7409,7 +7925,7 @@ function makeApp(ib, engine, st) {
 					h: 1
 				}, { bg });
 				ui.text(inner.x, y, hex(line, 3), {
-					fg: here ? c.accent : beat ? c.muted : c.faint,
+					fg: here ? c.accent : beat ? c.muted : c.subtle,
 					bg
 				});
 				for (let j = 0; j < fits && firstTrack + j < s.tracks; j++) {
@@ -7417,6 +7933,8 @@ function makeApp(ib, engine, st) {
 					const cell = b.cells[line][tr];
 					const cx = inner.x + numW + j * cw;
 					const dim = engine.muted.has(tr);
+					const ink = (on) => dim ? c.muted : on;
+					const empty = c.subtle;
 					const inSel = !!sel && line >= sel.line0 && line <= sel.line1 && tr >= sel.track0 && tr <= sel.track1;
 					const cbg = inSel ? mix(c.panel, c.accentAlt, .35) : bg;
 					if (inSel) ui.fill({
@@ -7426,22 +7944,22 @@ function makeApp(ib, engine, st) {
 						h: 1
 					}, { bg: cbg });
 					let xx = ui.text(cx, y, noteName(cell.note), {
-						fg: dim ? c.faint : cell.note === 128 ? c.warning : cell.note ? c.fg : c.faint,
+						fg: cell.note === 128 ? ink(c.warning) : cell.note ? ink(c.fg) : empty,
 						bg: cbg,
-						attrs: cell.note ? BOLD : 0
+						attrs: cell.note && !dim ? BOLD : 0
 					});
 					xx = ui.text(xx + 1, y, cell.inst ? hex(cell.inst) : "..", {
-						fg: dim ? c.faint : cell.inst ? c.accent : c.faint,
+						fg: cell.inst ? ink(c.accent) : empty,
 						bg: cbg
 					});
 					if (chords) xx = ui.text(xx + 1, y, cell.chord ? cell.chord.toString(16).toUpperCase() : ".", {
-						fg: dim ? c.faint : cell.chord ? c.warning : c.faint,
+						fg: cell.chord ? ink(c.warning) : empty,
 						bg: cbg
 					});
 					for (let p = 0; p < b.pages; p++) {
 						const has = cell.cmd[p] || cell.val[p];
 						xx = ui.text(xx + 1, y, has ? `${hex(cell.cmd[p])}${hex(cell.val[p])}` : "....", {
-							fg: dim ? c.faint : has ? c.accentAlt : c.faint,
+							fg: has ? ink(c.accentAlt) : empty,
 							bg: cbg
 						});
 					}
@@ -7467,20 +7985,10 @@ function makeApp(ib, engine, st) {
 								line,
 								track: tr
 							};
+							dragTop = top;
+							dragEnd = null;
 						},
-						onDrag: (m) => {
-							const at = cellAt(m.x, m.y);
-							if (!at || !anchor) return;
-							st.line = at.line;
-							st.track = at.track;
-							st.sel = {
-								block: bn,
-								line0: Math.min(anchor.line, at.line),
-								line1: Math.max(anchor.line, at.line),
-								track0: Math.min(anchor.track, at.track),
-								track1: Math.max(anchor.track, at.track)
-							};
-						},
+						...drag,
 						onWheel: (d) => moveLine(Math.sign(d) * 2),
 						menu: () => cellMenu(line, tr)
 					});
@@ -7490,6 +7998,7 @@ function makeApp(ib, engine, st) {
 		onKey(k) {
 			const s = st.song;
 			const e = ed();
+			dragDone();
 			if ((k.key === "?" || k.key === "/" && k.shift || k.code === "Slash" && k.shift) && !k.ctrl && !k.meta || k.alt && k.code === "KeyG") return toggleGuide(), true;
 			if (st.screen === "guide") {
 				if (k.key === "backspace" || k.key === "escape") return toggleGuide(), true;
@@ -7497,7 +8006,7 @@ function makeApp(ib, engine, st) {
 				if (!s) return false;
 			}
 			if (!s || st.home) return start.key(k);
-			if (k.ctrl && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
+			if ((k.ctrl || k.meta) && k.code === "KeyS") return run(k.shift ? "med saveas" : "med save"), true;
 			if (s && (st.screen === "song" || st.screen === "export") && !k.alt && !k.ctrl && !k.meta) {
 				if (st.screen === "song" ? screens.keySong(k) : screens.keyExport(k)) return true;
 				const semi = k.key === "space" ? null : pianoKey(k.code);
@@ -7510,7 +8019,10 @@ function makeApp(ib, engine, st) {
 				return true;
 			}
 			if (!s || !e) return false;
-			if (k.ctrl && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
+			if ((k.ctrl || k.meta) && (k.key === "z" || k.code === "KeyZ")) return say(undoRedo(st, k.shift), t(k.shift ? "redone" : "undone")), true;
+			const fn = /^F([1-8])$/.exec(k.code);
+			if (fn && !k.alt && !k.ctrl && !k.meta) return st.octave = +fn[1] - 1, true;
+			if ((k.ctrl || k.meta) && !k.alt && (k.key === "left" || k.key === "right")) return goPos(k.key === "left" ? -1 : 1), true;
 			if (k.alt) {
 				const digit = /^Digit(\d)$/.exec(k.code);
 				if (digit) return st.step = +digit[1], true;
@@ -7526,8 +8038,13 @@ function makeApp(ib, engine, st) {
 					case "KeyC": return copy(), true;
 					case "KeyX": return cut(), true;
 					case "KeyV": return paste(), true;
+					case "PageUp":
 					case "KeyQ": return transpose(k.shift ? 12 : 1), true;
+					case "PageDown":
 					case "KeyA": return transpose(k.shift ? -12 : -1), true;
+					case "KeyF": return run(`med follow ${st.follow ? "off" : "on"}`), true;
+					case "KeyL": return selectTrack(), true;
+					case "KeyK": return selectBlock(), true;
 					case "Enter": return e.insertLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]), true;
 				}
 				return false;
@@ -7560,11 +8077,15 @@ function makeApp(ib, engine, st) {
 				case "end": return moveLine(9999), true;
 				case "left": return unselect(), moveCol(-1), true;
 				case "right": return unselect(), moveCol(1), true;
+				case "tab": return unselect(), st.track = (st.track + (k.shift ? s.tracks - 1 : 1)) % s.tracks, st.col = 0, true;
+				case "scrolllock": return run(`med follow ${st.follow ? "off" : "on"}`), true;
 				case "delete":
+					if (!st.edit) return true;
 					if (st.sel) e.clearSelection(st.sel), unselect();
-					else e.clear(blockNo(), st.line, st.track, st.col), st.edit && advance();
+					else e.clear(blockNo(), st.line, st.track, st.col), advance();
 					return true;
 				case "backspace":
+					if (!st.edit) return true;
 					e.deleteLine(blockNo(), st.line, k.shift ? [...Array(s.tracks).keys()] : [st.track]);
 					return true;
 			}
@@ -7586,7 +8107,7 @@ function makeApp(ib, engine, st) {
 					return true;
 				}
 			}
-			if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash")) return typeNote(128), true;
+			if (st.edit && kind === "note" && (k.code === "Backquote" || k.code === "IntlBackslash" || k.code === "Digit1" || k.code === "CapsLock")) return typeNote(128), true;
 			const semi = pianoKey(k.code);
 			if (semi !== null) {
 				if (k.repeat) return true;
@@ -8809,6 +9330,12 @@ function chipSong() {
 	s.title = "untitled";
 	s.chordColumn = true;
 	s.trackNames = [...CHIP_TRACKS];
+	s.trackPan = [
+		-.15,
+		.15,
+		0,
+		0
+	];
 	s.tempo = 150;
 	s.instruments = [
 		"2a03-lead",
@@ -8909,6 +9436,28 @@ function templateSong(tracks = TEMPLATE_TRACKS.length) {
 			if (chord) c.chord = chord;
 		}
 	};
+	const PANS = [
+		0,
+		0,
+		.25,
+		0,
+		-.2,
+		.3,
+		-.3,
+		.4
+	];
+	s.trackPan = Array.from({ length: n }, (_, t) => PANS[t] ?? s.trackPan[t]);
+	const VOLS = [
+		64,
+		60,
+		46,
+		46,
+		52,
+		48,
+		50,
+		48
+	];
+	s.trackVolume = Array.from({ length: n }, (_, t) => VOLS[t] ?? s.trackVolume[t]);
 	for (const l of [
 		0,
 		6,
@@ -8929,6 +9478,172 @@ function templateSong(tracks = TEMPLATE_TRACKS.length) {
 	put(8, 6, note("G#", 2), 5, 1);
 	return s;
 }
+// src/pack.ts
+/**
+* BreakerMED — the starter sound pack: the sampled sounds we want, made by people
+* (not computed: those are the synths and the drum machine). Until a musician
+* records one, it's a placeholder: listed, not there. SOUND_DESIGN.md says how to
+* make them; `med pack` shows which are in the vault, `med pack load <name>` loads one.
+*/
+/** where the pack lives in the vault (in songs/: the only folder the module may read) */
+var PACK_DIR = "songs/sound-pack";
+var PACK = [
+	{
+		file: "drums/kick-acoustic.wav",
+		what: "an acoustic kick drum, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/snare-acoustic.wav",
+		what: "an acoustic snare, one hit, medium",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/hat-closed.wav",
+		what: "a closed hi-hat, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/hat-open.wav",
+		what: "an open hi-hat, let ring",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/ride.wav",
+		what: "a ride cymbal, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/crash.wav",
+		what: "a crash cymbal, let ring",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tom-low.wav",
+		what: "a floor tom",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tom-high.wav",
+		what: "a rack tom",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/clap.wav",
+		what: "real hands clapping, a few people",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/shaker.wav",
+		what: "a shaker, one shake",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "drums/tambourine.wav",
+		what: "a tambourine, one hit",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "keys/piano-c3.wav",
+		what: "an acoustic piano, middle C, let ring",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "keys/epiano-c3.wav",
+		what: "an electric piano, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "keys/organ-c3.wav",
+		what: "an organ, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "bass/bass-electric-c2.wav",
+		what: "an electric bass, C an octave under middle C",
+		pitch: "C-2",
+		loop: false
+	},
+	{
+		file: "bass/bass-upright-c2.wav",
+		what: "an upright bass, plucked, C under middle C",
+		pitch: "C-2",
+		loop: false
+	},
+	{
+		file: "guitar/guitar-clean-c3.wav",
+		what: "a clean electric guitar, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "guitar/guitar-muted-c3.wav",
+		what: "a palm-muted guitar, middle C",
+		pitch: "C-3",
+		loop: false
+	},
+	{
+		file: "strings/strings-c3.wav",
+		what: "strings (or one violin / cello), middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-ah-c3.wav",
+		what: "a voice singing “ah”, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-oh-c3.wav",
+		what: "a voice singing “oh”, middle C, held",
+		pitch: "C-3",
+		loop: true
+	},
+	{
+		file: "voice/vox-hey.wav",
+		what: "a short shout: “hey!”",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "fx/vinyl-crackle.wav",
+		what: "vinyl crackle, a texture",
+		pitch: null,
+		loop: true
+	},
+	{
+		file: "fx/riser.wav",
+		what: "a rising sweep, 2–4 s",
+		pitch: null,
+		loop: false
+	},
+	{
+		file: "fx/impact.wav",
+		what: "a big hit, with its tail",
+		pitch: null,
+		loop: false
+	}
+];
+/** a sound of the pack by its name: "kick-acoustic", "drums/kick-acoustic", the file */
+var findPack = (name) => {
+	const n = name.toLowerCase().replace(/\.wav$/, "");
+	return PACK.find((p) => p.file.replace(/\.wav$/, "") === n || p.file.split("/").pop().replace(/\.wav$/, "") === n);
+};
 /** our imports and bounces: twice that (and the instrument transposed an octave up), for a clean sound */
 var HQ_RATE = 3546895 / 214 * 2;
 function chop(d, slices) {
@@ -9041,6 +9756,266 @@ function toMono(channels, rate, to) {
 	for (const c of channels) for (let i = 0; i < n; i++) mono[i] += c[i] / channels.length;
 	return Math.abs(rate - to) < .5 ? mono : resample(mono, rate / to, true);
 }
+// src/dsp/bake.ts
+/**
+* breakerMED — our computed instruments turned into samples, for the files
+* other trackers read (.mod, .med hold samples only):
+*   a synth  → its middle C, held for a while, then released;
+*   a kit    → each drum the song plays becomes an instrument of its own, and
+*              the notes that played it now play that sample at C-3.
+*/
+/** a voice played into a new sample: held `hold` seconds, then let go, until silent (`max` seconds) */
+function record(v, hold, max) {
+	const n = Math.round(HQ_RATE * max);
+	const l = new Float32Array(n), r = new Float32Array(n);
+	const held = Math.min(n, Math.round(HQ_RATE * hold));
+	v.render(l, r, 0, held);
+	v.stop();
+	v.render(l, r, held, n);
+	const k = 1 - 2 * Math.PI * 10 / HQ_RATE;
+	let x1 = 0, y1 = 0;
+	for (let i = 0; i < n; i++) {
+		const x = l[i];
+		y1 = x - x1 + k * y1;
+		x1 = x;
+		l[i] = y1;
+	}
+	let end = n;
+	while (end > 1 && Math.abs(l[end - 1]) < 1e-4) end--;
+	return l.slice(0, Math.max(1, end));
+}
+/** how loud an instrument is heard in a song: one C-3 on a track, its first `seconds` (RMS) */
+function heard(ins, seconds) {
+	const s = newSong(1);
+	s.instruments = [ins];
+	s.trackPan = [0];
+	const c = s.blocks[0].cells[0][0];
+	c.note = 25, c.inst = 1;
+	const rate = 24e3;
+	const r = new Renderer(s, rate, false);
+	r.limit = false;
+	r.play(0, 0);
+	const n = Math.round(rate * seconds);
+	const L = new Float32Array(n), R = new Float32Array(n);
+	r.render(L, R);
+	let sq = 0;
+	for (let i = 0; i < n; i++) sq += L[i] * L[i] + R[i] * R[i];
+	return Math.sqrt(sq / (2 * n));
+}
+/** the sample made as loud as the synth it comes from (as far as full scale allows) */
+function matchLevel(from, baked, hold) {
+	const want = heard(from, hold), got = heard(baked, hold);
+	if (!(want > 0 && got > 0)) return baked;
+	let k = want / got;
+	let peak = 0;
+	for (const x of baked.data) peak = Math.max(peak, Math.abs(x));
+	if (peak * k > 1) k = 1 / peak;
+	baked.data = baked.data.map((x) => x * k);
+	return baked;
+}
+var asSample = (from, name, data) => Object.assign(emptyInstrument(), {
+	name: name.slice(0, 40),
+	volume: from.volume,
+	gain: from.gain,
+	transpose: 12,
+	kind: "sample",
+	data
+});
+/** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
+function bakeSynth(ins, hold = .8) {
+	const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : ins.kind === "chip" ? new ChipVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
+	v.start({
+		instrument: ins,
+		rate: C3_RATE$2,
+		offset: 0
+	});
+	v.set(C3_RATE$2, 1, 0);
+	const out = asSample(ins, ins.name, record(v, hold, hold + 2));
+	out.transpose = ins.transpose + 12;
+	return matchLevel(ins, out, hold);
+}
+/** One drum of a kit (0 = the kick … 11 = the ride), as a sample. */
+function bakeDrum(ins, drum) {
+	const v = new DrumVoice(HQ_RATE);
+	v.start({
+		instrument: ins,
+		rate: C3_RATE$2 * 2 ** (drum / 12),
+		offset: 0
+	});
+	v.set(C3_RATE$2, 1, 0);
+	return asSample(ins, `${ins.name || "kit"} ${DRUM_NAMES[drum]}`, record(v, 8, 8));
+}
+/**
+* The song with every synth and kit as samples (the song itself isn't
+* changed), and how many of each. A kit's drums go to free instrument slots
+* (or after the last); the cells that played them are rewritten.
+*/
+function withSynthsBaked(song) {
+	let baked = 0, drums = 0, lost = 0;
+	const synth = (i) => i.kind === "analog" || i.kind === "fm" || i.kind === "chip";
+	if (!song.instruments.some((i) => synth(i) || i.kind === "drums")) return {
+		song,
+		baked,
+		drums,
+		lost
+	};
+	const instruments = song.instruments.map((i) => synth(i) ? (baked++, bakeSynth(i)) : i);
+	const slot = /* @__PURE__ */ new Map();
+	const kitOf = (n) => song.instruments[n - 1]?.kind === "drums";
+	const blocks = song.blocks.map((b) => {
+		const last = [];
+		return {
+			...b,
+			cells: b.cells.map((row) => row.map((c, t) => {
+				if (c.inst) last[t] = c.inst;
+				const inst = c.inst || last[t];
+				if (!c.note || c.note > 120 || !inst || !kitOf(inst)) return c;
+				const ins = song.instruments[inst - 1];
+				const drum = ((c.note - 1 + ins.transpose + song.transpose) % 12 + 12) % 12;
+				const key = `${inst}:${drum}`;
+				let n = slot.get(key);
+				if (n === void 0) {
+					const free = instruments.findIndex((x) => x.kind === "empty");
+					n = (free >= 0 ? free : instruments.length) + 1;
+					if (n > 63) return lost++, {
+						...c,
+						note: 0,
+						inst: 0
+					};
+					instruments[n - 1] = bakeDrum(ins, drum);
+					slot.set(key, n);
+					drums++;
+				}
+				return {
+					...c,
+					note: Math.max(1, Math.min(120, 25 - song.transpose)),
+					inst: n
+				};
+			}))
+		};
+	});
+	return {
+		song: {
+			...song,
+			instruments,
+			blocks
+		},
+		baked,
+		drums,
+		lost
+	};
+}
+// src/placeholder.ts
+/**
+* BreakerMED — the sound pack's placeholders: until a musician records a sound of
+* the pack (SOUND_DESIGN.md), `med pack load` and the sampler give a computed
+* stand-in, made from our own synths and drum machine, so the pack is never empty.
+* Each is named "… (placeholder)"; the real recording, once in songs/sound-pack/,
+* takes its place.
+*/
+/** a kit's drum: [kit, drum number (0 kick … 11 ride)] */
+var DRUM = {
+	"kick-acoustic": ["punch", 0],
+	"snare-acoustic": ["punch", 2],
+	"hat-closed": ["tight", 4],
+	"hat-open": ["classic", 6],
+	ride: ["classic", 11],
+	crash: ["classic", 10],
+	"tom-low": ["boom", 5],
+	"tom-high": ["boom", 9],
+	clap: ["house", 3],
+	shaker: ["minimal", 4],
+	tambourine: ["tribal", 6],
+	impact: ["boom", 10]
+};
+/** a synth's preset: [kind, preset, octave down?] */
+var SYNTH = {
+	"piano-c3": ["fm", "epiano"],
+	"epiano-c3": ["fm", "ym-epiano"],
+	"organ-c3": ["fm", "organ"],
+	"bass-electric-c2": [
+		"analog",
+		"bass",
+		true
+	],
+	"bass-upright-c2": [
+		"fm",
+		"bass",
+		true
+	],
+	"guitar-clean-c3": ["analog", "pluck"],
+	"guitar-muted-c3": ["fm", "pluck"],
+	"strings-c3": ["analog", "pad"],
+	"vox-ah-c3": ["analog", "brass"],
+	"vox-oh-c3": ["analog", "sine"],
+	"vox-hey": ["fm", "brass"]
+};
+var nameOf = (p) => p.file.split("/").pop().replace(/\.wav$/, "");
+/** a little noise generator, the same every time (no Math.random: a placeholder is the same sound each load) */
+function noise(seed) {
+	let x = seed >>> 0 || 1;
+	return () => (x ^= x << 13, x ^= x >>> 17, x ^= x << 5, (x >>> 0) / 4294967296 * 2 - 1);
+}
+/** the sounds no synth makes: crackle, a riser */
+function texture(kind) {
+	const rnd = noise(kind === "crackle" ? 7 : 11);
+	const n = Math.round(HQ_RATE * (kind === "crackle" ? 2 : 3));
+	const out = new Float32Array(n);
+	let lp = 0;
+	for (let i = 0; i < n; i++) {
+		const t = i / n;
+		if (kind === "crackle") {
+			lp += (rnd() - lp) * .05;
+			out[i] = lp * .15 + (rnd() > .9993 ? rnd() * .8 : 0);
+		} else {
+			const k = .005 + t * t * .5;
+			lp += (rnd() - lp) * k;
+			out[i] = lp * Math.min(1, t * 1.4) * .9 * (t > .97 ? (1 - t) / .03 : 1);
+		}
+	}
+	return out;
+}
+/** a sample for a sound of the pack nobody has recorded yet */
+function placeholderFor(p) {
+	const id = nameOf(p);
+	let ins;
+	if (DRUM[id]) {
+		const [kit, drum] = DRUM[id];
+		ins = bakeDrum({
+			...emptyInstrument(),
+			kind: "drums",
+			name: kit,
+			drums: drumKit(kit)
+		}, drum);
+	} else if (SYNTH[id]) {
+		const [kind, preset, low] = SYNTH[id];
+		const sk = SYNTHS.find((s) => s.kind === kind);
+		const src = {
+			...emptyInstrument(),
+			kind,
+			name: preset,
+			transpose: low ? -12 : 0
+		};
+		src[sk.field] = sk.preset(preset);
+		ins = bakeSynth(src, p.loop ? 1.6 : id === "vox-hey" ? .25 : .8);
+	} else ins = {
+		...emptyInstrument(),
+		kind: "sample",
+		data: texture(id.includes("crackle") ? "crackle" : "riser"),
+		transpose: 12
+	};
+	let peak = 0;
+	for (const x of ins.data) peak = Math.max(peak, Math.abs(x));
+	if (peak > 0) ins.data = ins.data.map((x) => x / peak * .89);
+	if (p.loop) {
+		const a = Math.round(HQ_RATE * .5), b = Math.round(HQ_RATE * 1.4);
+		if (ins.data.length > b) ins.loopStart = a, ins.loopLength = b - a;
+		else ins.loopStart = 0, ins.loopLength = ins.data.length;
+	}
+	ins.kind = "sample";
+	ins.name = `${id} (placeholder)`;
+	return ins;
+}
 // src/format/iff.ts
 var FIB = [
 	-34,
@@ -9151,6 +10126,11 @@ async function readSample(bytes, name, decode, amiga = false) {
 	return inst;
 }
 // src/commands-sample.ts
+/**
+* breakerMED — `med sample …`, `med bounce`, `med filter`: the sampler's tools
+* as commands (the INSTRUMENT screen's buttons run these). Every change goes
+* through the editor: ⌘Z / `med undo` brings the sound back.
+*/
 var SAMPLE_USAGE = [
 	"med sample <n|.> load [file] [--amiga]   a sound file in songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…)",
 	"med sample <n|.> chop <slices> | chop onsets    slices become new instruments",
@@ -9200,9 +10180,18 @@ async function sampleCommand(ib, st, ctx, rest, flags) {
 					} else if (SAMPLE_EXTS.some((ext) => x.name.toLowerCase().endsWith(ext))) found.push(x.path);
 				};
 				await walk("songs", 0);
-				if (!found.length) return ctx.err("no sound file in the vault (drop a .wav, .aif, .mp3… in it)\n"), 1;
-				const i = await ib.ui.choose("LOAD A SOUND", found.map((p) => ({ label: p })));
+				const missing = PACK.filter((p) => !found.includes(`${PACK_DIR}/${p.file}`));
+				const labels = [...found, ...missing.map((p) => `pack: ${p.file.split("/").pop().replace(/\.wav$/, "")} (placeholder) · ${p.what}`)];
+				const i = await ib.ui.choose(found.length ? "LOAD A SOUND" : "LOAD A SOUND (none in songs/ yet: the pack's placeholders)", labels.map((label) => ({ label })));
 				if (i === null) return 1;
+				if (i >= found.length) {
+					const p = missing[i - found.length];
+					const ins = placeholderFor(p);
+					e.addInstruments([ins], n);
+					st.inst = n;
+					ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name}: computed, until someone records ${p.file} (SOUND_DESIGN.md)\n`);
+					return 0;
+				}
 				file = found[i];
 			} else file = ctx.resolve(file);
 			const loaded = await readSample(await ib.vault.readBytes(file), file, (b) => ib.audio.decode(b), !!flags.amiga);
@@ -9319,118 +10308,6 @@ async function bounce(ib, engine, st, ctx, flags) {
 	st.inst = k;
 	ctx.out(`${ib.lib.fmt.green("✓")} ${hex(k + 1)} ${ins.name}: ${ins.data.length} frames (C-3 plays it as it was)\n`);
 	return 0;
-}
-// src/dsp/bake.ts
-/**
-* breakerMED — our computed instruments turned into samples, for the files
-* other trackers read (.mod, .med hold samples only):
-*   a synth  → its middle C, held for a while, then released;
-*   a kit    → each drum the song plays becomes an instrument of its own, and
-*              the notes that played it now play that sample at C-3.
-*/
-/** a voice played into a new sample: held `hold` seconds, then let go, until silent (`max` seconds) */
-function record(v, hold, max) {
-	const n = Math.round(HQ_RATE * max);
-	const l = new Float32Array(n), r = new Float32Array(n);
-	const held = Math.min(n, Math.round(HQ_RATE * hold));
-	v.render(l, r, 0, held);
-	v.stop();
-	v.render(l, r, held, n);
-	let end = n;
-	while (end > 1 && Math.abs(l[end - 1]) < 1e-4) end--;
-	return l.slice(0, Math.max(1, end)).map((x) => Math.max(-1, Math.min(1, x * 2)));
-}
-var asSample = (from, name, data) => Object.assign(emptyInstrument(), {
-	name: name.slice(0, 40),
-	volume: from.volume,
-	gain: from.gain,
-	transpose: 12,
-	kind: "sample",
-	data
-});
-/** The synth's sound at C-3: held `hold` seconds, then its release (2 s at most). */
-function bakeSynth(ins, hold = .8) {
-	const v = ins.kind === "fm" ? new FmVoice(HQ_RATE) : ins.kind === "chip" ? new ChipVoice(HQ_RATE) : new AnalogVoice(HQ_RATE);
-	v.start({
-		instrument: ins,
-		rate: C3_RATE$2,
-		offset: 0
-	});
-	v.set(C3_RATE$2, 1, 0);
-	const out = asSample(ins, ins.name, record(v, hold, hold + 2));
-	out.transpose = ins.transpose + 12;
-	return out;
-}
-/** One drum of a kit (0 = the kick … 11 = the ride), as a sample. */
-function bakeDrum(ins, drum) {
-	const v = new DrumVoice(HQ_RATE);
-	v.start({
-		instrument: ins,
-		rate: C3_RATE$2 * 2 ** (drum / 12),
-		offset: 0
-	});
-	v.set(C3_RATE$2, 1, 0);
-	return asSample(ins, `${ins.name || "kit"} ${DRUM_NAMES[drum]}`, record(v, 8, 8));
-}
-/**
-* The song with every synth and kit as samples (the song itself isn't
-* changed), and how many of each. A kit's drums go to free instrument slots
-* (or after the last); the cells that played them are rewritten.
-*/
-function withSynthsBaked(song) {
-	let baked = 0, drums = 0, lost = 0;
-	const synth = (i) => i.kind === "analog" || i.kind === "fm" || i.kind === "chip";
-	if (!song.instruments.some((i) => synth(i) || i.kind === "drums")) return {
-		song,
-		baked,
-		drums,
-		lost
-	};
-	const instruments = song.instruments.map((i) => synth(i) ? (baked++, bakeSynth(i)) : i);
-	const slot = /* @__PURE__ */ new Map();
-	const kitOf = (n) => song.instruments[n - 1]?.kind === "drums";
-	const blocks = song.blocks.map((b) => {
-		const last = [];
-		return {
-			...b,
-			cells: b.cells.map((row) => row.map((c, t) => {
-				if (c.inst) last[t] = c.inst;
-				const inst = c.inst || last[t];
-				if (!c.note || c.note > 120 || !inst || !kitOf(inst)) return c;
-				const ins = song.instruments[inst - 1];
-				const drum = ((c.note - 1 + ins.transpose + song.transpose) % 12 + 12) % 12;
-				const key = `${inst}:${drum}`;
-				let n = slot.get(key);
-				if (n === void 0) {
-					const free = instruments.findIndex((x) => x.kind === "empty");
-					n = (free >= 0 ? free : instruments.length) + 1;
-					if (n > 63) return lost++, {
-						...c,
-						note: 0,
-						inst: 0
-					};
-					instruments[n - 1] = bakeDrum(ins, drum);
-					slot.set(key, n);
-					drums++;
-				}
-				return {
-					...c,
-					note: Math.max(1, Math.min(120, 25 - song.transpose)),
-					inst: n
-				};
-			}))
-		};
-	});
-	return {
-		song: {
-			...song,
-			instruments,
-			blocks
-		},
-		baked,
-		drums,
-		lost
-	};
 }
 // src/commands-synth.ts
 var SYNTH_USAGE = [
@@ -9878,172 +10755,6 @@ function writeMed(original) {
 		warnings
 	};
 }
-// src/pack.ts
-/**
-* BreakerMED — the starter sound pack: the sampled sounds we want, made by people
-* (not computed: those are the synths and the drum machine). Until a musician
-* records one, it's a placeholder: listed, not there. SOUND_DESIGN.md says how to
-* make them; `med pack` shows which are in the vault, `med pack load <name>` loads one.
-*/
-/** where the pack lives in the vault (in songs/: the only folder the module may read) */
-var PACK_DIR = "songs/sound-pack";
-var PACK = [
-	{
-		file: "drums/kick-acoustic.wav",
-		what: "an acoustic kick drum, one hit",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/snare-acoustic.wav",
-		what: "an acoustic snare, one hit, medium",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/hat-closed.wav",
-		what: "a closed hi-hat, one hit",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/hat-open.wav",
-		what: "an open hi-hat, let ring",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/ride.wav",
-		what: "a ride cymbal, one hit",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/crash.wav",
-		what: "a crash cymbal, let ring",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/tom-low.wav",
-		what: "a floor tom",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/tom-high.wav",
-		what: "a rack tom",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/clap.wav",
-		what: "real hands clapping, a few people",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/shaker.wav",
-		what: "a shaker, one shake",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "drums/tambourine.wav",
-		what: "a tambourine, one hit",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "keys/piano-c3.wav",
-		what: "an acoustic piano, middle C, let ring",
-		pitch: "C-3",
-		loop: false
-	},
-	{
-		file: "keys/epiano-c3.wav",
-		what: "an electric piano, middle C",
-		pitch: "C-3",
-		loop: false
-	},
-	{
-		file: "keys/organ-c3.wav",
-		what: "an organ, middle C, held",
-		pitch: "C-3",
-		loop: true
-	},
-	{
-		file: "bass/bass-electric-c2.wav",
-		what: "an electric bass, C an octave under middle C",
-		pitch: "C-2",
-		loop: false
-	},
-	{
-		file: "bass/bass-upright-c2.wav",
-		what: "an upright bass, plucked, C under middle C",
-		pitch: "C-2",
-		loop: false
-	},
-	{
-		file: "guitar/guitar-clean-c3.wav",
-		what: "a clean electric guitar, middle C",
-		pitch: "C-3",
-		loop: false
-	},
-	{
-		file: "guitar/guitar-muted-c3.wav",
-		what: "a palm-muted guitar, middle C",
-		pitch: "C-3",
-		loop: false
-	},
-	{
-		file: "strings/strings-c3.wav",
-		what: "strings (or one violin / cello), middle C, held",
-		pitch: "C-3",
-		loop: true
-	},
-	{
-		file: "voice/vox-ah-c3.wav",
-		what: "a voice singing “ah”, middle C, held",
-		pitch: "C-3",
-		loop: true
-	},
-	{
-		file: "voice/vox-oh-c3.wav",
-		what: "a voice singing “oh”, middle C, held",
-		pitch: "C-3",
-		loop: true
-	},
-	{
-		file: "voice/vox-hey.wav",
-		what: "a short shout: “hey!”",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "fx/vinyl-crackle.wav",
-		what: "vinyl crackle, a texture",
-		pitch: null,
-		loop: true
-	},
-	{
-		file: "fx/riser.wav",
-		what: "a rising sweep, 2–4 s",
-		pitch: null,
-		loop: false
-	},
-	{
-		file: "fx/impact.wav",
-		what: "a big hit, with its tail",
-		pitch: null,
-		loop: false
-	}
-];
-/** a sound of the pack by its name: "kick-acoustic", "drums/kick-acoustic", the file */
-var findPack = (name) => {
-	const n = name.toLowerCase().replace(/\.wav$/, "");
-	return PACK.find((p) => p.file.replace(/\.wav$/, "") === n || p.file.split("/").pop().replace(/\.wav$/, "") === n);
-};
 // src/autosave.ts
 /**
 * BreakerMED — the autosave: a copy of the song after each change, so quitting,
@@ -10250,12 +10961,15 @@ function registerCommands(ib, engine, st) {
 			const was = st.path;
 			st.path = dir;
 			st.editor.dirty = false;
+			st.savedAt = Date.now();
+			ib.ui.notify(`BreakerMED: saved · ${dir}`, "success");
 			await st.autosave?.forget(was);
 			await st.autosave?.forget(dir);
 			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
 			return;
 		}
 		for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
+		ib.ui.notify(`BreakerMED: saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
 		ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
 	};
 	const writeOut = async (path, w) => {
@@ -10270,6 +10984,72 @@ function registerCommands(ib, engine, st) {
 		if (inSongs && /\.bmed$/i.test(st.path)) return st.path;
 		const base = (st.path.split("/").pop() || "untitled").replace(/\.(med|mod|mmd\d|bmed)$/i, "").replace(/^(mod|med)\./i, "") || "untitled";
 		return `${inSongs ? st.path.slice(0, st.path.lastIndexOf("/")) : "songs"}/${base}.bmed`;
+	};
+	/** is there a song (a .bmed folder) or a file at this path already */
+	const exists = async (path) => {
+		const p = path.replace(/\/+$/, "");
+		const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+		const name = p.slice(dir ? dir.length + 1 : 0);
+		return (await ib.vault.list(dir).catch(() => [])).some((e) => e.name === name);
+	};
+	/** where `med save` writes: .bmed unless .mod / .med is said */
+	const savedAs = (p) => /\.(mod|med|mmd1|bmed)$/i.test(p) || /(^|\/)mod\.[^/]+$/i.test(p) ? p : `${p}.bmed`;
+	/** the song has a file of its own (saved, or opened from songs/) */
+	const hasHome = () => st.path.startsWith("songs/");
+	/** a name for a song never saved: its title, or untitled — and a free one ("untitled 2") */
+	const freeName = async () => {
+		const base = defaultPath().replace(/\.bmed$/i, "");
+		const titled = st.song?.title && st.song.title !== "untitled" ? `songs/${st.song.title.replace(/[\\/:*?"<>|]/g, "-")}` : base;
+		for (let n = 1; n < 100; n++) {
+			const p = `${titled}${n > 1 ? ` ${n}` : ""}.bmed`;
+			if (!await exists(p)) return p;
+		}
+		return `${titled}.bmed`;
+	};
+	/**
+	* Save, never over another song without a yes: a song with no file asks for a
+	* name (save as…); a path that holds another song asks before replacing it.
+	* 0: saved · 1: not saved (cancelled, said in the LOG).
+	*/
+	const saveSafely = async (ctx, given, o = {}) => {
+		need();
+		let path = given;
+		if (!path && !o.ask && hasHome()) path = defaultPath();
+		if (!path) {
+			const name = await ib.ui.prompt("SAVE AS", {
+				initial: await freeName(),
+				placeholder: "songs/my song.bmed (or .mod, .med)"
+			});
+			if (name === null || !name.trim()) return ctx.err("med save: not saved (no name given)\n"), 1;
+			const p = name.trim();
+			path = p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`;
+		}
+		const target = savedAs(path);
+		if (!o.force && target !== st.path && await exists(target)) {
+			if (await ib.ui.choose(`BreakerMED: ${target} already exists — replace it with this song?`, [{ label: "replace it" }, { label: "cancel: keep it" }], { selected: 1 }) !== 0) return ctx.err(`med save: not saved (${target} kept)\n`), 1;
+		}
+		await save(ctx, path);
+		return 0;
+	};
+	/**
+	* Before another song takes the page: a song with changes asks first (save /
+	* don't save / cancel). The autosave writes its copy first, whatever is chosen.
+	* true: go on.
+	*/
+	const mayReplace = async (ctx, what, force) => {
+		if (!st.song || !st.editor?.dirty) return true;
+		await st.autosave?.flush();
+		if (force) return true;
+		const name = st.song.title && st.song.title !== "untitled" ? st.song.title : st.path.split("/").pop() || "untitled";
+		const pick = await ib.ui.choose(`BreakerMED: the changes to “${name}” aren't saved`, [
+			{ label: "save them first" },
+			{ label: "don't save (the autosave keeps a copy: med recover)" },
+			{ label: "cancel: keep the song" }
+		]);
+		if (pick === 0) return await saveSafely(ctx, null) === 0;
+		if (pick === 1) return true;
+		ctx.err(`med ${what}: “${name}” has changes that aren't saved — kept (med save first, or med ${what} --force)\n`);
+		return false;
 	};
 	/** this song is the one on the page now */
 	const adopt = async (ctx, song, path) => {
@@ -10301,6 +11081,22 @@ function registerCommands(ib, engine, st) {
 		for (const dir of new Set(PACK.map((p) => p.file.split("/")[0]))) for (const e of await ib.vault.list(`${PACK_DIR}/${dir}`).catch(() => [])) if (!e.isDir) out.add(`${dir}/${e.name}`);
 		return out;
 	};
+	/** a track the user typed (from 1): its index, or why it isn't one */
+	const trackArg = (s, v) => {
+		const n = parseInt(v ?? "", 10);
+		if (!/^\d+$/.test(v ?? "")) return `a track is 1–${s.tracks}`;
+		return n >= 1 && n <= s.tracks ? n - 1 : `track ${n}: the song has ${s.tracks}`;
+	};
+	const posArg = (s, v) => {
+		const n = parseInt(v ?? "", 16);
+		return /^[0-9a-f]+$/i.test(v ?? "") && n < s.sequence.length ? n : `position ${(v ?? "?").toUpperCase().padStart(2, "0")}: the sequence has ${hex(0)}–${hex(s.sequence.length - 1)}`;
+	};
+	const blockArg = (s, v) => {
+		const n = parseInt(v ?? "", 16);
+		return /^[0-9a-f]+$/i.test(v ?? "") && n < s.blocks.length ? n : `block ${(v ?? "?").toUpperCase().padStart(3, "0")}: the song has ${hex(0, 3)}–${hex(s.blocks.length - 1, 3)}`;
+	};
+	/** the sequence, one position a line, the cursor's marked */
+	const seqList = (s) => `${fmt.dim("pos  block")}\n${s.sequence.map((b, i) => `${i === st.seq ? "▸" : " "}${hex(i)}  ${hex(b, 3)}${s.blocks[b]?.name ? ` ${s.blocks[b].name}` : ""}`).join("\n")}\n`;
 	const need = () => {
 		if (!st.song) throw new Error("no song loaded (med open <file>)");
 		return st.song;
@@ -10313,9 +11109,11 @@ function registerCommands(ib, engine, st) {
 			"med open [file]            a .med / .mod / .bmed in songs/ (no file: choose one)",
 			"med ls                     the songs in the vault",
 			"med demo                   a little song of ours, to try it right away",
-			"med new [tracks] [--empty] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
+			"med new [tracks] [--empty] [--force] a new song: 8 named tracks (up to 16), drums, synths and a first bar · --empty: a blank page",
 			"med new --chip             a chiptune song: 2 pulses, a triangle, a noise (NES-style), chip instruments, a bar",
+			"                           (new, open, demo: a song with changes asks first · --force: replace it, the autosave keeps a copy)",
 			"med saveas                 save as… (a name asked in a window) · ⌘S saves, ⌘⇧S saves as on the page",
+			"                           never over another song without asking (--force: no question) · a new song asks for its name",
 			"med continue               back to the song in memory (after the page was closed)",
 			"med save [file]            .bmed (ours: a folder, keeps everything — the default), .mod or .med (for other trackers)",
 			"med export [file.wav|.aif|.flac] [--rate 48000] [--bits 16|24|32] [--stems | --only-stems | --tracks 1,3] [--normalize] [--tail 1.5]",
@@ -10327,6 +11125,9 @@ function registerCommands(ib, engine, st) {
 			"med mute <track> · med solo <track>   (again: back)",
 			"med paula on|off           stepped like the Amiga (on), or smooth",
 			"med edit on|off            typing writes in the block (space on the page)",
+			"med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
+			"med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
+			"med click on|off           the metronome: a click on each beat while playing",
 			"med step <0–9>             lines the cursor moves after a note",
 			"med octave <1–8> · med ins <01–3F>   the octave and the instrument the keys play",
 			"med guide [--text]         the guide on the page (? or the ? tab) · --text: here",
@@ -10338,8 +11139,10 @@ function registerCommands(ib, engine, st) {
 			"med recover [list | <n> | forget <n>]   the autosaved copies never saved: back on the page, or forgotten",
 			"med pack · med pack load <name>   the starter sound pack (sampled by people: SOUND_DESIGN.md) — which are there, load one",
 			"med note <line> <track> <C-3|^^^|---> [instrument] [command]   write a cell (hex line, track from 1)",
-			"med block new [lines] · med block copy · med block lines <n>",
-			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block>",
+			"med block                  the blocks: their length, the positions that play them",
+			"med block new [lines] · med block copy · med block lines <n> · med block rm <block> (one in no position)",
+			"med seq                    the sequence: position → block",
+			"med seq new|copy|rm [position] · med seq set <position> <block> · med seq add <block> · med seq move <position> up|down",
 			"med tracks <n> · med tempo <n> · med speed <n> · med lpb <n>",
 			"med chord <line> <track> <0–F>   the chord a note plays (its own column, after the instrument)",
 			"med chords · med chords on|off · med chords set <1–F> <name> <semitones…> · med chords invert <1–F> [1|2|3] · med chords reset",
@@ -10481,18 +11284,23 @@ function registerCommands(ib, engine, st) {
 					}
 					case "ls": {
 						const songs = await find();
-						ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no .med / .mod in songs/ (drop one in it)\n"));
+						ctx.out(songs.length ? songs.join("\n") + "\n" : fmt.dim("no song in songs/ yet (.bmed, .med, .mod — med new, or drop one in it)\n"));
 						return 0;
 					}
 					case "open": {
 						let path = rest.join(" ");
 						if (!path) {
 							const songs = await find();
-							if (!songs.length) return ctx.err("no song in songs/ (.bmed, .med, .mod — drop one in it, or med new)\n"), 1;
+							if (!songs.length) {
+								st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
+								ib.ui.notify(`BreakerMED: ${st.error}`, "warning");
+								return ctx.err(`med open: ${st.error}\n`), 1;
+							}
 							const i = await ib.ui.choose("OPEN A SONG", songs.map((p) => ({ label: p })));
 							if (i === null) return 1;
 							path = songs[i];
 						}
+						if (!await mayReplace(ctx, "open", !!flags.force)) return 1;
 						await open(ctx, ctx.resolve(path));
 						ib.apps.open("breakermed");
 						return 0;
@@ -10554,7 +11362,8 @@ function registerCommands(ib, engine, st) {
 							let shown = 0;
 							const pcm = await renderSong(s, {
 								...opts,
-								solo: job.solo
+								solo: job.solo,
+								limit: !job.solo
 							}, (p) => {
 								if (p - shown >= .25 && p < 1) shown = p, ctx.out(fmt.dim(`  ${job.label}: ${Math.round(p * 100)} %\n`));
 							});
@@ -10566,23 +11375,15 @@ function registerCommands(ib, engine, st) {
 						ctx.out(fmt.dim(`  ${describe(format, bits, rate, quality)}${opts.normalize ? " · normalized" : ""}\n`));
 						return 0;
 					}
-					case "save": {
+					case "save":
 						need();
-						const path = rest.length ? ctx.resolve(rest.join(" ")) : defaultPath();
-						await save(ctx, path);
-						return 0;
-					}
-					case "saveas": {
+						return saveSafely(ctx, rest.length ? ctx.resolve(rest.join(" ")) : null, { force: !!flags.force });
+					case "saveas":
 						need();
-						const name = await ib.ui.prompt("SAVE AS", {
-							initial: defaultPath(),
-							placeholder: "songs/my song.bmed (or .mod, .med)"
+						return saveSafely(ctx, null, {
+							ask: true,
+							force: !!flags.force
 						});
-						if (name === null || !name.trim()) return 1;
-						const p = name.trim();
-						await save(ctx, p.startsWith("songs/") ? p : `songs/${p.replace(/^\/+/, "")}`);
-						return 0;
-					}
 					case "continue":
 						need();
 						st.home = false;
@@ -10591,6 +11392,7 @@ function registerCommands(ib, engine, st) {
 					case "new": {
 						const n = rest[0] ? parseInt(rest[0], 10) : 8;
 						if (!(n >= 1 && n <= 16)) return ctx.err(`med new [tracks 1–16]\n`), 1;
+						if (!await mayReplace(ctx, "new", !!flags.force)) return 1;
 						const song = flags.chip ? chipSong() : flags.empty ? newSong(n) : templateSong(n);
 						if (flags.empty) song.instruments = readSong(demoMod()).instruments, song.title = "untitled";
 						await adopt(ctx, song, "untitled.bmed");
@@ -10599,13 +11401,14 @@ function registerCommands(ib, engine, st) {
 					}
 					case "track": {
 						const s = need();
-						const tr = parseInt(rest[0] ?? "", 10) - 1;
+						const tr = trackArg(s, rest[0]);
 						const [, what, ...value] = rest;
-						if (!(tr >= 0 && tr < s.tracks) || !what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100> | strum <0–200 ms>\n`), 1;
+						if (typeof tr === "string") return ctx.err(`med track: ${tr}\n`), 1;
+						if (!what) return ctx.err(`med track <1–${s.tracks}> name <text> | vol <0–64> | pan <-100–100> | strum <0–200 ms>\n`), 1;
 						const v = value.join(" ");
-						if (what === "name") st.editor.setTrack(tr, { name: v });
-						else if (what === "vol" && /^\d+$/.test(v)) st.editor.setTrack(tr, { volume: +v });
-						else if (what === "pan" && /^-?\d+$/.test(v)) st.editor.setTrack(tr, { pan: Math.max(-100, Math.min(100, +v)) / 100 });
+						if (what === "name") st.editor.setTrack(tr, { name: v }), ctx.out(`track ${tr + 1}: “${trackName(s, tr)}”\n`);
+						else if (what === "vol" && /^\d+$/.test(v) && +v <= 64) st.editor.setTrack(tr, { volume: +v }), ctx.out(`${trackName(s, tr)}: volume ${s.trackVolume[tr]}\n`);
+						else if (what === "pan" && /^-?\d+$/.test(v)) st.editor.setTrack(tr, { pan: Math.max(-100, Math.min(100, +v)) / 100 }), ctx.out(`${trackName(s, tr)}: pan ${Math.round(s.trackPan[tr] * 100)}\n`);
 						else if (what === "strum" && /^\d+$/.test(v) && +v <= 200) {
 							st.editor.setTrack(tr, { strum: +v });
 							ctx.out(+v ? `${trackName(s, tr)}: its chords strummed, ${v} ms a note\n` : `${trackName(s, tr)}: its chords all at once\n`);
@@ -10613,6 +11416,7 @@ function registerCommands(ib, engine, st) {
 						return 0;
 					}
 					case "demo":
+						if (!await mayReplace(ctx, "demo", !!flags.force)) return 1;
 						await open(ctx, "demo.mod", demoMod());
 						ib.apps.open("breakermed");
 						return 0;
@@ -10623,16 +11427,17 @@ function registerCommands(ib, engine, st) {
 						const seq = nums[0] !== void 0 ? parseInt(nums[0], 16) : st.seq;
 						const line = nums[1] !== void 0 ? parseInt(nums[1], 16) : nums[0] !== void 0 ? 0 : st.line;
 						if (seq >= s.sequence.length) return ctx.err(`med: position ${hex(seq)} isn't in the sequence (0–${hex(s.sequence.length - 1)})\n`), 1;
-						st.seq = seq;
-						st.line = line;
+						if (st.follow) st.seq = seq, st.line = line;
 						await engine.play(mode, {
 							seq,
 							line
 						});
+						ctx.out(`▶ playing the ${mode} from position ${hex(seq)}, line ${hex(line)}\n`);
 						return 0;
 					}
 					case "stop":
 						engine.stop();
+						ctx.out("■ stopped\n");
 						return 0;
 					case "pos": {
 						const s = need();
@@ -10645,13 +11450,14 @@ function registerCommands(ib, engine, st) {
 							seq: st.seq,
 							line: st.line
 						});
+						ctx.out(`position ${hex(st.seq)} → block ${hex(s.sequence[st.seq], 3)} · line ${hex(st.line)}\n`);
 						return 0;
 					}
 					case "mute":
 					case "solo": {
 						const s = need();
-						const tr = parseInt(rest[0] ?? "", 10) - 1;
-						if (!(tr >= 0 && tr < s.tracks)) return ctx.err(`med: a track is 1–${s.tracks}\n`), 1;
+						const tr = trackArg(s, rest[0]);
+						if (typeof tr === "string") return ctx.err(`med ${sub}: ${tr}\n`), 1;
 						const before = new Set(engine.muted);
 						const after = new Set(engine.muted);
 						if (sub === "mute") after.has(tr) ? after.delete(tr) : after.add(tr);
@@ -10671,6 +11477,25 @@ function registerCommands(ib, engine, st) {
 						engine.paula = rest[0] === "on" ? true : rest[0] === "off" ? false : !engine.paula;
 						await ib.storage.set("paula", engine.paula);
 						ctx.out(engine.paula ? "PAULA: stepped, gritty, like the Amiga\n" : "SMOOTH: interpolated\n");
+						return 0;
+					case "view": {
+						const v = rest[0] === "center" || rest[0] === "centre" ? "center" : rest[0] === "edges" ? "edges" : rest[0] === void 0 ? null : "bad";
+						if (v === "bad") return ctx.err("med view center|edges (the cursor's line in the middle, or a view that scrolls at its edges)\n"), 1;
+						if (v) st.view = v, await ib.storage.set("view", v);
+						ctx.out(st.view === "center" ? "view: the cursor's line in the middle (ProTracker)\n" : "view: scrolls at its edges (OctaMED)\n");
+						return 0;
+					}
+					case "follow":
+						st.follow = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.follow;
+						await ib.storage.set("follow", st.follow);
+						ctx.out(st.follow ? "follow: the cursor follows the song as it plays\n" : "follow off: the cursor stays where you edit, the line heard is lit\n");
+						return 0;
+					case "click":
+					case "metronome":
+						st.metronome = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.metronome;
+						engine.metronome = st.metronome;
+						await ib.storage.set("metronome", st.metronome);
+						ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome off\n");
 						return 0;
 					case "edit":
 						need();
@@ -10754,6 +11579,7 @@ function registerCommands(ib, engine, st) {
 						const n = parseInt(rest[0] ?? "", 10);
 						if (!(n >= 1 && n <= 8)) return ctx.err("med octave 1–8 (the piano's bottom row)\n"), 1;
 						st.octave = n - 1;
+						ctx.out(`octave ${n}: the keys' bottom row is C-${n}\n`);
 						return 0;
 					}
 					case "ins": {
@@ -10761,6 +11587,8 @@ function registerCommands(ib, engine, st) {
 						const n = parseInt(rest[0] ?? "", 16);
 						if (!(n >= 1 && n <= Math.min(63, s.instruments.length + 1))) return ctx.err(`med ins 01–${hex(Math.min(63, s.instruments.length + 1))} (the instrument the keys play)\n`), 1;
 						st.inst = n - 1;
+						const ins = s.instruments[n - 1];
+						ctx.out(`instrument ${hex(n)}${ins && ins.kind !== "empty" ? ` · ${ins.name || ins.kind}` : " · empty (med sample, med synth… make it)"}\n`);
 						return 0;
 					}
 					case "guide":
@@ -10794,24 +11622,27 @@ function registerCommands(ib, engine, st) {
 							track0: st.track,
 							track1: st.track
 						};
-						if (sub === "copy") st.clip = e.copy(sel);
-						else if (sub === "cut") st.clip = e.cut(sel), st.sel = null;
-						else if (sub === "clear") e.clearSelection(sel);
+						const size = `${sel.line1 - sel.line0 + 1} line${sel.line1 > sel.line0 ? "s" : ""} × ${sel.track1 - sel.track0 + 1} track${sel.track1 > sel.track0 ? "s" : ""}`;
+						if (sub === "copy") st.clip = e.copy(sel), ctx.out(`copied ${size}\n`);
+						else if (sub === "cut") st.clip = e.cut(sel), st.sel = null, ctx.out(`cut ${size}\n`);
+						else if (sub === "clear") e.clearSelection(sel), ctx.out(`cleared ${size}\n`);
 						else if (sub === "paste") {
 							if (!st.clip) return ctx.err("med paste: nothing copied (med copy)\n"), 1;
 							e.paste(block, st.line, st.track, st.clip);
+							ctx.out(`pasted at line ${hex(st.line)}, ${trackName(s, st.track)}\n`);
 						} else {
 							const n = parseInt(rest[0] ?? "", 10);
 							if (!(n >= -48 && n <= 48 && n !== 0)) return ctx.err("med transpose <±1–48 semitones> (12: an octave)\n"), 1;
 							e.transpose(sel, n);
+							ctx.out(`transposed ${n > 0 ? "+" : ""}${n} · ${size}\n`);
 						}
 						return 0;
 					}
 					case "line": {
 						const s = need();
 						const tracks = flags.all ? [...Array(s.tracks).keys()] : [st.track];
-						if (rest[0] === "insert") st.editor.insertLine(s.sequence[st.seq], st.line, tracks);
-						else if (rest[0] === "delete") st.editor.deleteLine(s.sequence[st.seq], st.line, tracks);
+						if (rest[0] === "insert") st.editor.insertLine(s.sequence[st.seq], st.line, tracks), ctx.out(`a line inserted at ${hex(st.line)}\n`);
+						else if (rest[0] === "delete") st.editor.deleteLine(s.sequence[st.seq], st.line, tracks), ctx.out(`line ${hex(st.line)} deleted\n`);
 						else return ctx.err("med line insert|delete [--all]\n"), 1;
 						return 0;
 					}
@@ -10842,12 +11673,13 @@ function registerCommands(ib, engine, st) {
 						}
 						if (!list.length) return ctx.out("nothing to recover: every change was saved\n"), 0;
 						if (what === "list" || what === void 0 && list.length > 1) {
-							list.forEach((r, i) => ctx.out(`${i + 1}  ${r.title.padEnd(24)} ${fmt.dim(`${new Date(r.at).toLocaleString()} · ${r.path}`)}\n`));
+							list.forEach((r, i) => ctx.out(`${i + 1}  ${(r.path.split("/").pop() ?? r.path).padEnd(24)} ${fmt.dim(`${r.title !== "untitled" ? `“${r.title}” · ` : ""}${new Date(r.at).toLocaleString()} · ${r.path}`)}\n`));
 							ctx.out(fmt.dim("med recover <n>: back on the page · med recover forget <n>\n"));
 							return 0;
 						}
 						const r = what === void 0 ? list[0] : pickN(what);
 						if (!r) return ctx.err(`med recover <1–${list.length}>\n`), 1;
+						if (r.path !== st.path && !await mayReplace(ctx, "recover", !!flags.force)) return 1;
 						await recover(ctx, r);
 						ib.apps.open("breakermed");
 						return 0;
@@ -10856,7 +11688,20 @@ function registerCommands(ib, engine, st) {
 						if (rest[0] === "load") {
 							const p = findPack(rest[1] ?? "");
 							if (!p) return ctx.err(`med pack load <name>: ${PACK.map((x) => x.file.split("/").pop().replace(/\.wav$/, "")).join(" · ")}\n`), 1;
-							if (!(await packHave()).has(p.file)) return ctx.err(`${p.file}: a placeholder — nobody has recorded it yet (SOUND_DESIGN.md)\n`), 1;
+							if (!(await packHave()).has(p.file)) {
+								if (!st.song) await adopt(ctx, templateSong(), "untitled.bmed");
+								const s = need();
+								let n = s.instruments.findIndex((x) => x.kind === "empty");
+								if (n < 0) n = s.instruments.length;
+								if (n >= 63) return ctx.err("med pack load: the 63 instruments are taken\n"), 1;
+								const ins = placeholderFor(p);
+								st.editor.addInstruments([ins], n);
+								st.inst = n;
+								st.screen = "instrument";
+								ib.apps.open("breakermed");
+								ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name}: a computed placeholder, until someone records ${p.file} (SOUND_DESIGN.md)\n`);
+								return 0;
+							}
 							return ib.shell.run(`med sampler ${PACK_DIR}/${p.file}`);
 						}
 						let have = 0;
@@ -10864,9 +11709,9 @@ function registerCommands(ib, engine, st) {
 						for (const p of PACK) {
 							const there = found.has(p.file);
 							if (there) have++;
-							ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
+							ctx.out(`${there ? fmt.green("✓") : fmt.dim("·")} ${p.file.padEnd(28)} ${fmt.dim(`${there ? "" : "placeholder (computed) · "}${p.what}${p.pitch ? ` · ${p.pitch}` : ""}${p.loop ? " · loops" : ""}`)}\n`);
 						}
-						ctx.out(`${have}/${PACK.length} in ${PACK_DIR}/ · the others are placeholders: sounds made by people, see the module's SOUND_DESIGN.md\n`);
+						ctx.out(`${have}/${PACK.length} recorded in ${PACK_DIR}/ · the others load as computed placeholders until people record them (SOUND_DESIGN.md)\n`);
 						return 0;
 					}
 					case "sampler": {
@@ -10888,6 +11733,7 @@ function registerCommands(ib, engine, st) {
 						const n = parseInt(rest[0] ?? "", 10);
 						if (!(n >= 0 && n <= 16)) return ctx.err("med step 0–16\n"), 1;
 						st.step = n;
+						ctx.out(`step ${n}: the cursor moves ${n} line${n === 1 ? "" : "s"} after a note\n`);
 						return 0;
 					}
 					case "note": {
@@ -10896,6 +11742,11 @@ function registerCommands(ib, engine, st) {
 						const line = parseInt(lineS ?? "", 16), track = parseInt(trackS ?? "", 10) - 1;
 						const note = noteS ? parseNote(noteS) : null;
 						const b = s.blocks[s.sequence[st.seq]];
+						const tr = trackArg(s, trackS);
+						if (typeof tr === "string") return ctx.err(`med note: ${tr}\n`), 1;
+						if (b && !(line >= 0 && line < b.lines)) return ctx.err(`med note: line ${(lineS ?? "?").toUpperCase()}: the block has ${hex(0)}–${hex(b.lines - 1)}\n`), 1;
+						if (instS && !(/^[0-9a-f]{1,2}$/i.test(instS) && parseInt(instS, 16) <= 63)) return ctx.err(`med note: instrument ${instS.toUpperCase()}: they are 01–3F\n`), 1;
+						if (noteS && note === null) return ctx.err(`med note: "${noteS}" isn't a note (C-3, C#4, ^^^ a note off, --- none)\n`), 1;
 						if (!b || !(line >= 0 && line < b.lines) || !(track >= 0 && track < s.tracks) || note === null) return ctx.err("med note <line (hex)> <track 1–n> <C-3|^^^|---> [instrument hex] [command 0C20]\n"), 1;
 						if (cmdS && !/^[0-9a-f]{4}$/i.test(cmdS)) return ctx.err(`med note: "${cmdS}" isn't a command (4 hex digits, like 0C20)\n`), 1;
 						const e = st.editor;
@@ -10911,22 +11762,58 @@ function registerCommands(ib, engine, st) {
 						const s = need();
 						const e = st.editor;
 						const what = rest[0];
-						if (what === "new") {
+						const unused = " (not in the sequence: med seq add, or a position's menu → use block)";
+						if (what === void 0) ctx.out(s.blocks.map((b, i) => {
+							const at = s.sequence.flatMap((x, k) => x === i ? [hex(k)] : []);
+							return `${i === s.sequence[st.seq] ? "▸" : " "}${hex(i, 3)}  ${String(b.lines).padStart(4)} lines${b.name ? ` · ${b.name}` : ""}${at.length ? fmt.dim(` · positions ${at.join(" ")}`) : fmt.dim(unused)}`;
+						}).join("\n") + "\n");
+						else if (what === "new") {
 							const n = e.newBlock(rest[1] ? parseInt(rest[1], 10) || 64 : s.blocks[s.sequence[st.seq]]?.lines ?? 64);
-							ctx.out(`block ${hex(n, 3)}\n`);
-						} else if (what === "copy") ctx.out(`block ${hex(e.cloneBlock(s.sequence[st.seq]), 3)}\n`);
+							ctx.out(`block ${hex(n, 3)}${unused}\n`);
+						} else if (what === "copy") ctx.out(`block ${hex(e.cloneBlock(s.sequence[st.seq]), 3)}${unused}\n`);
 						else if (what === "lines") {
 							const n = parseInt(rest[1] ?? "", 10);
-							if (!(n >= 1 && n <= 3200)) return ctx.err("med block lines 1–3200\n"), 1;
+							if (!(n >= 1 && n <= 3200)) return ctx.err(`med block lines: ${rest[1] ?? "?"} — a block has 1–3200 lines\n`), 1;
 							e.setLines(s.sequence[st.seq], n);
-						} else return ctx.err("med block new [lines] | copy | lines <n>\n"), 1;
+							ctx.out(`block ${hex(s.sequence[st.seq], 3)}: ${n} lines\n`);
+						} else if (what === "rm") {
+							const n = blockArg(s, rest[1] ?? hex(s.sequence[st.seq], 3));
+							if (typeof n === "string") return ctx.err(`med block rm: ${n}\n`), 1;
+							const at = s.sequence.flatMap((x, k) => x === n ? [hex(k)] : []);
+							if (at.length) return ctx.err(`med block rm: block ${hex(n, 3)} plays at position${at.length > 1 ? "s" : ""} ${at.join(" ")} (take it out of the sequence first)\n`), 1;
+							if (!e.blockDelete(n)) return ctx.err("med block rm: a song keeps one block at least\n"), 1;
+							ctx.out(`deleted block ${hex(n, 3)} (⌘Z: back)${n < s.blocks.length ? " · the blocks after it moved down a number" : ""}\n`);
+						} else return ctx.err("med block [new [lines] | copy | lines <n> | rm <block>]\n"), 1;
 						return 0;
 					}
 					case "seq": {
 						const s = need();
 						const e = st.editor;
 						const [what, a, b] = rest;
+						if (what === void 0) return ctx.out(seqList(s)), 0;
 						const pos = a !== void 0 ? parseInt(a, 16) : st.seq;
+						if ([
+							"rm",
+							"set",
+							"copy",
+							"move"
+						].includes(what) && a !== void 0) {
+							const p = posArg(s, a);
+							if (typeof p === "string") return ctx.err(`med seq ${what}: ${p}\n`), 1;
+						}
+						if (what === "set" || what === "add") {
+							const bk = blockArg(s, what === "set" ? b : a);
+							if (typeof bk === "string") return ctx.err(`med seq ${what}: ${bk}\n`), 1;
+						}
+						const said = (p) => ctx.out(`position ${hex(p)} → block ${hex(s.sequence[p], 3)}\n`);
+						if (what === "move") {
+							const d = b === "up" ? -1 : b === "down" ? 1 : 0;
+							if (!d) return ctx.err("med seq move <position> up|down\n"), 1;
+							if (!e.seqMove(pos, d)) return ctx.err(`med seq move: position ${hex(pos)} is already at the ${d < 0 ? "top" : "bottom"}\n`), 1;
+							st.seq = pos + d;
+							said(st.seq);
+							return 0;
+						}
 						if (what === "new") {
 							const n = e.newBlock(s.blocks[s.sequence[st.seq]]?.lines ?? 64);
 							e.seqInsert(pos + 1, n);
@@ -10935,10 +11822,14 @@ function registerCommands(ib, engine, st) {
 							const n = e.cloneBlock(s.sequence[pos] ?? 0);
 							e.seqInsert(pos + 1, n);
 							st.seq = Math.min(s.sequence.length - 1, pos + 1);
-						} else if (what === "rm") e.seqDelete(pos);
-						else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 16));
-						else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 16));
-						else return ctx.err("med seq new|copy|rm [position] · set <position> <block> · add <block>\n"), 1;
+						} else if (what === "rm") {
+							if (s.sequence.length <= 1) return ctx.err("med seq rm: the sequence keeps one position at least\n"), 1;
+							e.seqDelete(pos);
+							ctx.out(`removed position ${hex(pos)}\n`);
+						} else if (what === "set") e.seqSet(pos, parseInt(b ?? "", 16)), said(pos);
+						else if (what === "add") e.seqInsert(s.sequence.length, parseInt(a ?? "", 16)), said(s.sequence.length - 1);
+						else return ctx.err("med seq [new|copy|rm [position] · set <position> <block> · add <block> · move <position> up|down]\n"), 1;
+						if (what === "new" || what === "copy") said(st.seq);
 						st.seq = Math.max(0, Math.min(s.sequence.length - 1, st.seq));
 						st.line = 0;
 						return 0;
@@ -10958,8 +11849,9 @@ function registerCommands(ib, engine, st) {
 						need();
 						const n = parseInt(rest[0] ?? "", 10);
 						const [lo, hi] = sub === "tempo" ? [1, 255] : sub === "speed" ? [1, 32] : [1, 32];
-						if (!(n >= lo && n <= hi)) return ctx.err(`med ${sub} ${lo}–${hi}\n`), 1;
+						if (!(n >= lo && n <= hi)) return ctx.err(`med ${sub}: ${rest[0] ?? "?"} — ${lo}–${hi}\n`), 1;
 						st.editor.settings(sub, (x) => sub === "tempo" ? x.tempo = n : sub === "speed" ? x.speed = n : x.lpb = n);
+						ctx.out(sub === "tempo" ? `tempo ${n}${need().tempoMode === "spd" ? " (SPD)" : " BPM"}\n` : sub === "speed" ? `speed ${n} ticks a line\n` : `${n} lines a beat\n`);
 						return 0;
 					}
 					case "swing": {
@@ -10986,7 +11878,7 @@ function registerCommands(ib, engine, st) {
 						const len = songLength(s);
 						ctx.out([
 							`title       ${s.title || "—"}`,
-							`file        ${st.path} (${s.format})`,
+							`file        ${st.path}${/\.bmed$/i.test(st.path) ? "" : ` (${s.format})`}`,
 							`tracks      ${s.tracks} · blocks ${s.blocks.length} · positions ${s.sequence.length}`,
 							`tempo       ${s.tempoMode.toUpperCase()} ${s.tempo} · speed ${s.speed} · lines a beat ${s.lpb}`,
 							`transpose   ${s.transpose} · master volume ${s.masterVolume}`,
@@ -10994,7 +11886,7 @@ function registerCommands(ib, engine, st) {
 							`echo        ${s.echo ? `${s.echo.type} · ${s.echo.ms} ms · depth ${s.echo.depth}` : "off"} · LED filter ${s.flags.filter ? "on" : "off"}${s.chordColumn ? " · chords" : ""}${s.swing ? ` · swing ${s.swing}` : ""}`,
 							`length      ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")} (${len.lines} lines)`,
 							`instruments`,
-							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
+							...s.instruments.map((i, n) => i.kind === "empty" ? "" : `  ${hex(n + 1)} ${i.name.padEnd(22)} ${i.kind.padEnd(6)} ${i.kind === "analog" || i.kind === "fm" || i.kind === "chip" ? "  synth" : i.kind === "drums" ? "   kit" : `${String(i.data.length).padStart(7)} frames`} · vol ${i.volume}${i.loopLength ? ` · loop ${i.loopStart}+${i.loopLength}` : ""}${i.transpose ? ` · ${i.transpose > 0 ? "+" : ""}${i.transpose}` : ""}`).filter(Boolean)
 						].join("\n") + "\n");
 						return 0;
 					}
@@ -11031,6 +11923,12 @@ var Engine = class {
 			true
 		);
 		_defineProperty(this, "muted", /* @__PURE__ */ new Set());
+		_defineProperty(
+			this,
+			/** a click on each beat while playing (med click) */
+			"metronome",
+			false
+		);
 		_defineProperty(this, "onChange", void 0);
 		_defineProperty(this, "line", null);
 		_defineProperty(this, "opening", null);
@@ -11062,6 +11960,7 @@ var Engine = class {
 		if (!this.audio.available()) throw new Error("no sound output here");
 		const r = await this.renderer();
 		r.paula = this.paula;
+		r.metronome = this.metronome;
 		r.play(from.seq, from.line, {
 			loopBlock: mode === "block",
 			muted: this.muted
@@ -11099,6 +11998,37 @@ var Engine = class {
 			block: pos.block,
 			line: pos.line
 		};
+	}
+	/** the frame being heard now (what was written, less what still waits) */
+	heard() {
+		const r = this.r;
+		if (!r || !this.line) return 0;
+		return Math.min(r.frame, this.clock.written - this.clock.waiting + (performance.now() - this.clock.at) / 1e3 * this.line.rate);
+	}
+	/** each track's meter (0–1): its last note, fading over ~0.4 s; null when stopped */
+	levels() {
+		const r = this.r;
+		if (!this.mode || !r || !this.line || !this.song) return null;
+		const now = this.heard(), rate = this.line.rate;
+		return Array.from({ length: this.song.tracks }, (_, t) => {
+			const h = r.hits[t];
+			if (!h || this.muted.has(t) || h.frame > now) return 0;
+			return h.vol * Math.exp(-((now - h.frame) / rate) * 6);
+		});
+	}
+	/** the mix since the last call: its peak (0–1) and how much the limiter took (dB, ≥ 0) */
+	master() {
+		const r = this.r;
+		if (!this.mode || !r) return null;
+		const m = {
+			peak: r.meter.peak,
+			limitDb: -20 * Math.log10(Math.max(1e-6, r.meter.gain))
+		};
+		r.meter = {
+			peak: 0,
+			gain: 1
+		};
+		return m;
 	}
 	/** A key played on the piano: instrument `inst` at `rate`, heard ~30 ms later. */
 	async preview(inst, rate) {
@@ -11177,6 +12107,9 @@ function activate(ib) {
 	engine.onChange = () => ib.ui.redraw();
 	ib.audio.onStop?.(() => engine?.silence());
 	ib.storage.get("paula", true).then((v) => engine && (engine.paula = v !== false));
+	ib.storage.get("view", "center").then((v) => st.view = v === "edges" ? "edges" : "center");
+	ib.storage.get("follow", true).then((v) => st.follow = v !== false);
+	ib.storage.get("metronome", false).then((v) => engine && (engine.metronome = st.metronome = v === true));
 	registerCommands(ib, engine, st);
 	ib.apps.register({
 		kind: "breakermed",
@@ -11545,6 +12478,62 @@ var FR = {
 	position: "position",
 	"the song's settings": "les réglages du morceau",
 	"off": "non",
-	"on": "oui"
+	"on": "oui",
+	"BLOCKS IN NO POSITION": "BLOCS DANS AUCUNE POSITION",
+	"POSITION": "POSITION",
+	"a copy of the changes is in songs/.recovery/ · click or ⌘S: save the song": "une copie des changements est dans songs/.recovery/ · clic ou ⌘S : enregistrer le morceau",
+	"add a position after it, same block": "ajouter une position après, même bloc",
+	"add block": "ajouter le bloc",
+	"at the end of the sequence": "à la fin de la séquence",
+	"blocks no position plays: add one to the sequence, or delete it": "des blocs qu'aucune position ne joue : en ajouter un à la séquence, ou le supprimer",
+	"changes not saved · click or ⌘S: save": "changements non enregistrés · clic ou ⌘S : enregistrer",
+	"click": "métronome",
+	"click: go there · double-click: play from here · wheel on the block: another block · drag: move it · right-click: more": "clic : y aller · double-clic : jouer d'ici · molette sur le bloc : un autre bloc · glisser : la déplacer · clic droit : plus",
+	"click: the cursor goes there · double-click: rename · right-click: mute, solo": "clic : le curseur y va · double-clic : renommer · clic droit : couper, solo",
+	"delete block": "supprimer le bloc",
+	"edit mode on: typing writes in the block · click or space: off": "mode édition : la frappe écrit dans le bloc · clic ou espace : le couper",
+	"edit mode · click or space: typing writes in the block": "mode édition · clic ou espace : la frappe écrit dans le bloc",
+	"export (WAV)": "exporter (WAV)",
+	"follow": "suivre",
+	"follow off": "sans suivi",
+	"follow the song: off": "suivre le morceau : non",
+	"follow the song: on": "suivre le morceau : oui",
+	"is empty: no sound (alt ←→ another, or make one: alt I)": "est vide : aucun son (alt ←→ un autre, ou en faire un : alt I)",
+	"lines": "lignes",
+	"lines the cursor moves after a note · alt 0–9 · the wheel": "les lignes que descend le curseur après une note · alt 0–9 · la molette",
+	"metronome off": "couper le métronome",
+	"metronome on": "métronome",
+	"move down": "descendre",
+	"move up": "monter",
+	"mute · right-click: solo, rename": "couper · clic droit : solo, renommer",
+	"muted · click: unmute · right-click: solo, rename": "coupée · clic : rétablir · clic droit : solo, renommer",
+	"not in the sequence": "dans aucune position",
+	"one drum a note (the keys play them) · ↑↓ a drum": "un son par note (les touches les jouent) · ↑↓ un son",
+	"play the song from the cursor · enter (⇧enter: this block, again and again)": "jouer le morceau depuis le curseur · entrée (⇧entrée : ce bloc, en boucle)",
+	"playing · click or space: stop": "lecture · clic ou espace : stop",
+	"saved": "enregistré",
+	"select the block": "sélectionner le bloc",
+	"select the track": "sélectionner la piste",
+	"smooth": "lisse",
+	"stepped": "en escalier",
+	"the block before": "le bloc d'avant",
+	"the block this position plays · the wheel: another · right-click: use block…, move": "le bloc que joue cette position · molette : un autre · clic droit : choisir le bloc…, déplacer",
+	"the cursor follows the song as it plays · click or alt F: it stays where you edit": "le curseur suit le morceau pendant la lecture · clic ou alt F : il reste où tu écris",
+	"the cursor stays where you edit while the song plays · click or alt F: follow it": "le curseur reste où tu écris pendant la lecture · clic ou alt F : suivre",
+	"the echo on the whole mix (ms) · click: the SONG screen": "l'écho sur tout le mix (ms) · clic : l'écran MORCEAU",
+	"the keys play it · alt ←→ another instrument · alt B the block · med sample -h": "les touches le jouent · alt ←→ un autre instrument · alt B le bloc · med sample -h",
+	"the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)": "les touches le jouent · ↑↓ un réglage · ←→ ou la molette : le changer (⇧ : plus)",
+	"the metronome: a click on each beat while playing · click: off": "le métronome : un clic à chaque temps pendant la lecture · clic : le couper",
+	"the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down so it never clips": "le niveau du mix (la dernière barre : −1 dB, le maximum) · LIM : le limiteur le baisse pour qu'il ne sature jamais",
+	"the next block": "le bloc suivant",
+	"the octave the keys play · alt ↑↓ or F1–F8 · the wheel": "l'octave que jouent les touches · alt ↑↓ ou F1–F8 · la molette",
+	"the sound: smooth (interpolated) · click: stepped, like the Amiga": "le son : lisse (interpolé) · clic : en escalier, comme l'Amiga",
+	"the sound: stepped and gritty, like the Amiga's Paula · click: smooth": "le son : en escalier et granuleux, comme la puce Paula de l'Amiga · clic : lisse",
+	"the tempo · the wheel changes it · click: the SONG screen": "le tempo · la molette le change · clic : l'écran MORCEAU",
+	"ticks a line (the effects' clock) · the wheel changes it": "ticks par ligne (l'horloge des effets) · la molette le change",
+	"unused": "inutilisé(s)",
+	"use another block…": "choisir un autre bloc…",
+	"which block?": "quel bloc ?",
+	"←→ a setting · ⇧←→ or the wheel: change it": "←→ un réglage · ⇧←→ ou la molette : le changer"
 };
 export { activate, deactivate };

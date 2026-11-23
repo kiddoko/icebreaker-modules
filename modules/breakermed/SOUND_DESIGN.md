@@ -11,7 +11,9 @@ BreakerMED has two kinds of sound:
 - **Sampled sounds**: real recordings, like a piano, a voice or an acoustic drum.
   **People make these: you and your friends, never a machine and never a
   download.** Until someone records a sound, BreakerMED keeps a **placeholder**:
-  the sound is on the list below, but it isn't there yet.
+  the sound is on the list below, and `med pack load` gives a stand-in computed
+  from our synths and drum machine (named "… (placeholder)"), so you can write a
+  song with it now. Your recording replaces it as soon as it's in the vault.
 
 Anything you record becomes part of an open-source project. Send only sounds you
 made yourself, and say how you'd like to be credited.
@@ -101,7 +103,8 @@ us what it is.
 
 1. Put the file in the vault (see above).
 2. In ICEBREAKER's shell, type `med pack`. Your sound gets a ✓; the rest are
-   still placeholders.
+   still placeholders ("placeholder (computed)": they load, but they're not
+   recordings).
 3. Type `med pack load piano-c3` (your sound's name). It goes into a free
    instrument, and the INSTRUMENT screen shows its waveform.
 4. Press the letter keys to play it: Z is C. On the BLOCK screen, a C-3 should
