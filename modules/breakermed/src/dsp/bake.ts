@@ -12,6 +12,8 @@ import { DRUM_NAMES, DrumVoice } from "./drums";
 import { FmVoice } from "./fm";
 import { ChipVoice } from "./chip";
 import type { Voice } from "./voice";
+import { Renderer } from "../render";
+import { newSong } from "../song";
 
 /** a voice played into a new sample: held `hold` seconds, then let go, until silent (`max` seconds) */
 function record(v: Voice, hold: number, max: number): Float32Array {
@@ -21,10 +23,49 @@ function record(v: Voice, hold: number, max: number): Float32Array {
   v.render(l, r, 0, held);
   v.stop();
   v.render(l, r, held, n);
+  // no offset (DC) in the sample: a ~10 Hz high-pass
+  const k = 1 - (2 * Math.PI * 10) / HQ_RATE;
+  let x1 = 0, y1 = 0;
+  for (let i = 0; i < n; i++) {
+    const x = l[i];
+    y1 = x - x1 + k * y1;
+    x1 = x;
+    l[i] = y1;
+  }
   let end = n;
   while (end > 1 && Math.abs(l[end - 1]) < 1e-4) end--;
-  // a voice plays at half loudness: twice, so the sample is as loud as the instrument
-  return l.slice(0, Math.max(1, end)).map((x) => Math.max(-1, Math.min(1, x * 2)));
+  return l.slice(0, Math.max(1, end));
+}
+
+/** how loud an instrument is heard in a song: one C-3 on a track, its first `seconds` (RMS) */
+function heard(ins: Instrument, seconds: number): number {
+  const s = newSong(1);
+  s.instruments = [ins];
+  s.trackPan = [0];
+  const c = s.blocks[0].cells[0][0];
+  (c.note = 25), (c.inst = 1);
+  const rate = 24000;
+  const r = new Renderer(s, rate, false);
+  r.limit = false;
+  r.play(0, 0);
+  const n = Math.round(rate * seconds);
+  const L = new Float32Array(n), R = new Float32Array(n);
+  r.render(L, R);
+  let sq = 0;
+  for (let i = 0; i < n; i++) sq += L[i] * L[i] + R[i] * R[i];
+  return Math.sqrt(sq / (2 * n));
+}
+
+/** the sample made as loud as the synth it comes from (as far as full scale allows) */
+function matchLevel(from: Instrument, baked: Instrument, hold: number): Instrument {
+  const want = heard(from, hold), got = heard(baked, hold);
+  if (!(want > 0 && got > 0)) return baked;
+  let k = want / got;
+  let peak = 0;
+  for (const x of baked.data) peak = Math.max(peak, Math.abs(x));
+  if (peak * k > 1) k = 1 / peak; // louder than a sample can hold: as loud as it can
+  baked.data = baked.data.map((x) => x * k);
+  return baked;
 }
 
 const asSample = (from: Instrument, name: string, data: Float32Array): Instrument =>
@@ -37,7 +78,7 @@ export function bakeSynth(ins: Instrument, hold = 0.8): Instrument {
   v.set(C3_RATE, 1, 0);
   const out = asSample(ins, ins.name, record(v, hold, hold + 2));
   out.transpose = ins.transpose + 12;
-  return out;
+  return matchLevel(ins, out, hold);
 }
 
 /** One drum of a kit (0 = the kick … 11 = the ride), as a sample. */

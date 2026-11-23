@@ -89,7 +89,7 @@ describe("BreakerMED beta: the EXPORT screen's command line", () => {
   const q = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
   it("writes only what isn't the default", () => {
     const x = { ...newExportChoices(), path: "songs/my song" };
-    expect(exportLine(x, q)).toBe('med export "songs/my song.wav" --stems');
+    expect(exportLine(x, q)).toBe('med export "songs/my song.wav"'); // 0.12: master only by default (R13)
     x.what = "master";
     x.format = "flac";
     x.bits = 24;

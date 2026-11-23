@@ -107,13 +107,13 @@ describe("0.12: the view (centred by default, or scrolling at the edges) and fol
     const d = makeDeck();
     await d.med("med new");
     d.st.line = 0;
-    const top = (ui: RecUI) => ui.texts.filter((t) => /^[0-9A-F]{3}$/.test(t.s)).sort((a, b) => a.y - b.y)[0];
+    const top = (ui: RecUI) => ui.texts.filter((t) => t.x > 20 && /^[0-9A-F]{3}$/.test(t.s)).sort((a, b) => a.y - b.y)[0];
     expect(top(d.draw()).y).toBeGreaterThan(8);
     expect(await d.med("med view edges")).toBe(0);
     expect(top(d.draw()).s).toBe("000");
     d.st.line = 50;
     const ui = d.draw();
-    const shown = ui.texts.filter((t) => /^[0-9A-F]{3}$/.test(t.s)).map((t) => parseInt(t.s, 16));
+    const shown = ui.texts.filter((t) => t.x > 20 && /^[0-9A-F]{3}$/.test(t.s)).map((t) => parseInt(t.s, 16));
     expect(shown).toContain(50);
   });
   it("follow off: playing leaves the cursor where you edit", async () => {

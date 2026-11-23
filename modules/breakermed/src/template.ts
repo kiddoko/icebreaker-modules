@@ -40,6 +40,8 @@ export function chipSong(): Song {
   s.title = "untitled";
   s.chordColumn = true;
   s.trackNames = [...CHIP_TRACKS];
+  // the NES is mono: everything in the middle, a little width on the pulses
+  s.trackPan = [-0.15, 0.15, 0, 0];
   s.tempo = 150;
   // 01 lead · 02 arp · 03 triangle bass · 04 snare · 05 hat · 06 kick
   s.instruments = ["2a03-lead", "2a03-arp", "2a03-bass", "2a03-snare", "2a03-hat", "2a03-kick"].map(chip);
@@ -87,6 +89,11 @@ export function templateSong(tracks = TEMPLATE_TRACKS.length): Song {
       if (chord) c.chord = chord;
     }
   };
+  // a mix of today: kick, snare and bass in the middle, the rest spread a little; the kick on top
+  const PANS = [0, 0, 0.25, 0, -0.2, 0.3, -0.3, 0.4];
+  s.trackPan = Array.from({ length: n }, (_, t) => PANS[t] ?? s.trackPan[t]);
+  const VOLS = [64, 60, 46, 46, 52, 48, 50, 48];
+  s.trackVolume = Array.from({ length: n }, (_, t) => VOLS[t] ?? s.trackVolume[t]);
   for (const l of [0, 6, 8]) put(l, 0, note("C", 3), 1); // kick
   for (const l of [4, 12]) put(l, 1, note("D", 3), 1); // snare
   for (let l = 0; l < 16; l += 2) put(l, 2, note("E", 3), 1); // closed hats

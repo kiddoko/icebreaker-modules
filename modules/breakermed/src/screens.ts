@@ -41,7 +41,7 @@ export interface ExportChoices {
   normalize: boolean;
   tail: number;
 }
-export const newExportChoices = (): ExportChoices => ({ path: "", format: "wav", rate: 48000, bits: 24, quality: "", what: "master + stems", normalize: false, tail: 1.5 });
+export const newExportChoices = (): ExportChoices => ({ path: "", format: "wav", rate: 48000, bits: 24, quality: "", what: "master", normalize: false, tail: 1.5 });
 
 /** the `med export` line the choices make */
 export function exportLine(x: ExportChoices, q: (s: string) => string): string {
@@ -214,10 +214,10 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
         muted ? "×" : "·",
         solo ? "S" : "·",
       ];
-      ui.text(inner.x + 1, y, String(tr + 1).padStart(2), { fg: c.faint });
+      ui.text(inner.x + 1, y, String(tr + 1).padStart(2), { fg: c.subtle });
       cells.forEach((v, i) => {
         const on = here && st.songCol === i;
-        const fg = i === 0 ? (muted ? c.faint : c.fg) : i === 4 && muted ? c.warning : i === 5 && solo ? c.success : c.muted;
+        const fg = i === 0 ? (muted ? c.subtle : c.fg) : i === 4 && muted ? c.warning : i === 5 && solo ? c.success : c.muted;
         ui.text(colX[i], y, v, { fg: on ? c.accent : fg, attrs: on ? BOLD : 0 }, (colX[i + 1] ?? inner.x + inner.w) - colX[i] - 1);
         if (on && focused) ui.tint({ x: colX[i] - 1, y, w: (colX[i + 1] ?? colX[i] + 6) - colX[i], h: 1 }, undefined, c.highlight);
         ui.hit({ x: colX[i] - 1, y, w: (colX[i + 1] ?? colX[i] + 6) - colX[i], h: 1 }, {
@@ -346,7 +346,6 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     // what the last export did, while the choices are still those (a new choice: a new export to come)
     if (last && last.kind !== "busy" && last.line !== exportLine(x, q)) last = null;
     if (last && y < inner.y + inner.h) ui.text(inner.x + 1, y++, truncate(last.text, inner.w - 2), { fg: last.kind === "ok" ? c.success : last.kind === "error" ? c.error : c.accent });
-    if (y < inner.y + inner.h) ui.text(inner.x + 1, y, truncate(exportLine(x, q), inner.w - 2), { fg: c.faint });
   };
 
   const keyExport = (k: KeyInput): boolean => {
