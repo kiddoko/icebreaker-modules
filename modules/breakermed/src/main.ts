@@ -33,7 +33,7 @@ export function activate(ib: IcebreakerAPI): void {
     { vault: ib.vault, storage: ib.storage, now: () => Date.now(), later: (fn, ms) => setTimeout(fn, ms), cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) },
     () => ({ song: st.song, editor: st.editor, path: st.path, playing: !!engine?.playing }),
   );
-  st.autosave.onError = (m) => ib.ui.notify(`BreakerMED: autosave off — ${m} (med autosave on to try again)`, "warning");
+  st.autosave.onError = (m) => ib.ui.notify(`autosave off — ${m} (med autosave on to try again)`, "warning");
   void st.autosave.load().then(() => ib.ui.redraw());
   engine.onChange = () => ib.ui.redraw();
   // you silence it from the deck (`audio stop`, the ♪ in the status bar): the song stops, not only its notes

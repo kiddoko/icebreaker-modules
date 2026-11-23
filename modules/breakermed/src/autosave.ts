@@ -176,6 +176,22 @@ export class Autosave {
     await this.io.storage.set("recovery", list);
   }
 
+  /**
+   * A song came on the page: make the folder its copies will go in, now. The deck asks
+   * for the permission to write the first time (songs/.recovery/…): better when the song
+   * opens than a minute later, in the middle of typing notes.
+   */
+  async prepare(path: string): Promise<void> {
+    if (!this.on) return;
+    try {
+      await this.io.vault.mkdir(`${recoveryFile(path)}/samples`);
+    } catch (e) {
+      this.on = false;
+      this.error = e instanceof Error ? e.message : String(e);
+      this.onError?.(this.error);
+    }
+  }
+
   /** a new song on the page: nothing to copy yet */
   reset(): void {
     if (this.timer !== null) this.io.cancel(this.timer);

@@ -49,7 +49,7 @@ export const GUIDE: GuidePart[] = [
       ["med save · ⌘S", "save (a new song asks for its name: never over another song)"],
       ["med autosave", "on by default: a copy 1.5 s after each change, in songs/.recovery/ (never over the song)"],
       ["med recover", "changes never saved (a quit, a crash): back on the page · START offers them too (R)"],
-      ["enter", "play the song from the cursor · ⇧enter: this block, again and again"],
+      ["enter", "play the song from the cursor · ⇧enter: this block, again and again · enter again: stop"],
       ["space", "stop · when stopped: EDIT MODE on / off (or click “edit” at the top)"],
       ["med new, open, demo", "a song with changes asks first: save, don't save (the autosave keeps a copy), cancel"],
     ],
