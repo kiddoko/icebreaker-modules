@@ -1,8 +1,9 @@
 /**
  * One way to read a sound file into an instrument: WAV, AIFF, IFF 8SVX (our
  * own readers), anything else (MP3, M4A, OGG…) through the system's decoder
- * (ib.audio.decode). The sound becomes mono at HQ_RATE, the instrument an
- * octave up, so C-3 plays it as recorded.
+ * (ib.audio.decode). The sound becomes mono and keeps its own rate (C-3 plays
+ * it as recorded, 48 kHz stays 48 kHz); --amiga: the Amiga's rate (16 574 Hz at
+ * C-3), smaller and grittier. .mod / .med get the Amiga's rates when saved.
  */
 import { HQ_RATE, toMono } from "../sampler";
 import { emptyInstrument, type Instrument } from "../song";
@@ -26,9 +27,9 @@ export async function readSample(bytes: Uint8Array, name: string, decode?: (b: U
     if (!decode) throw new Error("not a WAV, AIFF or IFF file");
     pcm = await decode(bytes);
   }
-  const to = amiga ? HQ_RATE / 2 : HQ_RATE;
+  const to = amiga ? HQ_RATE / 2 : pcm.rate;
   inst.data = toMono(pcm.channels, pcm.rate, to);
-  if (!amiga) inst.transpose = 12;
+  if (!amiga) inst.rate = pcm.rate;
   if (iff?.loopLength) {
     const k = to / iff.rate;
     inst.loopStart = Math.round(iff.loopStart * k);

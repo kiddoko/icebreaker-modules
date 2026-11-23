@@ -228,10 +228,10 @@
     "id": "breakermed",
     "kind": "plugin",
     "name": "BreakerMED (beta)",
-    "description": "A tracker like OctaMED and ProTracker: .med and .mod songs (and its own .bmed), 8 to 16 tracks, a sampler, analog, FM and chip synths (NES, Game Boy, C64-style…), a drum machine, chords, exports to WAV, FLAC, MP3… — in ASCII, keyboard, mouse and gamepad",
+    "description": "A tracker like OctaMED and ProTracker: .bmed, .med and .mod songs, up to 16 tracks, a sampler (each sound at its own rate, or vintage: Amiga, Akai), analog, FM and chip synths (NES, Game Boy, C64-style…), a drum machine, chords, an autosave, exports to WAV, FLAC, MP3… — in ASCII, keyboard, mouse and gamepad",
     "author": "icebreaker",
     "repo": "kiddoko/icebreaker-modules/tree/main/modules/breakermed",
-    "version": "0.12.1",
+    "version": "0.13.0",
     "api": 2,
     "permissions": [
       "audio",

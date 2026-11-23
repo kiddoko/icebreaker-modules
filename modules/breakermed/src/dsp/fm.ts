@@ -1,5 +1,5 @@
 /**
- * breakerMED — the FM synth, the basic kind: two sine waves, one (the
+ * BreakerMED — the FM synth, the basic kind: two sine waves, one (the
  * modulator) bending the other's phase (the carrier), the way the 80s did
  * electric pianos, bells and slap basses. The modulator runs at `ratio` × the
  * note (whole ratios sound in tune, others clang), `index` says how far it bends

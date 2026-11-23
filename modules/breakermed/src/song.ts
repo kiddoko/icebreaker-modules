@@ -1,5 +1,5 @@
 /**
- * breakerMED — what a song is, in memory. One model for .med (MMD0–MMD3) and
+ * BreakerMED — what a song is, in memory. One model for .med (MMD0–MMD3) and
  * .mod: tracks, blocks (patterns) of any length, a play sequence, instruments,
  * the tempo. Commands are kept in OctaMED's numbering (00–FF, hex parameter),
  * whatever file they came from: a .mod's effects are translated when it's read
@@ -223,7 +223,18 @@ export interface Instrument {
   drums?: import("./dsp/drums").DrumKit;
   /** the chip synth's settings (kind "chip") */
   chip?: import("./dsp/chip").ChipParams;
+  /**
+   * a sample's own rate: C-3 plays `data` at this many frames a second (a sound
+   * loaded at 48 kHz stays 48 kHz). None: the Amiga's way (C-3 = 16 574 Hz, the
+   * transpose says the octave). .mod / .med get the Amiga's way when saved.
+   */
+  rate?: number;
+  /** the vintage mode: heard through an Amiga's Paula or an old Akai sampler (dsp/vintage.ts) */
+  vintage?: import("./dsp/vintage").VintageSettings;
 }
+
+/** a sample's frames a second when C-3 plays it (its own rate, or the Amiga's and its transpose) */
+export const heardRate = (i: Pick<Instrument, "rate" | "transpose">) => (i.rate ?? PAULA_CLOCK / 214) * 2 ** (i.transpose / 12);
 
 export function emptyCell(pages = 1): Cell {
   return { note: 0, inst: 0, cmd: new Array(pages).fill(0), val: new Array(pages).fill(0) };
@@ -274,13 +285,20 @@ export function amigaPan(tracks: number, width = 0.6): number[] {
 }
 
 /** "C-3", "D#1", "---", "^^^" (note off) */
+/** the highest note a cell holds: B-9 (C-1 is 1) */
+export const MAX_NOTE = 108;
+
 export function noteName(n: number): string {
   if (!n) return "---";
   if (n === NOTE_OFF) return "^^^";
-  const i = n - 1;
-  return `${NOTE_NAMES[i % 12]}${Math.floor(i / 12) + 1}`.slice(0, 3);
+  const i = Math.min(n, MAX_NOTE) - 1; // past B-9 there's no 3-letter name (P5): the top one
+  return `${NOTE_NAMES[i % 12]}${Math.floor(i / 12) + 1}`;
 }
 
+/** a line number, in decimal like OctaMED's (the commands' values stay hex): 000, 063, 1024 */
+export const lineNo = (v: number, digits = 3) => String(v).padStart(digits, "0");
+/** a position of the sequence, or a block's number: decimal too, three digits (000, 012) */
+export const dec = (v: number) => String(v).padStart(3, "0");
 export const hex = (v: number, digits = 2) => v.toString(16).toUpperCase().padStart(digits, "0");
 
 // ── pitch ──────────────────────────────────────────────────────────────────

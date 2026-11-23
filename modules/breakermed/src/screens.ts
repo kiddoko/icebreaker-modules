@@ -110,14 +110,19 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
     const f = s.flags;
     const echo = s.echo;
     return [
-      { label: t("title"), value: () => s.title || "—", activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && (set("title", (x) => (x.title = v.replace(/[\u0000-\u001f]/g, "").slice(0, 60)), false), ib.ui.redraw())) },
+      { label: t("title"), value: () => s.title || "—", activate: () => void ib.ui.prompt(t("the song's title"), { initial: s.title }).then((v) => v !== null && run(`med title ${q(v)}`)), tip: "med title <text>" },
       {
         label: t("tempo"),
-        value: () => `${s.tempoMode === "spd" ? `SPD ${s.tempo}` : `${s.tempo} BPM`} (${ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix).toFixed(0)})`,
+        value: () => {
+          // the BPM heard in brackets only when it isn't the number shown (P6)
+          const bpm = Math.round(ptBpmOf(s.tempoMode, s.tempo, s.lpb, f.eightChannel, f.hardwareMix));
+          return s.tempoMode === "spd" ? `SPD ${s.tempo} (${bpm} BPM)` : `${s.tempo} BPM${bpm !== s.tempo ? ` (${bpm})` : ""}`;
+        },
         nudge: (d, big) => set("tempo", (x) => (x.tempo = clamp(x.tempo + d * (big ? 10 : 1), 1, 255))),
+        tip: "med tempo <1–255>",
       },
-      { label: t("speed"), value: () => `${s.speed} ${t("ticks a line")}`, nudge: (d) => set("speed", (x) => (x.speed = clamp(x.speed + d, 1, 32))) },
-      { label: t("lines a beat"), value: () => String(s.lpb), nudge: (d) => set("lines a beat", (x) => (x.lpb = clamp(x.lpb + d, 1, 32))) },
+      { label: t("speed"), value: () => `${s.speed} ${t("ticks a line")}`, nudge: (d) => set("speed", (x) => (x.speed = clamp(x.speed + d, 1, 32))), tip: "med speed <1–32>" },
+      { label: t("lines a beat"), value: () => String(s.lpb), nudge: (d) => set("lines a beat", (x) => (x.lpb = clamp(x.lpb + d, 1, 32))), tip: "med lpb <1–32>" },
       {
         label: t("swing"),
         value: () => (s.swing ? `${s.swing}` : t("straight")),
@@ -127,9 +132,9 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
             if (v) x.swing = v;
             else delete x.swing;
           }),
-        tip: t("every other line longer: 50 a lazy shuffle, 100 triplets"),
+        tip: `${t("every other line longer: 50 a lazy shuffle, 100 triplets")} · med swing <0–100>`,
       },
-      { label: t("tracks"), value: () => `${s.tracks}`, nudge: (d) => s.tracks + d >= 1 && s.tracks + d <= MAX_TRACKS && run(`med tracks ${s.tracks + d}`) },
+      { label: t("tracks"), value: () => `${s.tracks}`, nudge: (d) => s.tracks + d >= 1 && s.tracks + d <= MAX_TRACKS && run(`med tracks ${s.tracks + d}`), tip: "med tracks <1–16>" },
       {
         label: t("echo"),
         value: () => (echo ? t(echo.type) : t("off")),
@@ -139,6 +144,7 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
             if (next === "off") delete x.echo;
             else x.echo = cleanEcho({ type: next, ms: echo?.ms ?? 250, depth: echo?.depth ?? 2 })!;
           }),
+        tip: "med echo off | normal|cross [ms] [depth 1–6]",
       },
       ...(echo
         ? [
@@ -146,7 +152,7 @@ export function makeScreens(ib: IcebreakerAPI, engine: Engine, st: State) {
             { label: `  ${t("depth")}`, value: () => `${echo.depth} (${echo.depth <= 2 ? t("long") : echo.depth >= 5 ? t("short") : t("medium")})`, nudge: (d: 1 | -1) => set("echo depth", (x) => x.echo && (x.echo.depth = clamp(x.echo.depth + d, 1, 6))) },
           ]
         : []),
-      { label: t("LED filter"), value: () => (f.filter ? t("on") : t("off")), nudge: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false), activate: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false) },
+      { label: t("LED filter"), value: () => (f.filter ? t("on") : t("off")), nudge: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false), activate: () => set("LED filter", (x) => (x.flags.filter = !x.flags.filter), false), tip: "med filter on|off · 0FF9 / 0FF8" },
     ];
   };
 

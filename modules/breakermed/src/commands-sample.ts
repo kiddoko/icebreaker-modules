@@ -1,5 +1,5 @@
 /**
- * breakerMED — `med sample …`, `med bounce`, `med filter`: the sampler's tools
+ * BreakerMED — `med sample …`, `med bounce`, `med filter`: the sampler's tools
  * as commands (the INSTRUMENT screen's buttons run these). Every change goes
  * through the editor: ⌘Z / `med undo` brings the sound back.
  */
@@ -11,7 +11,7 @@ import type { State } from "./app";
 import { renderSong } from "./export";
 import { readSample, SAMPLE_EXTS } from "./format/sample";
 import { chop, crush, fade, HQ_RATE, normalize, onsets, pitch, reverse, sliceAt, stretch, toMono, trim } from "./sampler";
-import { emptyInstrument, hex, trackName, type Instrument } from "./song";
+import { emptyInstrument, heardRate, hex, trackName, type Instrument } from "./song";
 
 export const SAMPLE_USAGE = [
   "med sample <n|.> load [file] [--amiga]   a sound file in songs/ (wav, aif, iff/8svx, mp3, m4a, ogg…)",
@@ -39,7 +39,7 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
   const needSound = () => {
     if (!ins.data.length) throw new Error(`instrument ${hex(n + 1)} is empty (med sample ${hex(n + 1)} load <file>)`);
   };
-  const ms = (x: string | undefined, d: number) => Math.round(((x !== undefined ? parseFloat(x) : d) / 1000) * HQ_RATE);
+  const ms = (x: string | undefined, d: number) => Math.round(((x !== undefined ? parseFloat(x) : d) / 1000) * heardRate(ins));
   const change = (label: string, fn: (i: Instrument) => void) => {
     needSound();
     e.instrument(n, label, fn);
@@ -48,8 +48,8 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
   switch (op) {
     case undefined:
     case "info": {
-      const secs = ins.data.length / HQ_RATE * (ins.transpose >= 12 ? 1 : 2);
-      ctx.out(`${name} · ${ins.kind} · ${ins.data.length} frames (~${secs.toFixed(2)} s at C-3) · vol ${ins.volume} · fine ${ins.finetune} · transpose ${ins.transpose}${ins.loopLength ? ` · loop ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ping-pong" : ""}` : ""}\n`);
+      const secs = ins.data.length / heardRate(ins);
+      ctx.out(`${name} · ${ins.kind} · ${ins.data.length} frames (~${secs.toFixed(2)} s at C-3${ins.rate ? `, ${ins.rate} Hz` : ""}) · vol ${ins.volume} · fine ${ins.finetune} · transpose ${ins.transpose}${ins.loopLength ? ` · loop ${ins.loopStart}+${ins.loopLength}${ins.pingPong ? " ping-pong" : ""}` : ""}\n`);
       return 0;
     }
     case "load": {
@@ -68,7 +68,7 @@ export async function sampleCommand(ib: IcebreakerAPI, st: State, ctx: ShellCont
         // and the starter pack's sounds nobody has recorded yet: computed placeholders
         const missing = PACK.filter((p) => !found.includes(`${PACK_DIR}/${p.file}`));
         const labels = [...found, ...missing.map((p) => `pack: ${p.file.split("/").pop()!.replace(/\.wav$/, "")} (placeholder) · ${p.what}`)];
-        const i = await ib.ui.choose(found.length ? "LOAD A SOUND" : "LOAD A SOUND (none in songs/ yet: the pack's placeholders)", labels.map((label) => ({ label })));
+        const i = await ib.ui.choose(found.length ? ib.lib.t("load a sound") : ib.lib.t("load a sound (none in songs/ yet: the pack's placeholders)"), labels.map((label) => ({ label })));
         if (i === null) return 1;
         if (i >= found.length) {
           const p = missing[i - found.length];

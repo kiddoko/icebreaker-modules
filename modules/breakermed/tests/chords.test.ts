@@ -22,7 +22,7 @@ function energyAt(d: Float32Array, hz: number): number {
   return Math.hypot(re, im) / d.length;
 }
 
-describe("breakerMED: chords", () => {
+describe("BreakerMED: chords", () => {
   it("the table: 15 chords; a chord's notes over the one written", () => {
     expect(DEFAULT_CHORDS.length).toBe(15);
     const s = song();

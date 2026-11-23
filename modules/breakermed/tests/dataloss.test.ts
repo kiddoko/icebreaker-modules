@@ -9,7 +9,7 @@ describe("0.12 R1: med save never writes over another song", () => {
     await d.med("med new");
     d.answers.push("songs/first.bmed");
     expect(await d.med("med save")).toBe(0);
-    expect(d.asked.at(-1)).toMatch(/^SAVE AS/);
+    expect(d.asked.at(-1)).toMatch(/^save as/);
     expect(d.files.has("songs/first.bmed/song.json")).toBe(true);
     await d.med("med new --force");
     await d.med("med tempo 77");
@@ -25,7 +25,7 @@ describe("0.12 R1: med save never writes over another song", () => {
     await d.med("med save");
     await d.med("med new --force");
     await d.med("med save"); // no answer: the window is closed
-    expect(d.asked.at(-1)).toBe("SAVE AS (songs/untitled 2.bmed)");
+    expect(d.asked.at(-1)).toBe("save as (songs/untitled 2.bmed)");
     expect(d.log).toMatch(/not saved/);
   });
   it("saving onto another song's file asks first; cancel writes nothing", async () => {
@@ -37,7 +37,7 @@ describe("0.12 R1: med save never writes over another song", () => {
     await d.med("med tempo 99");
     d.answers.push("songs/a.bmed", null); // the name, then "cancel" on the question
     expect(await d.med("med save")).toBe(1);
-    expect(d.asked.at(-1)).toMatch(/already exists/);
+    expect(d.asked.at(-1)).toMatch(/already there/);
     expect(JSON.parse(d.files.get("songs/a.bmed/song.json") as string).tempo.tempo).not.toBe(99);
   });
   it("a song saved once saves again in place, without a question", async () => {

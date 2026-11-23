@@ -33,7 +33,7 @@ const roughness = (d: Float32Array) => {
   return s / Math.max(1e-9, e);
 };
 
-describe("breakerMED: the FM synth", () => {
+describe("BreakerMED: the FM synth", () => {
   it("index 0 is a plain sine at the note (C-3 = 261.6 Hz)", () => {
     const ins = fm("organ");
     ins.fm!.index = 0;
@@ -74,7 +74,7 @@ describe("breakerMED: the FM synth", () => {
   });
 });
 
-describe("breakerMED: an FM synth in a song", () => {
+describe("BreakerMED: an FM synth in a song", () => {
   const song = () => {
     const s = newSong(2);
     s.instruments = [fm("epiano")];

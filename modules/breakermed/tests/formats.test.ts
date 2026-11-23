@@ -10,7 +10,7 @@ import { newSong, NOTE_OFF, type Song } from "../src/song";
 
 const cellsOf = (s: Song) => s.blocks.map((b) => b.cells.map((row) => row.map((c) => [c.note, c.inst, c.cmd.join(","), c.val.join(",")].join(" "))));
 
-describe("breakerMED: WAV", () => {
+describe("BreakerMED: WAV", () => {
   it("16, 24 bits and 32-bit float come back (within their precision)", () => {
     const ch = [Float32Array.from([0, 0.5, -0.5, 1, -1]), Float32Array.from([0.25, -0.25, 0, 0.1, -0.1])];
     for (const bits of [16, 24, 32] as const) {
@@ -24,7 +24,7 @@ describe("breakerMED: WAV", () => {
   });
 });
 
-describe("breakerMED: our format (.bmed)", () => {
+describe("BreakerMED: our format (.bmed)", () => {
   it("keeps the tracks, their names, the cells, the instruments", async () => {
     const song = newSong(8);
     song.instruments = readSong(demoMod()).instruments;
@@ -56,14 +56,14 @@ describe("breakerMED: our format (.bmed)", () => {
     });
   });
 
-  it("refuses what isn't one of its songs, or one from a newer breakerMED", async () => {
+  it("refuses what isn't one of its songs, or one from a newer BreakerMED", async () => {
     await expect(readBmed("{nope", async () => new Uint8Array())).rejects.toThrow(/JSON/);
-    await expect(readBmed('{"title":"x"}', async () => new Uint8Array())).rejects.toThrow(/breakerMED/);
+    await expect(readBmed('{"title":"x"}', async () => new Uint8Array())).rejects.toThrow(/BreakerMED/);
     await expect(readBmed('{"breakermed":99}', async () => new Uint8Array())).rejects.toThrow(/newer/);
   });
 });
 
-describe("breakerMED: writing .mod and .med", () => {
+describe("BreakerMED: writing .mod and .med", () => {
   it(".mod: the demo comes back the same, and lasts as long", () => {
     const demo = readSong(demoMod());
     const { bytes, warnings } = writeMod(demo);

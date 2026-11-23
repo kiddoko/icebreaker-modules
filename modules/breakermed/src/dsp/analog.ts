@@ -1,5 +1,5 @@
 /**
- * breakerMED — the analog synth (subtractive, the classic way: Moog, Juno,
+ * BreakerMED — the analog synth (subtractive, the classic way: Moog, Juno,
  * SH-101). Two oscillators and a sub → a filter (low / high / band-pass, 12 or
  * 24 dB, resonance) → an amplifier; an envelope for each (ADSR), an LFO for the
  * pitch, the filter or the pulse width, glide. Our own code: band-limited

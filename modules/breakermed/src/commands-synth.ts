@@ -1,5 +1,5 @@
 /**
- * breakerMED — `med synth …`, `med fm …` and `med drums …`: our computed
+ * BreakerMED — `med synth …`, `med fm …` and `med drums …`: our computed
  * instruments' settings as commands (the INSTRUMENT screen's presets and kits run these). Every change goes through the editor:
  * ⌘Z / `med undo` brings the old settings back.
  */

@@ -1,10 +1,14 @@
 /**
- * breakerMED — a voice: one sound playing on a track (or one note of a
+ * BreakerMED — a voice: one sound playing on a track (or one note of a
  * chord). Every kind of instrument has its own (a sample, an analog synth, an
  * FM synth, a drum): the renderer only knows this shape, so a new kind of
  * instrument plugs in without touching the rest.
  */
-import type { Instrument } from "../song";
+import { PAULA_CLOCK, type Instrument } from "../song";
+import { VintageVoice } from "./vintage";
+
+/** a sample's frames a second at C-3 when it has no rate of its own (the Amiga's: period 214) */
+const C3 = PAULA_CLOCK / 214;
 import { AnalogVoice } from "./analog";
 import { DrumVoice } from "./drums";
 import { ChipVoice } from "./chip";
@@ -46,6 +50,8 @@ export class SampleVoice implements Voice {
   private step = 1;
   private gl = 0;
   private gr = 0;
+  /** its own rate against the Amiga's (a sound kept at 48 kHz: 48 000 / 16 574) */
+  private k = 1;
 
   constructor(private readonly outRate: number) {}
 
@@ -57,12 +63,13 @@ export class SampleVoice implements Voice {
     this.pingPong = i.pingPong && this.loopEnd > 0;
     this.pos = Math.max(0, n.offset);
     this.dir = 1;
-    this.step = Math.max(0, n.rate) / this.outRate;
+    this.k = i.rate ? i.rate / C3 : 1;
+    this.step = (Math.max(0, n.rate) * this.k) / this.outRate;
     this.on = this.pos < this.data.length;
   }
 
   set(rate: number, volume: number, pan: number): void {
-    this.step = Math.max(0, rate) / this.outRate;
+    this.step = (Math.max(0, rate) * this.k) / this.outRate;
     const v = Math.max(0, Math.min(1, volume));
     // linear pan: the middle is full on both sides (an Amiga voice is hard left or right)
     this.gl = v * Math.min(1, 1 - pan);
@@ -103,6 +110,17 @@ export class SampleVoice implements Voice {
 
 /** The voice an instrument plays with: a sample's, or a synth's (it releases its notes instead of cutting them). */
 export function voiceFor(instrument: Instrument, outRate: number, paula: boolean): Voice {
+  const v = plainVoice(instrument, outRate, paula);
+  // the vintage mode: the voice through an old machine's converter (vintage.ts)
+  if (instrument.vintage) {
+    // Paula reads a sample frame by frame: never smoothed in front of it
+    if (v instanceof SampleVoice && instrument.vintage.kind === "amiga") v.paula = true;
+    return new VintageVoice(v, outRate, instrument.vintage);
+  }
+  return v;
+}
+
+function plainVoice(instrument: Instrument, outRate: number, paula: boolean): Voice {
   if (instrument.kind === "analog") return new AnalogVoice(outRate);
   if (instrument.kind === "fm") return new FmVoice(outRate);
   if (instrument.kind === "drums") return new DrumVoice(outRate);

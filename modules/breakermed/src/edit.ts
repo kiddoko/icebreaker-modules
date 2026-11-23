@@ -1,12 +1,12 @@
 /**
- * breakerMED — editing a song: what the page's keys and the `med` commands
+ * BreakerMED — editing a song: what the page's keys and the `med` commands
  * change, in one place, each change undoable. No UI here (tests/edit.test.ts).
  *
  * A cell has columns: 0 the note, 1–2 the instrument (two hex digits), 3 the
  * chord (one digit, 1–F of the song's table), then per command page 4 more:
  * the command's two digits, the parameter's two.
  */
-import { computed, DEFAULT_CHORDS, MAX_STRUM_MS, emptyCell, type ChordDef, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
+import { computed, DEFAULT_CHORDS, MAX_NOTE, MAX_STRUM_MS, emptyCell, type ChordDef, MAX_TRACKS, newBlock, NOTE_OFF, type Block, type Cell, type Instrument, type Song } from "./song";
 
 /** a song holds 63 instruments at most (OctaMED's limit) */
 export const MAX_INSTRUMENTS = 63;
@@ -50,6 +50,15 @@ interface Step {
   at?: number;
   /** changes only how it plays here (mute, solo): not the song, so not "unsaved" */
   view?: boolean;
+  /** the first cell it touched: undo / redo take the cursor there (I9) */
+  spot?: Spot;
+}
+
+/** a cell of a block */
+export interface Spot {
+  block: number;
+  line: number;
+  track: number;
 }
 
 /** nudges of one setting closer than this (ms) are one undo: ←→ held, the wheel, ‹ › clicked */
@@ -79,6 +88,12 @@ export class Editor {
   private undone: Step[] = [];
   /** something changed (the title shows ●, `med save` clears it) */
   dirty = false;
+  /** where the last undo / redo happened, when it touched cells */
+  lastSpot: Spot | null = null;
+  /** how many steps were done when the song was last saved (back there: not dirty, P7); -1: never */
+  private savedAt = 0;
+  /** steps done since the history began (an undo takes one back) */
+  private depth = 0;
   onChange?: () => void;
   /** the clock merging uses (tests set it) */
   now: () => number = () => Date.now();
@@ -96,6 +111,8 @@ export class Editor {
     if (!s) return null;
     s.undo();
     this.undone.push(s);
+    if (!s.view) this.depth--;
+    this.lastSpot = s.spot ?? null;
     this.changed(s);
     return s.label;
   }
@@ -106,13 +123,28 @@ export class Editor {
     s.redo();
     s.at = 0; // a redone step never merges with the next one
     this.done.push(s);
+    if (!s.view) this.depth++;
+    this.lastSpot = s.spot ?? null;
     this.changed(s);
     return s.label;
   }
 
   private changed(s?: Step): void {
-    if (!s?.view) this.dirty = true;
+    // back where it was saved (undo, redo): not dirty any more (P7)
+    if (!s?.view) this.dirty = this.depth !== this.savedAt;
     this.onChange?.();
+  }
+
+  /** changes that are in no file (an autosaved copy brought back) */
+  markUnsaved(): void {
+    this.savedAt = -1;
+    this.dirty = true;
+  }
+
+  /** the song was saved as it is now: undoing back here later is "saved" again */
+  markSaved(): void {
+    this.savedAt = this.depth;
+    this.dirty = false;
   }
 
   /** a change as a snapshot of what it touches, before and after */
@@ -124,7 +156,7 @@ export class Editor {
   }
 
   /** change some cells of a block, undoably */
-  private cells(label: string, block: number, at: [number, number][], fn: (c: Cell, line: number, track: number) => void): void {
+  private cells(label: string, block: number, at: [number, number][], fn: (c: Cell, line: number, track: number) => void, merge?: string): void {
     const b = this.song.blocks[block];
     if (!b) return;
     const spots = at.filter(([l, t]) => l >= 0 && l < b.lines && t >= 0 && t < this.song.tracks);
@@ -133,7 +165,7 @@ export class Editor {
     for (const [l, t] of spots) fn(b.cells[l][t], l, t);
     const after = spots.map(([l, t]) => clone(b.cells[l][t]));
     const put = (cells: Cell[]) => spots.forEach(([l, t], i) => (b.cells[l][t] = clone(cells[i])));
-    this.record({ label, undo: () => put(before), redo: () => put(after) });
+    this.record({ label, undo: () => put(before), redo: () => put(after), merge, spot: { block, line: spots[0][0], track: spots[0][1] } });
   }
 
   /** change the song's shape (blocks, lines, the sequence, the tracks), undoably */
@@ -162,9 +194,13 @@ export class Editor {
     if (s.merge && last?.merge === s.merge && !this.undone.length && now - (last.at ?? 0) <= MERGE_MS) {
       last.redo = s.redo;
       last.at = now;
+      if (!s.view && this.depth === this.savedAt) this.savedAt = -1; // the saved step itself changed
       return this.changed(s);
     }
     s.at = now;
+    // a new change after undoing past the save: that saved state can't come back
+    if (this.undone.length && this.savedAt > this.depth) this.savedAt = -1;
+    if (!s.view) this.depth++;
     this.done.push(s);
     if (this.done.length > 500) this.done.shift();
     this.undone = [];
@@ -200,7 +236,7 @@ export class Editor {
 
   /** a note (and the instrument, when one is given) */
   writeNote(block: number, line: number, track: number, note: number, inst = 0): void {
-    const n = note === NOTE_OFF ? NOTE_OFF : Math.max(1, Math.min(127, note));
+    const n = note === NOTE_OFF ? NOTE_OFF : Math.max(1, Math.min(MAX_NOTE, note));
     this.cells("note", block, [[line, track]], (c) => {
       c.note = n;
       if (inst && n !== NOTE_OFF) c.inst = inst;
@@ -211,6 +247,8 @@ export class Editor {
   writeHex(block: number, line: number, track: number, col: number, digit: number): void {
     const k = colKind(col);
     if (k.kind === "note") return;
+    // the digits of one field typed one after the other: one undo (I9)
+    const field = k.kind === "inst" ? "inst" : k.kind === "chord" ? "chord" : `cmd${k.page}`;
     this.cells("digit", block, [[line, track]], (c) => {
       if (k.kind === "inst") c.inst = Math.min(63, setNibble(c.inst, k.digit, digit));
       else if (k.kind === "chord") {
@@ -221,7 +259,7 @@ export class Editor {
         if (k.kind === "cmd") c.cmd[k.page] = setNibble(c.cmd[k.page], k.digit, digit);
         else c.val[k.page] = setNibble(c.val[k.page], k.digit, digit);
       }
-    });
+    }, `digit:${block}:${line}:${track}:${field}`);
   }
 
   /** empty what a column holds: the note (and its instrument), the instrument, or a page's command */
@@ -285,6 +323,8 @@ export class Editor {
       const src = clip.cells[l - line][t - track];
       c.note = src.note;
       c.inst = src.inst;
+      if (src.chord) c.chord = src.chord;
+      else delete c.chord;
       for (let p = 0; p < Math.max(c.cmd.length, src.cmd.length); p++) {
         if (p >= c.cmd.length) break; // a page this block hasn't got
         c.cmd[p] = src.cmd[p] ?? 0;
@@ -293,11 +333,22 @@ export class Editor {
     });
   }
 
-  /** the notes of a selection, up or down (semitones); note offs and empty cells stay */
-  transpose(sel: Selection, semis: number): void {
-    this.cells("transpose", sel.block, spotsOf(sel), (c) => {
-      if (c.note && c.note !== NOTE_OFF) c.note = Math.max(1, Math.min(127, c.note + semis));
+  /**
+   * The notes of a selection, up or down (semitones); note offs and empty cells stay.
+   * A note that would leave C-1…B-9: nothing moves (false) — squeezing them would change the tune (P8).
+   */
+  transpose(sel: Selection, semis: number): boolean {
+    const b = this.song.blocks[sel.block];
+    if (!b) return false;
+    const out = spotsOf(sel).some(([l, t]) => {
+      const n = b.cells[l]?.[t]?.note ?? 0;
+      return n && n !== NOTE_OFF && (n + semis < 1 || n + semis > MAX_NOTE);
     });
+    if (out) return false;
+    this.cells("transpose", sel.block, spotsOf(sel), (c) => {
+      if (c.note && c.note !== NOTE_OFF) c.note += semis;
+    });
+    return true;
   }
 
   // ── the song's shape ────────────────────────────────────────────────────

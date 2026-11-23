@@ -1,5 +1,5 @@
 /**
- * breakerMED — the engine: it computes the sound here, in the module (the
+ * BreakerMED — the engine: it computes the sound here, in the module (the
  * renderer: render.ts), and hands it to the deck through ib.audio.stream. The
  * deck asks for more whenever it runs low (~16 ms left): about 30 ms from a key
  * to the sound, and a song that never stutters. It also knows which line is
@@ -90,6 +90,13 @@ export class Engine {
   silence(): void {
     this.stop();
     this.r?.silence();
+  }
+
+  /** the keys' notes let go (space, stopped) · true: something was ringing */
+  hush(): boolean {
+    const was = !!this.r?.ringing;
+    this.r?.hush();
+    return was;
   }
 
   /** The line being heard now (null when stopped). */

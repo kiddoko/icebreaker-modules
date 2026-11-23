@@ -3,7 +3,7 @@ import { key, makeDeck, type RecUI } from "./harness";
 
 /** the screen position of a block line's cell (from the line numbers drawn) */
 function cellXY(ui: RecUI, line: number, track: number) {
-  const num = ui.texts.find((d) => d.s === line.toString(16).toUpperCase().padStart(3, "0") && d.x > 10);
+  const num = ui.texts.find((d) => d.s.trim() === String(line).padStart(3, "0") && d.x > 10); // decimal (0.13, D2)
   if (!num) throw new Error(`line ${line} not on screen`);
   const head = ui.texts.filter((d) => d.y === num.y - 1 - (num.y - 1 - ui.texts.find((t) => /kick/.test(t.s))!.y) && /▪|■|M /.test(d.s));
   void head;
@@ -121,13 +121,13 @@ describe("0.12: the view (centred by default, or scrolling at the edges) and fol
     const d = makeDeck();
     await d.med("med new");
     d.st.line = 0;
-    const top = (ui: RecUI) => ui.texts.filter((t) => t.x > 20 && /^[0-9A-F]{3}$/.test(t.s)).sort((a, b) => a.y - b.y)[0];
+    const top = (ui: RecUI) => ui.texts.filter((t) => t.x > 20 && /^ \d{3}$/.test(t.s)).sort((a, b) => a.y - b.y)[0];
     expect(top(d.draw()).y).toBeGreaterThan(8);
     expect(await d.med("med view edges")).toBe(0);
-    expect(top(d.draw()).s).toBe("000");
+    expect(top(d.draw()).s.trim()).toBe("000");
     d.st.line = 50;
     const ui = d.draw();
-    const shown = ui.texts.filter((t) => t.x > 20 && /^[0-9A-F]{3}$/.test(t.s)).map((t) => parseInt(t.s, 16));
+    const shown = ui.texts.filter((t) => t.x > 20 && /^ \d{3}$/.test(t.s)).map((t) => parseInt(t.s, 10));
     expect(shown).toContain(50);
   });
   it("follow off: playing leaves the cursor where you edit", async () => {

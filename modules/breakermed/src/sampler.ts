@@ -1,5 +1,5 @@
 /**
- * breakerMED — the sampler's tools: plain operations on a sample's frames
+ * BreakerMED — the sampler's tools: plain operations on a sample's frames
  * (mono floats, -1…1), each returning a new array (the editor keeps the old
  * one for ⌘Z). No UI here (tests/sampler.test.ts).
  *

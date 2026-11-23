@@ -13,7 +13,7 @@ import { newSong } from "../src/song";
 
 const ramp = (n: number) => Float32Array.from({ length: n }, (_, i) => i / n);
 
-describe("breakerMED: the sampler's tools", () => {
+describe("BreakerMED: the sampler's tools", () => {
   it("chop: equal slices covering everything; slices at cuts", () => {
     const parts = chop(ramp(10), 3);
     expect(parts.map((p) => p.length)).toEqual([3, 3, 4]);
@@ -54,7 +54,7 @@ describe("breakerMED: the sampler's tools", () => {
   });
 });
 
-describe("breakerMED: reading sounds", () => {
+describe("BreakerMED: reading sounds", () => {
   it("AIFF (16 bits, AIFF-C float) back from our writer", () => {
     const ch = [Float32Array.from([0, 0.5, -0.5, 0.25])];
     for (const bits of [16, 24, 32] as const) {
@@ -77,17 +77,19 @@ describe("breakerMED: reading sounds", () => {
     expect(s.channels[0][0]).toBe(0.5);
   });
 
-  it("an imported sound becomes mono at the HQ rate, an octave up (C-3 plays it as recorded)", async () => {
+  it("an imported sound becomes mono and keeps its own rate (0.13, D4: C-3 plays it as recorded)", async () => {
     const wav = writeWav({ rate: 44100, channels: [new Float32Array(44100).fill(0.5), new Float32Array(44100).fill(-0.5)] }, 16);
     const ins = await readSample(wav, "drums/kick.wav");
     expect(ins.name).toBe("kick");
-    expect(ins.transpose).toBe(12);
-    expect(ins.data.length).toBeCloseTo(HQ_RATE, -2);
+    expect(ins.transpose).toBe(0);
+    expect(ins.rate).toBe(44100);
+    expect(ins.data.length).toBe(44100);
+    expect((await readSample(wav, "k.wav", undefined, true)).data.length).toBeCloseTo(HQ_RATE / 2, -2);
     expect(Math.abs(ins.data[100])).toBeLessThan(1e-3); // left and right averaged
   });
 });
 
-describe("breakerMED: instruments in the editor", () => {
+describe("BreakerMED: instruments in the editor", () => {
   it("changes are undoable; new instruments go to free slots", () => {
     const song = newSong(4);
     song.instruments = readSong(demoMod()).instruments;

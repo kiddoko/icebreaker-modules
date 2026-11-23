@@ -1,5 +1,5 @@
 /**
- * breakerMED — the settings of our computed instruments, one by one: a list
+ * BreakerMED — the settings of our computed instruments, one by one: a list
  * says each one's key ("filter.cutoff"), its label, its choices or its range.
  * The commands, the INSTRUMENT screen and .bmed all go through it, for every
  * kind of synth (analog.ts, fm.ts), so a new setting is one line in a list.

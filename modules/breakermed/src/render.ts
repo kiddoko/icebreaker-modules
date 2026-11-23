@@ -1,5 +1,5 @@
 /**
- * breakerMED — the renderer: the song turned into sound, frame by frame, here
+ * BreakerMED — the renderer: the song turned into sound, frame by frame, here
  * in the module (the deck only plays what we hand it: ib.audio.stream). The
  * replayer says what each track does on each tick; the renderer starts and
  * changes the voices exactly on the tick's first frame and mixes them.
@@ -37,7 +37,7 @@ export class Renderer {
   ended = false;
   private player: Player | null = null;
   private voices: (Voice | null)[] = [];
-  private previews: { voice: Voice; until: number; released?: boolean }[] = [];
+  private previews: { voice: Voice; inst: number; until: number; released?: boolean }[] = [];
   /** voices still releasing after their track moved on (a synth's tail) */
   private tails: Voice[] = [];
   /** each track's chord: the extra voices over its note, and their intervals */
@@ -96,6 +96,16 @@ export class Renderer {
   }
 
   /** Everything quiet now: no song, no note ringing, no echo (the deck silenced us). */
+  /** what the keys play, let go (space when stopped) */
+  hush(): void {
+    for (const p of this.previews) if (p && !p.released) (p.voice.stop(), (p.released = true));
+  }
+
+  /** a key still ringing */
+  get ringing(): boolean {
+    return this.previews.some((p) => p && !p.released && p.voice.on);
+  }
+
   silence(): void {
     this.player = null;
     this.voices = [];
@@ -127,16 +137,22 @@ export class Renderer {
     return this.playing || this.previews.some((p) => p?.voice.on) || this.voices.some((v) => v?.on) || this.tails.length > 0 || this.chordVoices.some((l) => l?.some((v) => v.on)) || this.echoing();
   }
 
-  /** A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the deck). */
-  preview(inst: number, rate: number, seconds = 0.6): void {
+  /**
+   * A key played now: instrument `inst` at `rate`, for `seconds` at most (no key-up from the
+   * deck). Unsaid: a sample with no loop plays to its end (30 s at most), a looped one or a
+   * synth 1.5 s, a drum rings out. A new key on the same instrument stops its last one.
+   */
+  preview(inst: number, rate: number, seconds?: number): void {
     const instrument = this.song.instruments[inst];
     if (!instrument || instrument.kind === "empty") return;
     if (instrument.kind === "drums") seconds = 10; // a drum isn't held: it rings out on its own
+    seconds ??= instrument.kind === "sample" && !instrument.loopLength && instrument.data.length ? Math.min(30, instrument.data.length / Math.max(1, rate)) : 1.5;
+    for (const p of this.previews) if (p && p.inst === inst && !p.released) (p.voice.stop(), (p.released = true));
     const slot = this.nextPreview++ % PREVIEWS;
     const voice = voiceFor(instrument, this.rate, this.paula);
     voice.start({ instrument, rate, offset: 0 });
     voice.set(rate, PREVIEW_GAIN * instrument.gain * (instrument.volume / 64), 0);
-    this.previews[slot] = { voice, until: this.frame + Math.round(seconds * this.rate) };
+    this.previews[slot] = { voice, inst, until: this.frame + Math.round(seconds * this.rate) };
   }
 
   /** The next `n` frames, added into left / right (they start at zero). */
@@ -295,8 +311,9 @@ export class Renderer {
       } else {
         // what was playing on the track rings on (a synth's release, a drum's tail), then the new note
         if (old?.on && old.rings) {
-          if (!(old instanceof DrumVoice)) old.stop(); // a synth releases; a drum rings out as it is
-          if (old instanceof DrumVoice && instrument.kind === "drums" && old.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) old.kill();
+          const was = coreOf(old);
+          if (!(was instanceof DrumVoice)) old.stop(); // a synth releases; a drum rings out as it is
+          if (was instanceof DrumVoice && instrument.kind === "drums" && was.chokedBy(drumOf(e.rate ?? 8363, C3_RATE))) (old as Voice & { kill?: () => void }).kill ? (old as Voice & { kill: () => void }).kill() : was.kill();
           if (old.on && this.tails.length < 32) this.tails.push(old);
         }
         const v = voiceFor(instrument, this.rate, this.paula) as Voice & { instrument?: unknown };
@@ -309,14 +326,15 @@ export class Renderer {
       // the chord: the old one's notes let go (or ring on), the new one's start with the note
       for (const old of this.chordVoices[e.voice] ?? []) {
         if (!old.on || !old.rings) continue;
-        if (!(old instanceof DrumVoice || (old instanceof Strummed && old.inner instanceof DrumVoice))) old.stop();
+        if (!(coreOf(old) instanceof DrumVoice)) old.stop();
         if (old.on && this.tails.length < 32) this.tails.push(old);
       }
       let steps = (e.chord ?? []).slice(0, MAX_CHORD_NOTES);
       // a chip with its arpeggio on plays the chord itself, one note after the other (the chiptune way)
       const main = this.voices[e.voice];
-      if (steps.length && main instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
-        main.arpeggio(steps);
+      const chip = coreOf(main);
+      if (steps.length && chip instanceof ChipVoice && (instrument.chip?.arp ?? 0) > 0) {
+        chip.arpeggio(steps);
         steps = [];
       }
       this.chordSteps[e.voice] = steps;
@@ -344,6 +362,13 @@ export class Renderer {
     v.set(s.lastRate, s.lastVol * k, s.lastPan);
     chord.forEach((cv, i) => cv.set(s.lastRate! * 2 ** ((this.chordSteps[e.voice]?.[i] ?? 0) / 12), s.lastVol! * k, s.lastPan!));
   }
+}
+
+/** the voice inside its wrappers (a strum, the vintage mode): what kind of sound it is */
+export function coreOf(v: Voice | null | undefined): Voice | null | undefined {
+  let x = v;
+  while (x && "inner" in x && (x as { inner?: Voice }).inner) x = (x as { inner: Voice }).inner;
+  return x;
 }
 
 /** A chord's note that starts `wait` frames late (a strum): silent until then, the same voice after. */

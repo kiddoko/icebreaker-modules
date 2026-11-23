@@ -23,7 +23,7 @@ function hit(ins: Instrument, drum: number, seconds = 6) {
   return { v, l, peak };
 }
 
-describe("breakerMED: the drum machine", () => {
+describe("BreakerMED: the drum machine", () => {
   it("every drum sounds, stays below full scale, and ends by itself", () => {
     DRUM_NAMES.forEach((name, d) => {
       const { v, peak } = hit(kit(), d);
@@ -72,7 +72,7 @@ describe("breakerMED: the drum machine", () => {
   });
 });
 
-describe("breakerMED: drums in a song", () => {
+describe("BreakerMED: drums in a song", () => {
   const song = (notes: [number, number][]) => {
     const s = newSong(2);
     s.instruments = [kit()];

@@ -8,7 +8,7 @@ const fresh = () => {
 };
 const cell = (s: ReturnType<typeof newSong>, l: number, t: number) => s.blocks[0].cells[l][t];
 
-describe("breakerMED: editing", () => {
+describe("BreakerMED: editing", () => {
   it("columns: the note, two instrument digits, four a command page", () => {
     expect(colsOf(1)).toBe(8);
     expect(colKind(0)).toEqual({ kind: "note" });

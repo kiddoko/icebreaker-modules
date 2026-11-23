@@ -1,5 +1,5 @@
 /**
- * breakerMED — the "new song" template: 8 named tracks, a drum machine, an analog
+ * BreakerMED — the "new song" template: 8 named tracks, a drum machine, an analog
  * bass, a lead, a pad and an FM e-piano for the chords, and a first bar written so
  * that ▶ plays something at once. Everything is computed (no sample to load).
  */

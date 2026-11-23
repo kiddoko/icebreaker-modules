@@ -1,12 +1,12 @@
 /**
- * breakerMED — our computed instruments turned into samples, for the files
+ * BreakerMED — our computed instruments turned into samples, for the files
  * other trackers read (.mod, .med hold samples only):
  *   a synth  → its middle C, held for a while, then released;
  *   a kit    → each drum the song plays becomes an instrument of its own, and
  *              the notes that played it now play that sample at C-3.
  */
 import { emptyInstrument, type Instrument, type Song } from "../song";
-import { HQ_RATE } from "../sampler";
+import { HQ_RATE, resample } from "../sampler";
 import { AnalogVoice, C3_RATE } from "./analog";
 import { DRUM_NAMES, DrumVoice } from "./drums";
 import { FmVoice } from "./fm";
@@ -87,6 +87,24 @@ export function bakeDrum(ins: Instrument, drum: number): Instrument {
   v.start({ instrument: ins, rate: C3_RATE * 2 ** (drum / 12), offset: 0 });
   v.set(C3_RATE, 1, 0);
   return asSample(ins, `${ins.name || "kit"} ${DRUM_NAMES[drum]}`, record(v, 8, 8));
+}
+
+/**
+ * The song with every sound at the Amiga's rates (a .mod / .med has no rate of
+ * its own a sample): one kept at its own rate is resampled to HQ_RATE, an
+ * octave up (C-3 still plays it as it was). The song itself isn't changed.
+ */
+export function withAmigaRates(song: Song): Song {
+  if (!song.instruments.some((i) => i.rate)) return song;
+  const instruments = song.instruments.map((i) => {
+    if (!i.rate) return i;
+    const k = i.rate / HQ_RATE;
+    const out: Instrument = { ...i, data: resample(i.data, k, true), transpose: i.transpose + 12, loopStart: Math.round(i.loopStart / k), loopLength: Math.round(i.loopLength / k) };
+    if (i.right) out.right = resample(i.right, k, true);
+    delete out.rate;
+    return out;
+  });
+  return { ...song, instruments };
 }
 
 /**

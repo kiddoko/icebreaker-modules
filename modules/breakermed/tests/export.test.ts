@@ -90,7 +90,7 @@ function readFlac(b: Uint8Array): { rate: number; bits: number; channels: Int32A
   return { rate, bits, channels: out };
 }
 
-describe("breakerMED: FLAC", () => {
+describe("BreakerMED: FLAC", () => {
   it("what we write reads back exactly (16 and 24 bits, blocks and the last short one)", () => {
     const n = 10_000;
     const l = Float32Array.from({ length: n }, (_, i) => 0.6 * Math.sin(i / 7) + (i % 97 === 0 ? 0.3 : 0));
@@ -109,7 +109,7 @@ describe("breakerMED: FLAC", () => {
   });
 });
 
-describe("breakerMED: AIFF", () => {
+describe("BreakerMED: AIFF", () => {
   it("a FORM with COMM (rate as an 80-bit number) and SSND; AIFF-C for 32-bit float", () => {
     const pcm = { rate: 44100, channels: [Float32Array.from([0, 0.5, -0.5])] };
     const a = writeAiff(pcm, 16);
@@ -127,7 +127,7 @@ describe("breakerMED: AIFF", () => {
   });
 });
 
-describe("breakerMED: rendering an export", () => {
+describe("BreakerMED: rendering an export", () => {
   it("lasts the song once through plus its tail, at the rate asked", async () => {
     const song = readSong(demoMod());
     const pcm = await renderSong(song, { rate: 22050, bits: 16, paula: true, tail: 1 });
