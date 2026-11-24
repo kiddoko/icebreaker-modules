@@ -4918,9 +4918,21 @@ function songLength(song, maxSeconds = 3600) {
 var VINTAGE_KINDS = ["amiga", "akai"];
 /** what each one is, said in a line (the screen, med vintage) */
 var VINTAGE_SAID = {
-	amiga: "Amiga: 8 bits, the note's own rate, the A500's filter",
-	akai: "Akai S900 / S950-style: 12 bits, a lower rate, aliasing"
+	amiga: "{amiga}: 8 bits, the note's own rate, the A500's filter",
+	akai: "{akai} S900 / S950-style: 12 bits, a lower rate, aliasing"
 };
+/**
+* The machines' names. The deck lowers what t() gives and what the LOG shows (its uiCase:
+* « vintage amiga ») but keeps a {var}'s case, and its list of proper names is its own: so
+* the names go in as {vars} — t(text, NAMES) on the page, named(text) in the LOG, the table's
+* keys with the same {vars} (they catch the name as it was written).
+*/
+var NAMES = {
+	amiga: "Amiga",
+	akai: "Akai",
+	paula: "Paula"
+};
+var named = (s) => s.replace(/\{(amiga|akai|paula)\}/g, (_, k) => NAMES[k]);
 /** Paula's fastest rate (period 124 on a PAL machine) */
 var PAULA_MAX_RATE = 3546895 / 124;
 var AKAI_RATES = [7500, 4e4];
@@ -6571,11 +6583,11 @@ var GUIDE = [
 		rows: [
 			["med sampler", "load a sound into a free instrument (a list of the sounds in songs/)"],
 			["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
-			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the Amiga's)"],
+			["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the {amiga}'s)"],
 			["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
 			["med bounce", "this block, rendered into a new instrument"],
 			["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
-			["alt T · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"]
+			["alt T · med vintage", "the instrument heard through an {amiga} (8 bits, the A500's filter) or an {akai} S900 / S950-style sampler (12 bits, aliasing)"]
 		]
 	},
 	{
@@ -6617,8 +6629,34 @@ function wrap(text, w) {
 	out.push(line);
 	return out;
 }
+/** a key in lines of `w` characters at most, cut between its " · " parts first, then between words */
+function wrapKeys(keys, w) {
+	const out = [];
+	let line = "";
+	for (const part of keys.split(" · ")) {
+		const next = line ? `${line} · ${part}` : part;
+		if ([...next].length <= w) line = next;
+		else {
+			if (line) out.push(`${line} ·`);
+			const pieces = wrap(part, w);
+			out.push(...pieces.slice(0, -1));
+			line = pieces[pieces.length - 1];
+		}
+	}
+	out.push(line);
+	return out;
+}
+/** the parts joined with " · ", as many as fit in `w` whole (the first always: cut if it must) */
+function fitParts(parts, w) {
+	let s = parts[0];
+	for (const p of parts.slice(1)) {
+		if ([...`${s} · ${p}`].length > w) break;
+		s = `${s} · ${p}`;
+	}
+	return s;
+}
 function makeGuide(ib) {
-	const { BOLD, t, truncate } = ib.lib;
+	const { BOLD, t } = ib.lib;
 	let scroll = 0;
 	let height = 10;
 	/** the lines the guide took at its last draw (a long row takes more than one) */
@@ -6636,10 +6674,11 @@ function makeGuide(ib) {
 		const whatW = Math.max(8, inner.w - keyW - 3);
 		const shown = all.flatMap((row) => {
 			if ("title" in row) return row.title ? wrap(t(row.title), Math.max(8, inner.w - 2)).map((title) => ({ title })) : [{ title: "" }];
-			return wrap(t(row.what), whatW).map((what, i) => ({
-				keys: i ? "" : row.keys,
-				what,
-				hexKey: /^[0-9A-F]{2}/.test(row.keys)
+			const keys = wrapKeys(t(row.keys), keyW - 1), what = wrap(t(row.what, NAMES), whatW), hexKey = /^[0-9A-F]{2}/.test(row.keys);
+			return Array.from({ length: Math.max(keys.length, what.length) }, (_, i) => ({
+				keys: keys[i] ?? "",
+				what: what[i] ?? "",
+				hexKey
 			}));
 		});
 		rows = shown.length;
@@ -6651,13 +6690,18 @@ function makeGuide(ib) {
 				attrs: BOLD
 			}, inner.w - 2);
 			else {
-				if (row.keys) ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: row.hexKey ? c.accentAlt : c.fg });
-				ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
+				if (row.keys) ui.text(inner.x + 2, y, row.keys, { fg: row.hexKey ? c.accentAlt : c.fg });
+				if (row.what) ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
 			}
 		}
 		ui.hit(inner, { onWheel: (d) => scroll += Math.sign(d) * 3 });
-		const more = rows > height ? ` ${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓ ` : " ";
-		ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or ⌫: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
+		const parts = [
+			t("? or ⌫: back"),
+			...rows > height ? [`${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓`] : [],
+			"med guide",
+			"med effects"
+		];
+		ui.text(inner.x + 1, inner.y + inner.h - 1, fitParts(parts, inner.w - 2), { fg: c.subtle }, inner.w - 2);
 	};
 	const key = (k) => {
 		switch (k.key) {
@@ -6672,7 +6716,7 @@ function makeGuide(ib) {
 		return false;
 	};
 	/** the guide as text, for the shell */
-	const text = () => GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${a.padEnd(22)} ${b}`).join("\n")}`).join("\n\n") + "\n";
+	const text = () => GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${a.padEnd(22)} ${named(b)}`).join("\n")}`).join("\n\n") + "\n";
 	return {
 		draw,
 		key,
@@ -7292,7 +7336,7 @@ function makeApp(ib, engine, st) {
 			if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, {
 				cmd: `med vintage ${n} ${next}`,
 				quiet: !v,
-				tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt T")}: ${next}`
+				tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an {amiga}'s {paula} or an old {akai} sampler", NAMES) + ` · ${t("click or alt T")}: ${next}`
 			});
 		}
 		const sk = synthOf(ins);
@@ -7389,7 +7433,7 @@ function makeApp(ib, engine, st) {
 			[
 				"stretch ×2",
 				`med sample ${n} stretch 2`,
-				"twice as long, same pitch (Amiga grains)"
+				"twice as long, same pitch ({amiga} grains)"
 			],
 			[
 				"stretch ×½",
@@ -7469,7 +7513,7 @@ function makeApp(ib, engine, st) {
 			if (y >= inner.y + inner.h) break;
 			x += ui.button(x, y, t(label), () => {}, {
 				cmd,
-				tip: tip ? t(tip) : void 0
+				tip: tip ? t(tip, NAMES) : void 0
 			}) + 1;
 		}
 		ui.hit({
@@ -7710,7 +7754,7 @@ function makeApp(ib, engine, st) {
 		},
 		{
 			label: t("clear"),
-			hint: "del (edit mode)",
+			hint: t("del (edit mode)"),
 			cmd: "med clear"
 		},
 		"-",
@@ -7752,7 +7796,7 @@ function makeApp(ib, engine, st) {
 		},
 		{
 			label: t("delete the line"),
-			hint: "⌫ (edit mode)",
+			hint: t("⌫ (edit mode)"),
 			cmd: "med line delete"
 		},
 		{
@@ -8026,7 +8070,7 @@ function makeApp(ib, engine, st) {
 					style: { fg: c.muted },
 					hit: {
 						cmd: `med paula ${engine.paula ? "off" : "on"}`,
-						tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga")
+						tip: engine.paula ? t("the sound: stepped and gritty, like the {amiga}'s {paula} · click: smooth", NAMES) : t("the sound: smooth (interpolated) · click: stepped, like the {amiga}", NAMES)
 					}
 				});
 				if (s.echo) parts.push({
@@ -11635,9 +11679,13 @@ function registerCommands(ib, engine, st) {
 	const savedAs = (p) => /\.(mod|med|mmd1|bmed)$/i.test(p) || /(^|\/)mod\.[^/]+$/i.test(p) ? p : `${p}.bmed`;
 	/** the song has a file of its own (saved, or opened from songs/) */
 	const hasHome = () => st.path.startsWith("songs/");
-	/** a name for a song never saved: its title, or untitled — and a free one ("untitled 2") */
+	/**
+	* a name for a song never saved: its title, or untitled — and a free one ("untitled 2").
+	* Untitled in the deck's language (« songs/sans titre.bmed »: the page says « sans titre »);
+	* what's in memory stays "untitled" (the page, the tab and the autosave know it by that word).
+	*/
 	const freeName = async () => {
-		const base = defaultPath().replace(/\.bmed$/i, "");
+		const base = defaultPath().replace(/\.bmed$/i, "").replace(/(^|\/)untitled$/i, `$1${t("untitled")}`);
 		const titled = st.song?.title && st.song.title !== "untitled" ? `songs/${st.song.title.replace(/[\\/:*?"<>|]/g, "-")}` : base;
 		for (let n = 1; n < 100; n++) {
 			const p = `${titled}${n > 1 ? ` ${n}` : ""}.bmed`;
@@ -12097,7 +12145,7 @@ function registerCommands(ib, engine, st) {
 						const usage = `med vintage <01–3F|.> amiga | akai [${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz] | off`;
 						if (!(n >= 0 && n < Math.min(63, s.instruments.length))) return ctx.err(`med vintage: instrument ${(which ?? "?").toUpperCase()}: the song has 01–${hex(Math.max(1, s.instruments.length))} · ${usage}\n`), 1;
 						const ins = s.instruments[n];
-						const said = (v) => v ? `vintage ${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? 22050} Hz)` : ""}` : "vintage off: the sound as it is";
+						const said = (v) => v ? `vintage ${named(VINTAGE_SAID[v.kind])}${v.kind === "akai" ? ` (${v.rate ?? 22050} Hz)` : ""}` : "vintage off: the sound as it is";
 						if (kind === void 0) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
 						if (kind !== "off" && !VINTAGE_KINDS.includes(kind)) return ctx.err(`med vintage: "${kind}"? ${usage}\n`), 1;
 						const rate = rateS !== void 0 ? parseInt(rateS, 10) : void 0;
@@ -12121,7 +12169,7 @@ function registerCommands(ib, engine, st) {
 						return 0;
 					}
 					case "guide":
-						if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${b}`).join("\n")}`).join("\n\n") + "\n"), 0;
+						if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${named(b)}`).join("\n")}`).join("\n\n") + "\n"), 0;
 						if (st.screen !== "guide") st.back = st.screen;
 						st.screen = "guide";
 						ib.apps.open("breakermed");
@@ -12977,7 +13025,7 @@ var FR = {
 	"4 equal slices → new instruments": "4 tranches égales → nouveaux instruments",
 	"8 equal slices → new instruments": "8 tranches égales → nouveaux instruments",
 	"a slice at each attack": "une tranche à chaque attaque",
-	"twice as long, same pitch (Amiga grains)": "deux fois plus long, même hauteur (grains Amiga)",
+	"twice as long, same pitch ({amiga} grains)": "deux fois plus long, même hauteur (grains {amiga})",
 	"half as long, same pitch": "deux fois plus court, même hauteur",
 	"an octave up (half the frames)": "une octave plus haut",
 	"destructive 8 bits: the grit": "8 bits destructif : le grain",
@@ -13103,8 +13151,8 @@ var FR = {
 	"the keys play it · ↑↓ a setting · ←→ or the wheel: change it (⇧: more)": "les touches le jouent · ↑↓ un réglage · ←→ ou la molette : le changer (⇧ : plus)",
 	"the metronome: a click on each beat while playing · click: off": "le métronome : un clic à chaque temps pendant la lecture · clic : le couper",
 	"the next block": "le bloc suivant",
-	"the sound: smooth (interpolated) · click: stepped, like the Amiga": "le son : lisse (interpolé) · clic : en escalier, comme l'Amiga",
-	"the sound: stepped and gritty, like the Amiga's Paula · click: smooth": "le son : en escalier et granuleux, comme la puce Paula de l'Amiga · clic : lisse",
+	"the sound: smooth (interpolated) · click: stepped, like the {amiga}": "le son : lisse (interpolé) · clic : en escalier, comme l'{amiga}",
+	"the sound: stepped and gritty, like the {amiga}'s {paula} · click: smooth": "le son : en escalier et granuleux, comme la puce {paula} de l'{amiga} · clic : lisse",
 	"the tempo · the wheel changes it · click: the SONG screen": "le tempo · la molette le change · clic : l'écran MORCEAU",
 	"ticks a line (the effects' clock) · the wheel changes it": "ticks par ligne (l'horloge des effets) · la molette le change",
 	"unused": "inutilisé(s)",
@@ -13278,25 +13326,25 @@ var FR = {
 	"each part clicks (▶ play, edit, the tempo, stepped / smooth, follow…), the wheel changes them": "chaque partie se clique (▶ lecture, édition, le tempo, en escalier / lisse, suivre…), la molette les change",
 	"this guide": "ce guide",
 	"the note (C-1 … B-9) · ^^^ a note off": "la note (C-1 … B-9) · ^^^ une note coupée",
-	"a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the Amiga's)": "un .wav .aif .iff .mp3 .m4a .ogg… de songs/ dans l'instrument n : il garde sa propre fréquence (--amiga : celle de l'Amiga)",
+	"a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the {amiga}'s)": "un .wav .aif .iff .mp3 .m4a .ogg… de songs/ dans l'instrument n : il garde sa propre fréquence (--amiga : celle de l'{amiga})",
 	"the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)": "les sons de départ : enregistrés par des gens, des remplaçants calculés en attendant (med pack load <nom>)",
-	"the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)": "l'instrument entendu à travers un Amiga (8 bits, le filtre de l'A500) ou un sampler façon Akai S900 / S950 (12 bits, repliement)",
+	"the instrument heard through an {amiga} (8 bits, the A500's filter) or an {akai} S900 / S950-style sampler (12 bits, aliasing)": "l'instrument entendu à travers un {amiga} (8 bits, le filtre de l'A500) ou un sampler façon {akai} S900 / S950 (12 bits, repliement)",
 	"the instrument the keys play: a sound's tools, a synth's settings, a drum kit, its vintage mode": "l'instrument que jouent les touches : les outils d'un son, les réglages d'un synthé, un kit, son mode vintage",
 	"EDIT MODE (space: the line turns red, ● edit at the top)": "MODE ÉDITION (espace : la ligne devient rouge, ● édition en haut)",
 	"MOVING AROUND": "SE DÉPLACER",
-	"Amiga: 8 bits, the note's own rate, the A500's filter": "Amiga : 8 bits, la fréquence propre de la note, le filtre de l'A500",
-	"Akai S900 / S950-style: 12 bits, a lower rate, aliasing": "façon Akai S900 / S950 : 12 bits, une fréquence plus basse, du repliement",
-	"vintage: heard through an Amiga's Paula or an old Akai sampler": "vintage : entendu à travers la Paula d'un Amiga ou un vieux sampler Akai",
+	"{amiga}: 8 bits, the note's own rate, the A500's filter": "{amiga} : 8 bits, la fréquence propre de la note, le filtre de l'A500",
+	"{akai} S900 / S950-style: 12 bits, a lower rate, aliasing": "façon {akai} S900 / S950 : 12 bits, une fréquence plus basse, du repliement",
+	"vintage: heard through an {amiga}'s {paula} or an old {akai} sampler": "vintage : entendu à travers la {paula} d'un {amiga} ou un vieux sampler {akai}",
 	"edit mode: typing writes in the block": "mode édition : la frappe écrit dans le bloc",
 	"edit mode off: the keys only play": "mode édition coupé : les touches ne font que jouer",
 	"▶ playing the song from position {p}, line {l}": "▶ lecture du morceau depuis la position {p}, ligne {l}",
 	"▶ playing the block from position {p}, line {l}": "▶ lecture du bloc depuis la position {p}, ligne {l}",
 	"■ stopped": "■ arrêté",
 	"position {p} → block {b} · line {l}": "position {p} → bloc {b} · ligne {l}",
-	"vintage Amiga: 8 bits, the note's own rate, the A500's filter": "vintage Amiga : 8 bits, la fréquence propre de la note, le filtre de l'A500",
-	"vintage Akai S900 / S950-style: 12 bits, a lower rate, aliasing ({hz} Hz)": "vintage façon Akai S900 / S950 : 12 bits, une fréquence plus basse, du repliement ({hz} Hz)",
+	"vintage {amiga}: 8 bits, the note's own rate, the A500's filter": "vintage {amiga} : 8 bits, la fréquence propre de la note, le filtre de l'A500",
+	"vintage {akai} S900 / S950-style: 12 bits, a lower rate, aliasing ({hz} Hz)": "vintage façon {akai} S900 / S950 : 12 bits, une fréquence plus basse, du repliement ({hz} Hz)",
 	"vintage off: the sound as it is": "vintage coupé : le son tel quel",
-	"PAULA: stepped, gritty, like the Amiga": "PAULA : en escalier, granuleux, comme l'Amiga",
+	"{paula}: stepped, gritty, like the {amiga}": "{paula} : en escalier, granuleux, comme l'{amiga}",
 	"SMOOTH: interpolated": "LISSE : interpolé",
 	"view: the cursor's line in the middle (ProTracker)": "vue : la ligne du curseur au milieu (ProTracker)",
 	"view: scrolls at its edges (OctaMED)": "vue : défile à ses bords (OctaMED)",
@@ -13336,6 +13384,8 @@ var FR = {
 	"alt PgUp": "alt pg préc",
 	"alt PgDn": "alt pg suiv",
 	"⇧ alt PgUp": "⇧ alt pg préc",
-	"⇧ alt PgDn": "⇧ alt pg suiv"
+	"⇧ alt PgDn": "⇧ alt pg suiv",
+	"del (edit mode)": "suppr (mode édition)",
+	"⌫ (edit mode)": "⌫ (mode édition)"
 };
 export { FR, activate, deactivate };

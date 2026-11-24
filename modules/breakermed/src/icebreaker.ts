@@ -183,7 +183,8 @@ export interface IcebreakerAPI {
   };
   lib: {
     BOLD: number;
-    t(english: string): string;
+    /** `vars` are filled in after the deck lowers the text (its uiCase): a name in one keeps its case */
+    t(english: string, vars?: Record<string, string | number>): string;
     addTranslations(lang: string, table: Record<string, string>): void;
     truncate(s: string, w: number): string;
     /** a shell argument, quoted safely */

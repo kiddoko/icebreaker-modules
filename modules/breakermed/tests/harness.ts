@@ -120,7 +120,7 @@ export interface Deck {
   press(k: KeyInput): boolean;
 }
 
-/** opts.t: the deck's t() (default: English as written) — a French table, the deck's ⌘ → Ctrl… */
+/** opts.t: the deck's t() (default: English as written) — a French table, the deck's ⌘ → Ctrl…; `vars` are filled after it, as the deck does */
 export function makeDeck(opts: { t?: (s: string) => string } = {}): Deck {
   const files = new Map<string, string | Uint8Array>();
   const store = new Map<string, unknown>();
@@ -176,7 +176,7 @@ export function makeDeck(opts: { t?: (s: string) => string } = {}): Deck {
     audio: { available: () => true, stream: async (): Promise<StreamLike> => ({ rate: 48000, low: 800, high: 2400, write() {}, close() {} }), stop: async () => {}, onStop: () => () => {} },
     lib: {
       BOLD: 1,
-      t: opts.t ?? ((s: string) => s),
+      t: (s: string, vars?: Record<string, string | number>) => fill((opts.t ?? ((x: string) => x))(s), vars),
       addTranslations() {},
       truncate: (s: string, w: number) => (s.length > w ? s.slice(0, Math.max(0, w - 1)) + "…" : s),
       q: (s: string) => (/[\s"']/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s),
@@ -235,7 +235,35 @@ export const settle = () => new Promise((r) => setTimeout(r, 0));
  * The deck's tOutput (ICEBREAKER src/core/i18n.ts, 0.7.2), for a module's own table only:
  * a line whole, else piece by piece at " · "; keys with {n} as patterns; a single word left alone.
  */
-export function deckOutput(text: string, table: Record<string, string>): string {
+const fill = (s: string, vars?: Record<string, string | number>) => Object.entries(vars ?? {}).reduce((x, [k, v]) => x.split(`{${k}}`).join(String(v)), s);
+
+/**
+ * The deck's uiCase (ICEBREAKER core/i18n.ts, 0.8.0): THE INTERFACE IS LOWERCASE — what t() gives
+ * and what tOutput finds in a table is lowered, before the {vars} are filled. Kept: acronyms, the
+ * deck's own list of proper names (Amiga, Akai, Paula aren't in it), key hints.
+ */
+const KEEP_CAPS = new Set(["ICEBREAKER", "AI", "API", "CPU", "GPU", "RAM", "JSON", "NAS", "OK", "URL", "USB", "MM", "YYYY", "DD", "HH", "RGB", "CRT", "PDF", "HTTP", "HTTPS", "ID", "UI", "CLI", "GUI", "BPM", "MIDI", "OS", "UTC", "GMT", "AM", "PM", "IP", "LAN", "VPN", "SSH", "MCP", "LLM", "MED", "TTS", "STT", "WAV", "MP", "OGG", "FLAC", "SVG", "PNG", "CSV", "PIN", "QR", "IA", "ZIP", "UK", "US", "ISO", "ICS"]);
+const PROPER = new Set(["Ableton", "Claude", "Code", "Google", "Calendar", "Markdown", "Meteo", "Obsidian", "Anthropic", "Ollama", "Finder", "Explorer", "Windows", "Linux", "Mac", "Spotify", "Apple", "Music", "GitHub", "Tauri", "Chrome", "Safari", "Firefox", "Opus", "Sonnet", "Haiku", "Fable", "Paris", "Unicode", "Gemini", "English", "Français"]);
+export function uiCase(s: string): string {
+  return s.replace(/[A-Za-zÀ-ÖØ-öø-ÿŒœ][A-Za-zÀ-ÖØ-öø-ÿŒœ'’]*/g, (w, at: number) => {
+    if (s[at - 1] === "{" || /[0-9⌘⌥⇧⌃]/.test(s[at - 1] ?? "")) return w;
+    if (/^[A-ZÀ-ÖØ-ÞŒ][A-ZÀ-ÖØ-ÞŒ'’]+$/.test(w)) return KEEP_CAPS.has(w) ? w : w.toLowerCase();
+    if (/^[A-ZÀ-ÖØ-ÞŒ]$/.test(w)) {
+      const caps = (x?: string) => !!x && /^[A-ZÀ-ÖØ-ÞŒ'’]{2,}$/.test(x) && !KEEP_CAPS.has(x);
+      const before = /([A-Za-zÀ-ÖØ-öø-ÿŒœ'’]+)\s*$/.exec(s.slice(0, at))?.[1];
+      const after = /^\s*([A-Za-zÀ-ÖØ-öø-ÿŒœ'’]+)/.exec(s.slice(at + 1))?.[1];
+      return caps(before) || caps(after) ? w.toLowerCase() : w;
+    }
+    if (/^[A-ZÀ-ÖØ-ÞŒ][a-zß-öø-ÿœ'’]+$/.test(w)) return PROPER.has(w) ? w : w.toLowerCase();
+    return w;
+  });
+}
+/** the deck's t() with a table: the text lowered (uiCase), then its {vars} filled */
+export const deckT = (table: Record<string, string>) => (s: string) => uiCase(table[s] ?? s);
+
+/** `lower`: as the deck shows it, lowered (uiCase) before the {vars} are filled */
+export function deckOutput(text: string, table: Record<string, string>, o: { lower?: boolean } = {}): string {
+  const low = (x: string) => (o.lower ? uiCase(x) : x);
   const pats = Object.entries(table)
     .filter(([k]) => k.includes("{") && k.replace(/\{\w+\}/g, "").replace(/[^A-Za-z]/g, "").length >= 3)
     .map(([k, to]) => {
@@ -250,11 +278,11 @@ export function deckOutput(text: string, table: Record<string, string>): string 
     })
     .sort((a, b) => b.re.source.length - a.re.source.length);
   const one = (core: string): string | undefined => {
-    if (core.includes(" ") && table[core] !== undefined) return table[core];
+    if (core.includes(" ") && table[core] !== undefined) return low(table[core]);
     for (const p of pats) {
       const m = p.re.exec(core);
       if (!m || m.slice(1).some((v) => v.includes(" · "))) continue;
-      let s = p.to;
+      let s = low(p.to);
       p.names.forEach((n, i) => (s = s.split(`{${n}}`).join(m[i + 1])));
       return s;
     }

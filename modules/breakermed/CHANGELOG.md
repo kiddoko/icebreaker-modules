@@ -1,5 +1,16 @@
 # BreakerMED — changes
 
+## 0.13.3 (beta)
+
+From the Windows test bench (0.13.2, 24/11).
+
+**Fixed**
+- The guide at ~1000 px: its keys were cut with « … » (« med saveas · Ctrl… », « alt pg préc · alt… », « Ctrl+Z · Ctrl+Shi… », « tabulation · ⇧ ta… »). A key too long for its column now goes on over the next lines, cut between its « · » parts first, like the descriptions beside it. The footer keeps the parts that fit, whole (« med guide ·… » was cut). Tested from 24 to 200 columns, in French and English, with ⌘ and with Ctrl.
+- The cell's right-click menu in French: « effacer  suppr (mode édition) », « supprimer la ligne  ⌫ (mode édition) » (the hints were in English).
+- **Amiga, Akai, Paula** keep their capitals on the page and in the LOG (« vintage Amiga : 8 bits… », not « vintage amiga »). ICEBREAKER lowers what `t()` gives and what the LOG finds in a module's table (its `uiCase`), and its list of proper names belongs to the deck. It never lowers a `{var}`, so the names now go in as `{amiga}`, `{akai}` and `{paula}`, and the French table's keys use the same `{vars}`. English was lowered too, on the page (« like the amiga »).
+- Save as on a new song proposes the name in the deck's language: « songs/sans titre.bmed » in French (« untitled 2 » → « sans titre 2 »). Only the proposed name changes. In memory the song is still "untitled": the page, the tab, the autosave and the "is it named yet" checks all go by that one word, and the page already says it in French. Saved under that name, the song takes « sans titre » as its title, as any file name does.
+- `med guide --text` said the names too.
+
 ## 0.13.2 (beta)
 
 From the Windows test bench (0.13.1, 24/11).

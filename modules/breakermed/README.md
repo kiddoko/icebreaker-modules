@@ -51,6 +51,8 @@ has changes not saved). While it plays: the mix's **level** (▮▮▮▮▯▯:
 (it stays lit 1.5 s). On a song at a sane level LIM comes now and then; lit all the time, the song is
 too loud (lower its tracks' or instruments' volume). **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
 how to start, the edit mode, the keys, a cell's columns, every effect command in hex, the sampler.
+A key or a row too long for its column goes on over the next lines (never cut with « … »), at any
+width down to the deck's narrowest; its footer keeps the parts that fit, whole.
 
 Five screens on the right, by their tabs or **alt B / I / S / E** and **?**:
 
@@ -199,7 +201,8 @@ does has its command: a button's tip names it, and the LOG shows it when it runs
 **save** and **save as…** at the end of the tabs row (also in the right-click menu and on START
 after the page was closed), `med save`, `med saveas`. On the page ⌘S saves and ⌘⇧S saves as
 (ICEBREAKER 0.6.2 hands them to the page). **A save never writes over another song without
-asking**: a song never saved asks for its name (its title, or a free "untitled 2"), and a file that
+asking**: a song never saved asks for its name (its title, or a free "untitled 2": in the deck's
+language, « songs/sans titre.bmed » in French), and a file that
 holds another song asks before it's replaced. Saved, a note says where, and the top line says
 "✓ saved 23:21". **new, open, demo** and **recover** never replace a song with changes without
 asking either: save them first, don't save (the autosave writes its copy first: `med recover`
@@ -330,6 +333,10 @@ instrument's frames, its notes and the song stay as they are (off: exactly the s
 - **akai** — an S900 / S950-style sampler: 12 bits at a fixed, lower rate (22 050 Hz by default,
   `med vintage 01 akai 15000` for more grit, 7 500–40 000), no anti-alias filter in front, a gentle
   2-pole after it.
+
+The page and the LOG write Amiga, Akai and Paula with their capitals, in French too: ICEBREAKER
+lowers the interface's words (its uiCase: « vintage amiga » in 0.13.2) but never a `{var}`, so the
+names go in as `{vars}` (`NAMES` in `src/dsp/vintage.ts`; the French table's keys have the same).
 
 Why T (0.13.0 had Y, and R before it): on Windows, AMD's and NVIDIA's overlays keep
 Alt+R and Alt+Z for themselves, and on a Swiss or German QWERTZ keyboard the key marked Y is where

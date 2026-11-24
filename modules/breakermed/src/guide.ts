@@ -6,6 +6,7 @@
  */
 import type { IcebreakerAPI, KeyInput, Rect, UI } from "./icebreaker";
 import { hex, type Song } from "./song";
+import { NAMES, named } from "./dsp/vintage";
 
 /** the effect commands, as the replayer plays them (replayer.ts) */
 export const EFFECTS: [string, string][] = [
@@ -173,11 +174,11 @@ export const GUIDE: GuidePart[] = [
     rows: [
       ["med sampler", "load a sound into a free instrument (a list of the sounds in songs/)"],
       ["INSTRUMENT tab", "on a free slot: “sampler · load a sound…”; on a sound: chop, stretch, fade, loop…"],
-      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the Amiga's)"],
+      ["med sample <n> load", "a .wav .aif .iff .mp3 .m4a .ogg… in songs/ into instrument n: it keeps its own rate (--amiga: the {amiga}'s)"],
       ["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
       ["med bounce", "this block, rendered into a new instrument"],
       ["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
-      ["alt T · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"],
+      ["alt T · med vintage", "the instrument heard through an {amiga} (8 bits, the A500's filter) or an {akai} S900 / S950-style sampler (12 bits, aliasing)"],
     ],
   },
   {
@@ -216,8 +217,36 @@ export function wrap(text: string, w: number): string[] {
   return out;
 }
 
+/** a key in lines of `w` characters at most, cut between its " · " parts first, then between words */
+export function wrapKeys(keys: string, w: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const part of keys.split(" · ")) {
+    const next = line ? `${line} · ${part}` : part;
+    if ([...next].length <= w) line = next;
+    else {
+      if (line) out.push(`${line} ·`);
+      const pieces = wrap(part, w);
+      out.push(...pieces.slice(0, -1));
+      line = pieces[pieces.length - 1];
+    }
+  }
+  out.push(line);
+  return out;
+}
+
+/** the parts joined with " · ", as many as fit in `w` whole (the first always: cut if it must) */
+export function fitParts(parts: string[], w: number): string {
+  let s = parts[0];
+  for (const p of parts.slice(1)) {
+    if ([...`${s} · ${p}`].length > w) break;
+    s = `${s} · ${p}`;
+  }
+  return s;
+}
+
 export function makeGuide(ib: IcebreakerAPI) {
-  const { BOLD, t, truncate } = ib.lib;
+  const { BOLD, t } = ib.lib;
   let scroll = 0;
   let height = 10;
   /** the lines the guide took at its last draw (a long row takes more than one) */
@@ -229,7 +258,8 @@ export function makeGuide(ib: IcebreakerAPI) {
     const all = lines();
     height = Math.max(1, inner.h - 1);
     // the keys' column as wide as its widest key once the deck has said it (⌘⇧S is Ctrl+Shift+S on
-    // Windows: it was cut to « Ctrl+Sh… »), up to 40% of the guide
+    // Windows), up to 40% of the guide; a key too long for it goes on over the next lines, like its
+    // words (« med saveas · Ctrl… », « tabulation · ⇧ ta… » were cut at ~1000 px)
     const widest = Math.max(...all.map((row) => ("keys" in row ? [...t(row.keys)].length : 0)));
     const keyW = Math.max(10, Math.min(widest + 1, Math.floor(inner.w * 0.4)));
     // a row too long for the guide goes on over the next lines, under its words: none is cut
@@ -238,7 +268,8 @@ export function makeGuide(ib: IcebreakerAPI) {
     type Shown = { title: string } | { keys: string; what: string; hexKey: boolean };
     const shown = all.flatMap((row): Shown[] => {
       if ("title" in row) return row.title ? wrap(t(row.title), Math.max(8, inner.w - 2)).map((title) => ({ title })) : [{ title: "" }];
-      return wrap(t(row.what), whatW).map((what, i) => ({ keys: i ? "" : row.keys, what, hexKey: /^[0-9A-F]{2}/.test(row.keys) }));
+      const keys = wrapKeys(t(row.keys), keyW - 1), what = wrap(t(row.what, NAMES), whatW), hexKey = /^[0-9A-F]{2}/.test(row.keys);
+      return Array.from({ length: Math.max(keys.length, what.length) }, (_, i) => ({ keys: keys[i] ?? "", what: what[i] ?? "", hexKey }));
     });
     rows = shown.length;
     scroll = Math.max(0, Math.min(scroll, shown.length - height));
@@ -246,13 +277,14 @@ export function makeGuide(ib: IcebreakerAPI) {
       const row = shown[scroll + k], y = inner.y + k;
       if ("title" in row) ui.text(inner.x + 1, y, row.title, { fg: c.accent, attrs: BOLD }, inner.w - 2);
       else {
-        if (row.keys) ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: row.hexKey ? c.accentAlt : c.fg });
-        ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
+        if (row.keys) ui.text(inner.x + 2, y, row.keys, { fg: row.hexKey ? c.accentAlt : c.fg });
+        if (row.what) ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
       }
     }
     ui.hit(inner, { onWheel: (d) => (scroll += Math.sign(d) * 3) });
-    const more = rows > height ? ` ${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓ ` : " ";
-    ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or ⌫: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
+    // the footer: as many of its parts as fit, whole (« med guide ·… » was cut at ~1000 px)
+    const parts = [t("? or ⌫: back"), ...(rows > height ? [`${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓`] : []), "med guide", "med effects"];
+    ui.text(inner.x + 1, inner.y + inner.h - 1, fitParts(parts, inner.w - 2), { fg: c.subtle }, inner.w - 2);
   };
 
   const key = (k: KeyInput): boolean => {
@@ -268,7 +300,7 @@ export function makeGuide(ib: IcebreakerAPI) {
   };
 
   /** the guide as text, for the shell */
-  const text = () => GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${a.padEnd(22)} ${b}`).join("\n")}`).join("\n\n") + "\n";
+  const text = () => GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${a.padEnd(22)} ${named(b)}`).join("\n")}`).join("\n\n") + "\n";
 
   return { draw, key, text, top: () => (scroll = 0) };
 }

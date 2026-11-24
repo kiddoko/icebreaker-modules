@@ -13,6 +13,7 @@ import { readSong } from "../src/format";
 import { demoMod } from "../src/demo";
 import { Renderer } from "../src/render";
 import { Limiter } from "../src/dsp/limiter";
+import { named } from "../src/dsp/vintage";
 
 const fr = (s: string) => FR[s] ?? s;
 
@@ -84,11 +85,15 @@ describe("0.13.2 the guide in French: its last keycaps, no row cut", () => {
       guide.draw(ui, { x: 0, y: 0, w, h: 400 }, true);
       // every line within the guide's box, and every row whole when the lines are put back together
       for (const t of ui.texts) expect(t.x + [...t.s].length, t.s).toBeLessThanOrEqual(w - 1);
-      const text = ui.screen().split("\n").map((l) => l.trim()).join(" ").replace(/\s+/g, " ");
-      expect(text).toContain("espace stop · à l'arrêt : MODE ÉDITION oui / non (ou clic sur « éditer » en haut)");
+      // each column read on its own (0.13.3: a key too long goes on over the next lines too)
+      const column = (keep: (x: number) => boolean) => ui.texts.filter((t) => keep(t.x)).sort((a, b) => a.y - b.y).map((t) => t.s.trim()).join(" ").replace(/\s+/g, " ");
+      const x0 = Math.min(...ui.texts.map((t) => t.x));
+      const titles = column((x) => x === x0), words = column((x) => x > x0 + 1);
+      expect(column((x) => x === x0 + 1)).toContain("espace");
+      expect(words).toContain("stop · à l'arrêt : MODE ÉDITION oui / non (ou clic sur « éditer » en haut)");
       for (const p of GUIDE) {
-        expect(text, p.title).toContain(fr(p.title));
-        for (const [, what] of p.rows) expect(text, what).toContain(fr(what).replace(/\s+/g, " "));
+        expect(titles, p.title).toContain(fr(p.title));
+        for (const [, what] of p.rows) expect(words, what).toContain(named(fr(what)).replace(/\s+/g, " "));
       }
     }
   });
