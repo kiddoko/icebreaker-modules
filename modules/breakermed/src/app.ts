@@ -35,7 +35,7 @@ import { nudgeIn, showIn } from "./dsp/params";
 import { settingsOf, synthOf, type SynthKind } from "./synths";
 import { DRUM_KITS, DRUM_NAMES, DRUM_NOTES, DRUM_SETTINGS, drumKit, nudgeDrum } from "./dsp/drums";
 import { makeScreens, newExportChoices, type ExportChoices, type Screen } from "./screens";
-import { VINTAGE_SAID } from "./dsp/vintage";
+import { NAMES, VINTAGE_SAID } from "./dsp/vintage";
 import { describe, makeGuide } from "./guide";
 import { makeStart } from "./start";
 import type { Autosave } from "./autosave";
@@ -390,7 +390,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const label = v ? `◆ ${t("vintage")} ${v.kind}${v.kind === "akai" && v.rate ? ` ${Math.round(v.rate / 100) / 10} kHz` : ""}` : `${t("vintage")} ${t("off")}`;
       const next = !v ? "amiga" : v.kind === "amiga" ? "akai" : "off";
       const bx = r.x + r.w - label.length - 4;
-      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt T")}: ${next}` });
+      if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, { cmd: `med vintage ${n} ${next}`, quiet: !v, tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an {amiga}'s {paula} or an old {akai} sampler", NAMES) + ` · ${t("click or alt T")}: ${next}` });
     }
     const sk = synthOf(ins);
     if (sk && ins && settingsOf(ins, sk)) return drawSynth(ui, inner, focused, sk);
@@ -445,7 +445,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       ["chop 4", `med sample ${n} chop 4`, "4 equal slices → new instruments"],
       ["chop 8", `med sample ${n} chop 8`, "8 equal slices → new instruments"],
       ["chop at attacks", `med sample ${n} chop onsets`, "a slice at each attack"],
-      ["stretch ×2", `med sample ${n} stretch 2`, "twice as long, same pitch (Amiga grains)"],
+      ["stretch ×2", `med sample ${n} stretch 2`, "twice as long, same pitch ({amiga} grains)"],
       ["stretch ×½", `med sample ${n} stretch 0.5`, "half as long, same pitch"],
       ["fade in", `med sample ${n} fade in`, ""],
       ["fade out", `med sample ${n} fade out`, ""],
@@ -466,7 +466,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
       const w = label.length + 2;
       if (x + w > inner.x + inner.w - 1) (x = inner.x + 1), y++;
       if (y >= inner.y + inner.h) break;
-      x += ui.button(x, y, t(label), () => {}, { cmd, tip: tip ? t(tip) : undefined }) + 1;
+      x += ui.button(x, y, t(label), () => {}, { cmd, tip: tip ? t(tip, NAMES) : undefined }) + 1;
     }
     // the keys, said on hover (the guide has them all)
     ui.hit({ x: inner.x, y: inner.y, w: inner.w, h: waveH }, { tip: t("the keys play it · alt ←→ another instrument · alt B the block · med sample -h") });
@@ -630,7 +630,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("copy"), hint: "alt C", cmd: "med copy" },
     { label: t("cut"), hint: "alt X", cmd: "med cut" },
     { label: t("paste"), hint: "alt V", cmd: "med paste", disabled: !st.clip },
-    { label: t("clear"), hint: "del (edit mode)", cmd: "med clear" },
+    { label: t("clear"), hint: t("del (edit mode)"), cmd: "med clear" },
     "-",
     { label: t("transpose up"), hint: t("alt PgUp"), cmd: "med transpose 1" },
     { label: t("transpose down"), hint: t("alt PgDn"), cmd: "med transpose -1" },
@@ -640,7 +640,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("select the block"), hint: "alt K", cmd: "med select block" },
     "-",
     { label: t("insert a line"), hint: "alt ⏎", cmd: "med line insert" },
-    { label: t("delete the line"), hint: "⌫ (edit mode)", cmd: "med line delete" },
+    { label: t("delete the line"), hint: t("⌫ (edit mode)"), cmd: "med line delete" },
     { label: t("mute / unmute this track"), hint: "alt M", cmd: `med mute ${track + 1}` },
     { label: t("solo this track"), hint: "⇧ alt M", cmd: `med solo ${track + 1}` },
     { label: st.edit ? t("edit mode off") : t("edit mode on"), hint: "space", cmd: `med edit ${st.edit ? "off" : "on"}` },
@@ -783,7 +783,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
         parts.push({ k: 3, label: `${t("speed")} ${hex(s.speed)}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("ticks a line (the effects' clock) · the wheel changes it"), onWheel: wheel((d) => `med speed ${Math.max(1, Math.min(32, s.speed + d))}`) } });
         parts.push({ k: 2, label: `${t("oct")} ${st.octave + 1}`, style: { fg: c.muted }, hit: { tip: `${t("the octave the keys play · F1–F8 · alt ↑↓ · the wheel")} · med octave <1–8>`, onWheel: (d) => (st.octave = Math.max(0, Math.min(7, st.octave + (d < 0 ? 1 : -1)))), onClick: () => {} } });
         parts.push({ k: 4, label: `${t("step")} ${st.step}`, style: { fg: c.muted }, hit: { tip: `${t("lines the cursor moves after a note · alt 0–9 · the wheel")} · med step <0–16>`, onWheel: (d) => (st.step = Math.max(0, Math.min(16, st.step + (d < 0 ? 1 : -1)))), onClick: () => {} } });
-        parts.push({ k: 5, label: engine.paula ? t("stepped") : t("smooth"), style: { fg: c.muted }, hit: { cmd: `med paula ${engine.paula ? "off" : "on"}`, tip: engine.paula ? t("the sound: stepped and gritty, like the Amiga's Paula · click: smooth") : t("the sound: smooth (interpolated) · click: stepped, like the Amiga") } });
+        parts.push({ k: 5, label: engine.paula ? t("stepped") : t("smooth"), style: { fg: c.muted }, hit: { cmd: `med paula ${engine.paula ? "off" : "on"}`, tip: engine.paula ? t("the sound: stepped and gritty, like the {amiga}'s {paula} · click: smooth", NAMES) : t("the sound: smooth (interpolated) · click: stepped, like the {amiga}", NAMES) } });
         if (s.echo) parts.push({ k: 1, label: `${t("echo")} ${s.echo.ms}`, style: { fg: c.muted }, hit: { cmd: "med screen song", tip: t("the echo on the whole mix (ms) · click: the SONG screen") } });
         parts.push({ k: 2, label: st.follow ? t("follow") : t("follow off"), style: { fg: st.follow ? c.muted : c.warning }, hit: { cmd: `med follow ${st.follow ? "off" : "on"}`, tip: st.follow ? t("the cursor follows the song as it plays · click or alt F: it stays where you edit") : t("the cursor stays where you edit while the song plays · click or alt F: follow it") } });
         if (st.metronome) parts.push({ k: 3, label: t("click"), style: { fg: c.accent }, hit: { cmd: "med click off", tip: t("the metronome: a click on each beat while playing · click: off") } });

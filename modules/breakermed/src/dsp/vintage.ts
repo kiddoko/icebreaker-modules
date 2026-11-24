@@ -29,9 +29,18 @@ export interface VintageSettings {
 
 /** what each one is, said in a line (the screen, med vintage) */
 export const VINTAGE_SAID: Record<VintageKind, string> = {
-  amiga: "Amiga: 8 bits, the note's own rate, the A500's filter",
-  akai: "Akai S900 / S950-style: 12 bits, a lower rate, aliasing",
+  amiga: "{amiga}: 8 bits, the note's own rate, the A500's filter",
+  akai: "{akai} S900 / S950-style: 12 bits, a lower rate, aliasing",
 };
+
+/**
+ * The machines' names. The deck lowers what t() gives and what the LOG shows (its uiCase:
+ * « vintage amiga ») but keeps a {var}'s case, and its list of proper names is its own: so
+ * the names go in as {vars} — t(text, NAMES) on the page, named(text) in the LOG, the table's
+ * keys with the same {vars} (they catch the name as it was written).
+ */
+export const NAMES = { amiga: "Amiga", akai: "Akai", paula: "Paula" };
+export const named = (s: string) => s.replace(/\{(amiga|akai|paula)\}/g, (_, k: keyof typeof NAMES) => NAMES[k]);
 
 /** Paula's fastest rate (period 124 on a PAL machine) */
 export const PAULA_MAX_RATE = 3546895 / 124;

@@ -14,7 +14,7 @@ import { SYNTHS } from "./synths";
 import { drumsCommand, DRUMS_USAGE, synthCommand, SYNTH_USAGE } from "./commands-synth";
 import { writeMed, writeMod } from "./format/write";
 import { songLength } from "./replayer";
-import { AKAI_RATE, AKAI_RATES, VINTAGE_KINDS, VINTAGE_SAID, type VintageKind, type VintageSettings } from "./dsp/vintage";
+import { AKAI_RATE, AKAI_RATES, named, VINTAGE_KINDS, VINTAGE_SAID, type VintageKind, type VintageSettings } from "./dsp/vintage";
 import { invertChord, MAX_STRUM_MS, swingFactor } from "./song";
 import { chordsOf, cleanEcho, DEFAULT_TRACKS, ECHO_MAX_MS, MAX_CHORD_NOTES, dec, hex, lineNo, MAX_TRACKS, newSong, NOTE_OFF, noteName, PAULA_CLOCK, periodOf, trackName, type Song } from "./song";
 import { CHORD_COL, CMD_COL, Editor, parseNote } from "./edit";
@@ -219,9 +219,13 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
   const savedAs = (p: string) => (/\.(mod|med|mmd1|bmed)$/i.test(p) || /(^|\/)mod\.[^/]+$/i.test(p) ? p : `${p}.bmed`);
   /** the song has a file of its own (saved, or opened from songs/) */
   const hasHome = () => st.path.startsWith("songs/");
-  /** a name for a song never saved: its title, or untitled — and a free one ("untitled 2") */
+  /**
+   * a name for a song never saved: its title, or untitled — and a free one ("untitled 2").
+   * Untitled in the deck's language (« songs/sans titre.bmed »: the page says « sans titre »);
+   * what's in memory stays "untitled" (the page, the tab and the autosave know it by that word).
+   */
   const freeName = async () => {
-    const base = defaultPath().replace(/\.bmed$/i, "");
+    const base = defaultPath().replace(/\.bmed$/i, "").replace(/(^|\/)untitled$/i, `$1${t("untitled")}`);
     const titled = st.song?.title && st.song.title !== "untitled" ? `songs/${st.song.title.replace(/[\\/:*?"<>|]/g, "-")}` : base;
     for (let n = 1; n < 100; n++) {
       const p = `${titled}${n > 1 ? ` ${n}` : ""}.bmed`;
@@ -674,7 +678,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             if (!(n >= 0 && n < Math.min(63, s.instruments.length))) return ctx.err(`med vintage: instrument ${(which ?? "?").toUpperCase()}: the song has 01–${hex(Math.max(1, s.instruments.length))} · ${usage}\n`), 1;
             const ins = s.instruments[n];
             // "vintage …" a piece of its own after " · ": the deck says it in its language (« vintage Amiga : 8 bits… »)
-            const said = (v: VintageSettings | undefined) => (v ? `vintage ${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? AKAI_RATE} Hz)` : ""}` : "vintage off: the sound as it is");
+            const said = (v: VintageSettings | undefined) => (v ? `vintage ${named(VINTAGE_SAID[v.kind])}${v.kind === "akai" ? ` (${v.rate ?? AKAI_RATE} Hz)` : ""}` : "vintage off: the sound as it is");
             if (kind === undefined) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
             if (kind !== "off" && !VINTAGE_KINDS.includes(kind as VintageKind)) return ctx.err(`med vintage: "${kind}"? ${usage}\n`), 1;
             const rate = rateS !== undefined ? parseInt(rateS, 10) : undefined;
@@ -695,7 +699,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             return 0;
           }
           case "guide": {
-            if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${b}`).join("\n")}`).join("\n\n") + "\n"), 0;
+            if (flags.text) return ctx.out(GUIDE.map((p) => `${p.title}\n${p.rows.map(([a, b]) => `  ${fmt.cyan(a.padEnd(22))} ${named(b)}`).join("\n")}`).join("\n\n") + "\n"), 0;
             if (st.screen !== "guide") st.back = st.screen;
             st.screen = "guide";
             void ib.apps.open("breakermed");
