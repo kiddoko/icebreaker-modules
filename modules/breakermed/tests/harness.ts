@@ -230,3 +230,38 @@ export function makeDeck(opts: { t?: (s: string) => string } = {}): Deck {
 
 /** let the page's `void ib.shell.run(…)` finish */
 export const settle = () => new Promise((r) => setTimeout(r, 0));
+
+/**
+ * The deck's tOutput (ICEBREAKER src/core/i18n.ts, 0.7.2), for a module's own table only:
+ * a line whole, else piece by piece at " · "; keys with {n} as patterns; a single word left alone.
+ */
+export function deckOutput(text: string, table: Record<string, string>): string {
+  const pats = Object.entries(table)
+    .filter(([k]) => k.includes("{") && k.replace(/\{\w+\}/g, "").replace(/[^A-Za-z]/g, "").length >= 3)
+    .map(([k, to]) => {
+      const names: string[] = [];
+      const src = k.split(/(\{\w+\})/).map((part) => {
+        const m = /^\{(\w+)\}$/.exec(part);
+        if (!m) return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        names.push(m[1]);
+        return "(.+?)";
+      });
+      return { re: new RegExp(`^${src.join("")}$`), names, to };
+    })
+    .sort((a, b) => b.re.source.length - a.re.source.length);
+  const one = (core: string): string | undefined => {
+    if (core.includes(" ") && table[core] !== undefined) return table[core];
+    for (const p of pats) {
+      const m = p.re.exec(core);
+      if (!m || m.slice(1).some((v) => v.includes(" · "))) continue;
+      let s = p.to;
+      p.names.forEach((n, i) => (s = s.split(`{${n}}`).join(m[i + 1])));
+      return s;
+    }
+    return undefined;
+  };
+  return text
+    .split("\n")
+    .map((line) => one(line.trim()) ?? line.split(" · ").map((p) => one(p) ?? p).join(" · "))
+    .join("\n");
+}

@@ -108,7 +108,7 @@ export function makeStart(ib: IcebreakerAPI) {
       ui.button(r.x + Math.floor((r.w - w) / 2), below, label, () => run("med recover"), { cmd: "med recover", tip: t("changes that were never saved, kept by the autosave") });
       below += 2;
     }
-    if (error) ui.textCenter(r, below, error, { fg: c.error });
+    if (error) ui.textCenter(r, below, t(error), { fg: c.error });
   };
 
   const key = (k: KeyInput): boolean => {

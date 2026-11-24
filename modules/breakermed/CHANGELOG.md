@@ -1,5 +1,18 @@
 # BreakerMED — changes
 
+## 0.13.2 (beta)
+
+From the Windows test bench (0.13.1, 24/11).
+
+**Fixed**
+- **The limiter squashed the whole song.** The bench saw « ▮▮▮▮▮▮ LIM » the whole time the demo played and a flat output peak (max 0.107, avg 0.105 at volume 15). Measured: the tracks were mixed at 2/√tracks, so the demo ran up to 1.72 into a ceiling of 0.89 (+5.7 dB): the limiter took 1.4 dB on average and over 3 dB in 12 % of the page's blocks, and LIM (lit 1.5 s after each) never went out. The mix now has **6 dB of headroom** (1/√tracks: four tracks at full volume reach half scale, the Amiga's two voices a side): the demo peaks at 0.86, sits around −6.5 dBFS, and the limiter takes nothing. It still catches a song too loud, at −1 dBFS. A new song (8 tracks) plays 6 dB softer than in 0.13.1, at about −10 dBFS, its peaks near −5.
+- **What the meter shows** (README, guide, the tip): a bar each 6 dB, all six from −3 dBFS, the peak falling back 12 dB a second; LIM when the limiter turns a peak down 3 dB or more. Now and then is fine; all the time means the song is too loud.
+- A `.gitattributes` (`* text=auto eol=lf`): on a Windows clone with `core.autocrlf`, « plugin.json, package.json and the README agree » failed until `npm run build` rewrote the files.
+- The guide in French: « alt pg préc · alt pg suiv », « ↑↓ ←→ · pg préc pg suiv », « tabulation · ⇧ tabulation » (and the transpose menu's hints). A row too long for the guide goes on over the next line, under its words, instead of being cut (the space row was, at 1618 px); a part's title too.
+- The log in the deck's language: `med edit`, `med play` / `stop`, `med vintage` (« vintage Amiga : 8 bits… »), `med paula`, `view`, `follow`, `click`, `filter`, `octave`, `step`, `mute`, `pos`, the selection's lines (« copié 64 lignes · 8 pistes »: the size is said in pieces now, "copied 64 lines · 8 tracks"). The toasts: « enregistré · songs/… », the autosave's error, « aucun morceau dans songs/ ».
+- After `med new` in French the tab says « ♫ sans titre.bmed » (the file stays untitled.bmed).
+- Another song (`med demo`, `med new`, `med open`, `med recover`) starts with the edit mode off: `med demo` then ⏎ started in « ● rec ».
+
 ## 0.13.1 (beta)
 
 From the Windows test bench (0.13.0, AMD Radeon + NVIDIA overlays, Swiss QWERTZ).

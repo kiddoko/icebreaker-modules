@@ -46,8 +46,10 @@ The **top line** is made of buttons, each with a tip on hover: **▶ play** (■
 **edit**, the **tempo** and the **speed** (the wheel changes them, a click opens SONG), the octave
 and the step (the wheel), **stepped / smooth** (the sound, like the Amiga's Paula or interpolated),
 the echo, **follow**, the **metronome**, and "✓ saved 23:21" (a ● before the song's name while it
-has changes not saved). While it plays: the mix's **level** (▮▮▮▯▯▯) and **LIM** when the limiter
-turns it down. **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
+has changes not saved). While it plays: the mix's **level** (▮▮▮▮▯▯: a bar each 6 dB, all six from
+−3 dBFS; a peak falls back 12 dB a second) and **LIM** when the limiter turns a peak down 3 dB or more
+(it stays lit 1.5 s). On a song at a sane level LIM comes now and then; lit all the time, the song is
+too loud (lower its tracks' or instruments' volume). **?** (or alt G, the ? tab, `med guide`) opens the **GUIDE**:
 how to start, the edit mode, the keys, a cell's columns, every effect command in hex, the sampler.
 
 Five screens on the right, by their tabs or **alt B / I / S / E** and **?**:
@@ -463,7 +465,9 @@ med echo off
 ## How it plays
 
 Loudness: every synth has a **level** setting (dB), and every preset comes matched to the others
-(hats a little lower); the mix ends in a limiter at −1 dBFS, so a song is loud and never clips.
+(hats a little lower). The tracks are mixed with 6 dB of headroom (four tracks at full volume
+reach half scale, eight 1/√8 each), and the mix ends in a limiter at −1 dBFS that only catches the
+rare peak: a song never clips, and isn't squashed (0.13.1's mix ran the demo 5 dB into the limiter).
 A new song plays every note in the octave written (OctaMED's mixing mode); songs read with the
 Amiga's four voices keep their range for samples, never for our synths.
 

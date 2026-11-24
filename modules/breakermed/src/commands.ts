@@ -180,7 +180,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       st.path = dir;
       st.editor!.markSaved();
       st.savedAt = Date.now();
-      ib.ui.notify(`saved · ${dir}`, "success");
+      ib.ui.notify(`${t("saved")} · ${dir}`, "success");
       // saved: the autosave's copies of it are no use now
       await st.autosave?.forget(was);
       await st.autosave?.forget(dir);
@@ -188,7 +188,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
       return;
     }
     for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
-    ib.ui.notify(`saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
+    ib.ui.notify(`${t("saved")} · ${p}${warnings.length ? ` (${t("for other trackers: .bmed keeps everything")})` : ""}`, "success");
     ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
   };
   const writeOut = async (path: string, w: { bytes: Uint8Array; warnings: string[] }) => {
@@ -287,6 +287,8 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
     st.savedAt = 0;
     st.sel = null;
     st.col = 0;
+    // another song on the page: the edit mode starts off (med demo, then ⏎, began in « ● rec »)
+    st.edit = false;
     st.path = path;
     st.seq = st.line = st.track = 0;
     st.inst = Math.max(0, song.instruments.findIndex((i) => i.kind !== "empty"));
@@ -387,7 +389,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
               if (!songs.length) {
                 // said on the page too (START's "open" did nothing visible before)
                 st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
-                ib.ui.notify(st.error, "warning");
+                ib.ui.notify(t(st.error), "warning");
                 return ctx.err(`med open: ${st.error}\n`), 1;
               }
               const i = await ib.ui.choose(t("open a song"), songs.map((p) => ({ label: p })));
@@ -579,7 +581,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             st.metronome = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.metronome;
             engine.metronome = st.metronome;
             await ib.storage.set("metronome", st.metronome);
-            ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome off\n");
+            ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome: off\n");
             return 0;
           }
           case "edit": {
@@ -671,15 +673,16 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const usage = `med vintage <01–3F|.> amiga | akai [${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz] | off`;
             if (!(n >= 0 && n < Math.min(63, s.instruments.length))) return ctx.err(`med vintage: instrument ${(which ?? "?").toUpperCase()}: the song has 01–${hex(Math.max(1, s.instruments.length))} · ${usage}\n`), 1;
             const ins = s.instruments[n];
-            const said = (v: VintageSettings | undefined) => (v ? `${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? AKAI_RATE} Hz)` : ""}` : "off: the sound as it is");
-            if (kind === undefined) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
+            // "vintage …" a piece of its own after " · ": the deck says it in its language (« vintage Amiga : 8 bits… »)
+            const said = (v: VintageSettings | undefined) => (v ? `vintage ${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? AKAI_RATE} Hz)` : ""}` : "vintage off: the sound as it is");
+            if (kind === undefined) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
             if (kind !== "off" && !VINTAGE_KINDS.includes(kind as VintageKind)) return ctx.err(`med vintage: "${kind}"? ${usage}\n`), 1;
             const rate = rateS !== undefined ? parseInt(rateS, 10) : undefined;
             if (rateS !== undefined && (kind !== "akai" || !(rate! >= AKAI_RATES[0] && rate! <= AKAI_RATES[1]))) return ctx.err(`med vintage: a rate is for akai only, ${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz\n`), 1;
             if (ins.kind === "empty") return ctx.err(`med vintage: instrument ${hex(n + 1)} is empty\n`), 1;
             const next: VintageSettings | undefined = kind === "off" ? undefined : { kind: kind as VintageKind, ...(rate !== undefined ? { rate } : {}) };
             st.editor!.instrument(n, "vintage", (i) => (next ? (i.vintage = next) : delete i.vintage));
-            ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(next)}\n`);
+            ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name || ins.kind} · ${said(next)}\n`);
             return 0;
           }
           case "ins": {
@@ -751,7 +754,7 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             }
             const sl = st.sel!;
             const nl = sl.line1 - sl.line0 + 1, nt = sl.track1 - sl.track0 + 1;
-            ctx.out(`selected ${nl} line${nl === 1 ? "" : "s"} × ${nt} track${nt === 1 ? "" : "s"}\n`);
+            ctx.out(`selected ${nl} line${nl === 1 ? "" : "s"} · ${nt} track${nt === 1 ? "" : "s"}\n`);
             return 0;
           }
           case "copy":
@@ -764,7 +767,9 @@ export function registerCommands(ib: IcebreakerAPI, engine: Engine, st: State): 
             const block = s.sequence[st.seq];
             // the selection, or the cell under the cursor
             const sel = st.sel && st.sel.block === block ? st.sel : { block, line0: st.line, line1: st.line, track0: st.track, track1: st.track };
-            const size = `${sel.line1 - sel.line0 + 1} line${sel.line1 > sel.line0 ? "s" : ""} × ${sel.track1 - sel.track0 + 1} track${sel.track1 > sel.track0 ? "s" : ""}`;
+            // "copied 3 lines · 2 tracks": each piece one the deck's table says (« copié 3 lignes · 2 pistes »)
+            const nl = sel.line1 - sel.line0 + 1, nt = sel.track1 - sel.track0 + 1;
+            const lines = `${nl} line${nl === 1 ? "" : "s"}`, size = `${lines} · ${nt} track${nt === 1 ? "" : "s"}`;
             if (sub === "copy") (st.clip = e.copy(sel)), ctx.out(`copied ${size}\n`);
             else if (sub === "cut") (st.clip = e.cut(sel)), (st.sel = null), ctx.out(`cut ${size}\n`);
             else if (sub === "clear") e.clearSelection(sel), ctx.out(`cleared ${size}\n`);

@@ -3,7 +3,7 @@
  * leftovers on the page and in the guide, med new's line in French.
  */
 import { describe, expect, it } from "vitest";
-import { key, makeDeck, settle } from "./harness";
+import { deckOutput, key, makeDeck, settle } from "./harness";
 import { FR } from "../src/main";
 import { GUIDE } from "../src/guide";
 import { USAGE } from "../src/commands";
@@ -11,41 +11,6 @@ import README from "../README.md?raw";
 
 const alt = (code: string, o = {}) => key(code.replace(/^Key/, "").toLowerCase(), { code, alt: true, ...o });
 const fr = (s: string) => FR[s] ?? s;
-
-/**
- * The deck's tOutput (ICEBREAKER src/core/i18n.ts, 0.7.2), for a module's own table only:
- * a line whole, else piece by piece at " · "; keys with {n} as patterns; a single word left alone.
- */
-function deckOutput(text: string, table: Record<string, string>): string {
-  const pats = Object.entries(table)
-    .filter(([k]) => k.includes("{") && k.replace(/\{\w+\}/g, "").replace(/[^A-Za-z]/g, "").length >= 3)
-    .map(([k, to]) => {
-      const names: string[] = [];
-      const src = k.split(/(\{\w+\})/).map((part) => {
-        const m = /^\{(\w+)\}$/.exec(part);
-        if (!m) return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        names.push(m[1]);
-        return "(.+?)";
-      });
-      return { re: new RegExp(`^${src.join("")}$`), names, to };
-    })
-    .sort((a, b) => b.re.source.length - a.re.source.length);
-  const one = (core: string): string | undefined => {
-    if (core.includes(" ") && table[core] !== undefined) return table[core];
-    for (const p of pats) {
-      const m = p.re.exec(core);
-      if (!m || m.slice(1).some((v) => v.includes(" · "))) continue;
-      let s = p.to;
-      p.names.forEach((n, i) => (s = s.split(`{${n}}`).join(m[i + 1])));
-      return s;
-    }
-    return undefined;
-  };
-  return text
-    .split("\n")
-    .map((line) => one(line.trim()) ?? line.split(" · ").map((p) => one(p) ?? p).join(" · "))
-    .join("\n");
-}
 
 describe("0.13.1 the vintage key: alt T (alt Y and alt R never arrive on the bench's Windows)", () => {
   it("alt T goes round off → amiga → akai → off", async () => {
@@ -126,7 +91,7 @@ describe("0.13.1 the guide in French, on Windows", () => {
     expect(fr("edit")).toBe("éditer");
   });
   it("every key the guide writes in English words has its French", () => {
-    const keyWords = new Set(["alt", "med", "tab", "PgUp", "PgDn"]);
+    const keyWords = new Set(["alt", "med"]); // tab, PgUp, PgDn too since 0.13.2
     const missing = GUIDE.flatMap((p) => p.rows.map(([k]) => k))
       // the med commands are typed as they are: only the words around them are said
       .filter((k) => /[a-z]{3,}/.test(k.split(" · ").filter((part) => !part.startsWith("med ")).join(" ").split(/[\s,]+/).filter((w) => !keyWords.has(w)).join(" ")))

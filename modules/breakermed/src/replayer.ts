@@ -111,8 +111,10 @@ export class Player {
     this.speed = song.speed;
     this.tempo = song.tempo;
     this.chans = Array.from({ length: song.tracks }, (_, i) => this.newChan(i));
-    // loud enough: four voices at full volume reach full scale (the renderer's limiter catches the peaks)
-    this.mix = Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
+    // 6 dB of headroom: four voices at full volume reach half scale, so a song sits under the
+    // limiter's ceiling and the limiter only catches the rare peak (at 2 / √tracks the demo ran
+    // 5 dB over it, and the limiter worked on every kick: « LIM » lit the whole time)
+    this.mix = 1 / Math.sqrt(Math.max(4, song.tracks));
   }
 
   private newChan(i: number): Chan {

@@ -154,6 +154,7 @@ export const GUIDE: GuidePart[] = [
       ["alt M · ⇧ alt M", "mute the cursor's track · solo it (again: back)"],
       ["the track's ■", "mute (lit while it plays) · right-click the name: solo, rename"],
       ["the top line", "each part clicks (▶ play, edit, the tempo, stepped / smooth, follow…), the wheel changes them"],
+      ["▮▮▮▮▮▯ LIM", "the mix's level while playing: a bar each 6 dB, all six from −3 dB · LIM: the limiter is turning a peak down 3 dB or more (now and then on a loud song; all the time: too loud)"],
       ["? · alt G", "this guide"],
     ],
   },
@@ -196,31 +197,61 @@ export const GUIDE: GuidePart[] = [
 const lines = (): ({ title: string } | { keys: string; what: string })[] =>
   GUIDE.flatMap((p, i) => [...(i ? [{ title: "" }] : []), { title: p.title }, ...p.rows.map(([keys, what]) => ({ keys, what }))]);
 
+/** words in lines of `w` characters at most (a word longer than a line is cut into pieces) */
+export function wrap(text: string, w: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    let rest = word;
+    while ([...rest].length > w) {
+      if (line) out.push(line), (line = "");
+      out.push([...rest].slice(0, w).join(""));
+      rest = [...rest].slice(w).join("");
+    }
+    if (!line) line = rest;
+    else if ([...line].length + 1 + [...rest].length <= w) line += ` ${rest}`;
+    else out.push(line), (line = rest);
+  }
+  out.push(line);
+  return out;
+}
+
 export function makeGuide(ib: IcebreakerAPI) {
   const { BOLD, t, truncate } = ib.lib;
   let scroll = 0;
   let height = 10;
+  /** the lines the guide took at its last draw (a long row takes more than one) */
+  let rows = 0;
 
   const draw = (ui: UI, r: Rect, focused: boolean) => {
     const c = ui.c;
     const inner = ui.box(r, { title: t("GUIDE"), focused });
     const all = lines();
     height = Math.max(1, inner.h - 1);
-    scroll = Math.max(0, Math.min(scroll, all.length - height));
     // the keys' column as wide as its widest key once the deck has said it (⌘⇧S is Ctrl+Shift+S on
     // Windows: it was cut to « Ctrl+Sh… »), up to 40% of the guide
     const widest = Math.max(...all.map((row) => ("keys" in row ? [...t(row.keys)].length : 0)));
     const keyW = Math.max(10, Math.min(widest + 1, Math.floor(inner.w * 0.4)));
-    for (let k = 0; k < height && scroll + k < all.length; k++) {
-      const row = all[scroll + k], y = inner.y + k;
-      if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", { fg: c.accent, attrs: BOLD }, inner.w - 2);
+    // a row too long for the guide goes on over the next lines, under its words: none is cut
+    // (the French ran past the edge: « … (ou clic sur « éditer » en h » at 1618 px)
+    const whatW = Math.max(8, inner.w - keyW - 3);
+    type Shown = { title: string } | { keys: string; what: string; hexKey: boolean };
+    const shown = all.flatMap((row): Shown[] => {
+      if ("title" in row) return row.title ? wrap(t(row.title), Math.max(8, inner.w - 2)).map((title) => ({ title })) : [{ title: "" }];
+      return wrap(t(row.what), whatW).map((what, i) => ({ keys: i ? "" : row.keys, what, hexKey: /^[0-9A-F]{2}/.test(row.keys) }));
+    });
+    rows = shown.length;
+    scroll = Math.max(0, Math.min(scroll, shown.length - height));
+    for (let k = 0; k < height && scroll + k < shown.length; k++) {
+      const row = shown[scroll + k], y = inner.y + k;
+      if ("title" in row) ui.text(inner.x + 1, y, row.title, { fg: c.accent, attrs: BOLD }, inner.w - 2);
       else {
-        ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: /^[0-9A-F]{2}/.test(row.keys) ? c.accentAlt : c.fg });
-        ui.text(inner.x + 2 + keyW, y, t(row.what), { fg: c.muted }, inner.w - keyW - 3);
+        if (row.keys) ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: row.hexKey ? c.accentAlt : c.fg });
+        ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
       }
     }
     ui.hit(inner, { onWheel: (d) => (scroll += Math.sign(d) * 3) });
-    const more = all.length > height ? ` ${scroll + 1}–${Math.min(all.length, scroll + height)}/${all.length} · ↑↓ ` : " ";
+    const more = rows > height ? ` ${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓ ` : " ";
     ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or ⌫: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
   };
 
