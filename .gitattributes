@@ -1,0 +1,15 @@
+# Every text file is checked out with LF, whatever core.autocrlf says: on a Windows clone the
+# tests read the README, plugin.json and package.json as they are, and CRLF made them disagree
+# (« plugin.json, package.json and the README agree » failed until npm run build rewrote them).
+* text=auto eol=lf
+
+# sounds and other binaries: never touched
+*.wav binary
+*.aif binary
+*.aiff binary
+*.flac binary
+*.mp3 binary
+*.ogg binary
+*.mod binary
+*.med binary
+*.png binary

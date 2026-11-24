@@ -142,6 +142,11 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
   const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
   // a song never named is "untitled" in its file; on the page it's said in the deck's language
   const shownTitle = (title: string) => (/^untitled( \d+)?$/i.test(title) ? title.replace(/^untitled/i, t("untitled")) : title);
+  /** the song's file name as the tab says it: "untitled.bmed" (a song never saved) in the deck's language */
+  const shownFile = (path: string) => {
+    const file = path.split("/").pop() ?? path;
+    return /^untitled( \d+)?\.bmed$/i.test(file) ? file.replace(/^untitled/i, t("untitled")) : file;
+  };
   const run = (line: string) => void ib.shell.run(line);
   const seqList = new ListView<number>();
   const instList = new ListView<number>();
@@ -627,10 +632,10 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     { label: t("paste"), hint: "alt V", cmd: "med paste", disabled: !st.clip },
     { label: t("clear"), hint: "del (edit mode)", cmd: "med clear" },
     "-",
-    { label: t("transpose up"), hint: "alt PgUp", cmd: "med transpose 1" },
-    { label: t("transpose down"), hint: "alt PgDn", cmd: "med transpose -1" },
-    { label: t("an octave up"), hint: "⇧ alt PgUp", cmd: "med transpose 12" },
-    { label: t("an octave down"), hint: "⇧ alt PgDn", cmd: "med transpose -12" },
+    { label: t("transpose up"), hint: t("alt PgUp"), cmd: "med transpose 1" },
+    { label: t("transpose down"), hint: t("alt PgDn"), cmd: "med transpose -1" },
+    { label: t("an octave up"), hint: t("⇧ alt PgUp"), cmd: "med transpose 12" },
+    { label: t("an octave down"), hint: t("⇧ alt PgDn"), cmd: "med transpose -12" },
     { label: t("select the track"), hint: "alt L", cmd: "med select track" },
     { label: t("select the block"), hint: "alt K", cmd: "med select block" },
     "-",
@@ -669,7 +674,8 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
     kind: "breakermed",
     key: "breakermed",
     rawKeys: true,
-    title: () => (st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED"),
+    // a song never saved is "untitled.bmed" in its path: the tab says it in the deck's language (« sans titre.bmed »)
+    title: () => (st.song ? `♫ ${shownFile(st.path)}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED"),
     dirty: () => !!st.editor?.dirty,
 
     /**
@@ -759,7 +765,7 @@ export function makeApp(ib: IcebreakerAPI, engine: Engine, st: State): App {
           parts.push({ k: -1, label: `▶ ${t("play")}`, style: { fg: c.success }, hit: { cmd: `med play song ${dec(st.seq)}`, tip: t("play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧Space from the cursor") } });
           parts.push({ k: -1, label: st.edit ? ` ● ${t("EDIT")} ` : t("edit"), style: st.edit ? { fg: c.bg, bg: c.error, attrs: BOLD } : { fg: c.fg }, hit: { cmd: `med edit ${st.edit ? "off" : "on"}`, tip: st.edit ? t("edit mode on: typing writes in the block · click or space: off") : t("edit mode · click or space: typing writes in the block") } });
         }
-        // the mix's level while playing: a bar of 6, and LIM when the limiter takes more than 1 dB
+        // the mix's level while playing: 6 bars of 6 dB (all lit from −3 dB), and LIM when the limiter takes 3 dB or more
         // by the clock, not by the frame: the page may draw far more often than the sound is computed
         const m = engine.master?.() ?? null;
         if (m) {

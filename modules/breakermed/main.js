@@ -4461,7 +4461,7 @@ var Player = class {
 		this.speed = song.speed;
 		this.tempo = song.tempo;
 		this.chans = Array.from({ length: song.tracks }, (_, i) => this.newChan(i));
-		this.mix = Math.min(1, 2 / Math.sqrt(Math.max(4, song.tracks)));
+		this.mix = 1 / Math.sqrt(Math.max(4, song.tracks));
 	}
 	newChan(i) {
 		return {
@@ -6549,6 +6549,7 @@ var GUIDE = [
 			["alt M · ⇧ alt M", "mute the cursor's track · solo it (again: back)"],
 			["the track's ■", "mute (lit while it plays) · right-click the name: solo, rename"],
 			["the top line", "each part clicks (▶ play, edit, the tempo, stepped / smooth, follow…), the wheel changes them"],
+			["▮▮▮▮▮▯ LIM", "the mix's level while playing: a bar each 6 dB, all six from −3 dB · LIM: the limiter is turning a peak down 3 dB or more (now and then on a loud song; all the time: too loud)"],
 			["? · alt G", "this guide"]
 		]
 	},
@@ -6598,10 +6599,30 @@ var lines = () => GUIDE.flatMap((p, i) => [
 		what
 	}))
 ]);
+/** words in lines of `w` characters at most (a word longer than a line is cut into pieces) */
+function wrap(text, w) {
+	const out = [];
+	let line = "";
+	for (const word of text.split(" ")) {
+		let rest = word;
+		while ([...rest].length > w) {
+			if (line) out.push(line), line = "";
+			out.push([...rest].slice(0, w).join(""));
+			rest = [...rest].slice(w).join("");
+		}
+		if (!line) line = rest;
+		else if ([...line].length + 1 + [...rest].length <= w) line += ` ${rest}`;
+		else out.push(line), line = rest;
+	}
+	out.push(line);
+	return out;
+}
 function makeGuide(ib) {
 	const { BOLD, t, truncate } = ib.lib;
 	let scroll = 0;
 	let height = 10;
+	/** the lines the guide took at its last draw (a long row takes more than one) */
+	let rows = 0;
 	const draw = (ui, r, focused) => {
 		const c = ui.c;
 		const inner = ui.box(r, {
@@ -6610,22 +6631,32 @@ function makeGuide(ib) {
 		});
 		const all = lines();
 		height = Math.max(1, inner.h - 1);
-		scroll = Math.max(0, Math.min(scroll, all.length - height));
 		const widest = Math.max(...all.map((row) => "keys" in row ? [...t(row.keys)].length : 0));
 		const keyW = Math.max(10, Math.min(widest + 1, Math.floor(inner.w * .4)));
-		for (let k = 0; k < height && scroll + k < all.length; k++) {
-			const row = all[scroll + k], y = inner.y + k;
-			if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", {
+		const whatW = Math.max(8, inner.w - keyW - 3);
+		const shown = all.flatMap((row) => {
+			if ("title" in row) return row.title ? wrap(t(row.title), Math.max(8, inner.w - 2)).map((title) => ({ title })) : [{ title: "" }];
+			return wrap(t(row.what), whatW).map((what, i) => ({
+				keys: i ? "" : row.keys,
+				what,
+				hexKey: /^[0-9A-F]{2}/.test(row.keys)
+			}));
+		});
+		rows = shown.length;
+		scroll = Math.max(0, Math.min(scroll, shown.length - height));
+		for (let k = 0; k < height && scroll + k < shown.length; k++) {
+			const row = shown[scroll + k], y = inner.y + k;
+			if ("title" in row) ui.text(inner.x + 1, y, row.title, {
 				fg: c.accent,
 				attrs: BOLD
 			}, inner.w - 2);
 			else {
-				ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: /^[0-9A-F]{2}/.test(row.keys) ? c.accentAlt : c.fg });
-				ui.text(inner.x + 2 + keyW, y, t(row.what), { fg: c.muted }, inner.w - keyW - 3);
+				if (row.keys) ui.text(inner.x + 2, y, truncate(t(row.keys), keyW - 1), { fg: row.hexKey ? c.accentAlt : c.fg });
+				ui.text(inner.x + 2 + keyW, y, row.what, { fg: c.muted }, whatW);
 			}
 		}
 		ui.hit(inner, { onWheel: (d) => scroll += Math.sign(d) * 3 });
-		const more = all.length > height ? ` ${scroll + 1}–${Math.min(all.length, scroll + height)}/${all.length} · ↑↓ ` : " ";
+		const more = rows > height ? ` ${scroll + 1}–${Math.min(rows, scroll + height)}/${rows} · ↑↓ ` : " ";
 		ui.text(inner.x + 1, inner.y + inner.h - 1, `${t("? or ⌫: back")} ·${more}· med guide · med effects`, { fg: c.subtle }, inner.w - 2);
 	};
 	const key = (k) => {
@@ -6832,7 +6863,7 @@ function makeStart(ib) {
 			});
 			below += 2;
 		}
-		if (error) ui.textCenter(r, below, error, { fg: c.error });
+		if (error) ui.textCenter(r, below, t(error), { fg: c.error });
 	};
 	const key = (k) => {
 		const letter = k.key.length === 1 ? k.key.toUpperCase() : "";
@@ -6930,6 +6961,11 @@ var stable = (v) => v && typeof v === "object" ? Array.isArray(v) ? `[${v.map(st
 function makeApp(ib, engine, st) {
 	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
 	const shownTitle = (title) => /^untitled( \d+)?$/i.test(title) ? title.replace(/^untitled/i, t("untitled")) : title;
+	/** the song's file name as the tab says it: "untitled.bmed" (a song never saved) in the deck's language */
+	const shownFile = (path) => {
+		const file = path.split("/").pop() ?? path;
+		return /^untitled( \d+)?\.bmed$/i.test(file) ? file.replace(/^untitled/i, t("untitled")) : file;
+	};
 	const run = (line) => void ib.shell.run(line);
 	const seqList = new ListView();
 	const instList = new ListView();
@@ -7680,22 +7716,22 @@ function makeApp(ib, engine, st) {
 		"-",
 		{
 			label: t("transpose up"),
-			hint: "alt PgUp",
+			hint: t("alt PgUp"),
 			cmd: "med transpose 1"
 		},
 		{
 			label: t("transpose down"),
-			hint: "alt PgDn",
+			hint: t("alt PgDn"),
 			cmd: "med transpose -1"
 		},
 		{
 			label: t("an octave up"),
-			hint: "⇧ alt PgUp",
+			hint: t("⇧ alt PgUp"),
 			cmd: "med transpose 12"
 		},
 		{
 			label: t("an octave down"),
-			hint: "⇧ alt PgDn",
+			hint: t("⇧ alt PgDn"),
 			cmd: "med transpose -12"
 		},
 		{
@@ -7800,7 +7836,7 @@ function makeApp(ib, engine, st) {
 		kind: "breakermed",
 		key: "breakermed",
 		rawKeys: true,
-		title: () => st.song ? `♫ ${st.path.split("/").pop()}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED",
+		title: () => st.song ? `♫ ${shownFile(st.path)}${st.editor?.dirty ? " ●" : ""}` : "BreakerMED",
 		dirty: () => !!st.editor?.dirty,
 		/**
 		* Closing the page with changes: the autosave's copy first, then save / don't save /
@@ -11565,14 +11601,14 @@ function registerCommands(ib, engine, st) {
 			st.path = dir;
 			st.editor.markSaved();
 			st.savedAt = Date.now();
-			ib.ui.notify(`saved · ${dir}`, "success");
+			ib.ui.notify(`${t("saved")} · ${dir}`, "success");
 			await st.autosave?.forget(was);
 			await st.autosave?.forget(dir);
 			ctx.out(`${fmt.green("✓")} ${dir}/ (song.json + samples)\n`);
 			return;
 		}
 		for (const w of warnings) ctx.out(`${fmt.dim("  ⚠ " + w)}\n`);
-		ib.ui.notify(`saved · ${p}${warnings.length ? " (for other trackers: .bmed keeps everything)" : ""}`, "success");
+		ib.ui.notify(`${t("saved")} · ${p}${warnings.length ? ` (${t("for other trackers: .bmed keeps everything")})` : ""}`, "success");
 		ctx.out(`${fmt.green("✓")} ${p}${warnings.length ? fmt.dim(" — for other trackers; .bmed keeps everything") : ""}\n`);
 	};
 	const writeOut = async (path, w) => {
@@ -11664,6 +11700,7 @@ function registerCommands(ib, engine, st) {
 		st.savedAt = 0;
 		st.sel = null;
 		st.col = 0;
+		st.edit = false;
 		st.path = path;
 		st.seq = st.line = st.track = 0;
 		st.inst = Math.max(0, song.instruments.findIndex((i) => i.kind !== "empty"));
@@ -11756,7 +11793,7 @@ function registerCommands(ib, engine, st) {
 							const songs = await find();
 							if (!songs.length) {
 								st.error = "no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/";
-								ib.ui.notify(st.error, "warning");
+								ib.ui.notify(t(st.error), "warning");
 								return ctx.err(`med open: ${st.error}\n`), 1;
 							}
 							const i = await ib.ui.choose(t("open a song"), songs.map((p) => ({ label: p })));
@@ -11966,7 +12003,7 @@ function registerCommands(ib, engine, st) {
 						st.metronome = rest[0] === "on" ? true : rest[0] === "off" ? false : !st.metronome;
 						engine.metronome = st.metronome;
 						await ib.storage.set("metronome", st.metronome);
-						ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome off\n");
+						ctx.out(st.metronome ? "metronome: a click on each beat while playing (louder on the bar)\n" : "metronome: off\n");
 						return 0;
 					case "edit":
 						need();
@@ -12060,8 +12097,8 @@ function registerCommands(ib, engine, st) {
 						const usage = `med vintage <01–3F|.> amiga | akai [${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz] | off`;
 						if (!(n >= 0 && n < Math.min(63, s.instruments.length))) return ctx.err(`med vintage: instrument ${(which ?? "?").toUpperCase()}: the song has 01–${hex(Math.max(1, s.instruments.length))} · ${usage}\n`), 1;
 						const ins = s.instruments[n];
-						const said = (v) => v ? `${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? 22050} Hz)` : ""}` : "off: the sound as it is";
-						if (kind === void 0) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
+						const said = (v) => v ? `vintage ${VINTAGE_SAID[v.kind]}${v.kind === "akai" ? ` (${v.rate ?? 22050} Hz)` : ""}` : "vintage off: the sound as it is";
+						if (kind === void 0) return ctx.out(`${hex(n + 1)} ${ins.name || ins.kind} · ${said(ins.vintage)}\n${fmt.dim(usage)}\n`), 0;
 						if (kind !== "off" && !VINTAGE_KINDS.includes(kind)) return ctx.err(`med vintage: "${kind}"? ${usage}\n`), 1;
 						const rate = rateS !== void 0 ? parseInt(rateS, 10) : void 0;
 						if (rateS !== void 0 && (kind !== "akai" || !(rate >= AKAI_RATES[0] && rate <= AKAI_RATES[1]))) return ctx.err(`med vintage: a rate is for akai only, ${AKAI_RATES[0]}–${AKAI_RATES[1]} Hz\n`), 1;
@@ -12071,7 +12108,7 @@ function registerCommands(ib, engine, st) {
 							...rate !== void 0 ? { rate } : {}
 						};
 						st.editor.instrument(n, "vintage", (i) => next ? i.vintage = next : delete i.vintage);
-						ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name || ins.kind} · vintage ${said(next)}\n`);
+						ctx.out(`${fmt.green("✓")} ${hex(n + 1)} ${ins.name || ins.kind} · ${said(next)}\n`);
 						return 0;
 					}
 					case "ins": {
@@ -12157,7 +12194,7 @@ function registerCommands(ib, engine, st) {
 						}
 						const sl = st.sel;
 						const nl = sl.line1 - sl.line0 + 1, nt = sl.track1 - sl.track0 + 1;
-						ctx.out(`selected ${nl} line${nl === 1 ? "" : "s"} × ${nt} track${nt === 1 ? "" : "s"}\n`);
+						ctx.out(`selected ${nl} line${nl === 1 ? "" : "s"} · ${nt} track${nt === 1 ? "" : "s"}\n`);
 						return 0;
 					}
 					case "copy":
@@ -12175,7 +12212,8 @@ function registerCommands(ib, engine, st) {
 							track0: st.track,
 							track1: st.track
 						};
-						const size = `${sel.line1 - sel.line0 + 1} line${sel.line1 > sel.line0 ? "s" : ""} × ${sel.track1 - sel.track0 + 1} track${sel.track1 > sel.track0 ? "s" : ""}`;
+						const nl = sel.line1 - sel.line0 + 1, nt = sel.track1 - sel.track0 + 1;
+						const size = `${`${nl} line${nl === 1 ? "" : "s"}`} · ${nt} track${nt === 1 ? "" : "s"}`;
 						if (sub === "copy") st.clip = e.copy(sel), ctx.out(`copied ${size}\n`);
 						else if (sub === "cut") st.clip = e.cut(sel), st.sel = null, ctx.out(`cut ${size}\n`);
 						else if (sub === "clear") e.clearSelection(sel), ctx.out(`cleared ${size}\n`);
@@ -12659,7 +12697,7 @@ function activate(ib) {
 		path: st.path,
 		playing: !!engine?.playing
 	}));
-	st.autosave.onError = (m) => ib.ui.notify(`autosave off — ${m} (med autosave on to try again)`, "warning");
+	st.autosave.onError = (m) => ib.ui.notify(`${ib.lib.t("autosave off")} — ${m} (${ib.lib.t("med autosave on to try again")})`, "warning");
 	st.autosave.load().then(() => ib.ui.redraw());
 	engine.onChange = () => ib.ui.redraw();
 	ib.audio.onStop?.(() => engine?.silence());
@@ -13248,6 +13286,56 @@ var FR = {
 	"MOVING AROUND": "SE DÉPLACER",
 	"Amiga: 8 bits, the note's own rate, the A500's filter": "Amiga : 8 bits, la fréquence propre de la note, le filtre de l'A500",
 	"Akai S900 / S950-style: 12 bits, a lower rate, aliasing": "façon Akai S900 / S950 : 12 bits, une fréquence plus basse, du repliement",
-	"vintage: heard through an Amiga's Paula or an old Akai sampler": "vintage : entendu à travers la Paula d'un Amiga ou un vieux sampler Akai"
+	"vintage: heard through an Amiga's Paula or an old Akai sampler": "vintage : entendu à travers la Paula d'un Amiga ou un vieux sampler Akai",
+	"edit mode: typing writes in the block": "mode édition : la frappe écrit dans le bloc",
+	"edit mode off: the keys only play": "mode édition coupé : les touches ne font que jouer",
+	"▶ playing the song from position {p}, line {l}": "▶ lecture du morceau depuis la position {p}, ligne {l}",
+	"▶ playing the block from position {p}, line {l}": "▶ lecture du bloc depuis la position {p}, ligne {l}",
+	"■ stopped": "■ arrêté",
+	"position {p} → block {b} · line {l}": "position {p} → bloc {b} · ligne {l}",
+	"vintage Amiga: 8 bits, the note's own rate, the A500's filter": "vintage Amiga : 8 bits, la fréquence propre de la note, le filtre de l'A500",
+	"vintage Akai S900 / S950-style: 12 bits, a lower rate, aliasing ({hz} Hz)": "vintage façon Akai S900 / S950 : 12 bits, une fréquence plus basse, du repliement ({hz} Hz)",
+	"vintage off: the sound as it is": "vintage coupé : le son tel quel",
+	"PAULA: stepped, gritty, like the Amiga": "PAULA : en escalier, granuleux, comme l'Amiga",
+	"SMOOTH: interpolated": "LISSE : interpolé",
+	"view: the cursor's line in the middle (ProTracker)": "vue : la ligne du curseur au milieu (ProTracker)",
+	"view: scrolls at its edges (OctaMED)": "vue : défile à ses bords (OctaMED)",
+	"follow: the cursor follows the song as it plays": "suivre : le curseur suit le morceau pendant la lecture",
+	"follow off: the cursor stays where you edit, the line heard is lit": "suivre coupé : le curseur reste où tu écris, la ligne entendue est allumée",
+	"metronome: a click on each beat while playing (louder on the bar)": "métronome : un clic à chaque temps pendant la lecture (plus fort sur la mesure)",
+	"metronome: off": "métronome : non",
+	"the A500's LED filter: on (a soft, warm top)": "le filtre LED de l'A500 : oui (des aigus doux, chauds)",
+	"the A500's LED filter: off": "le filtre LED de l'A500 : non",
+	"every track plays": "toutes les pistes jouent",
+	"muted: {list}": "muettes : {list}",
+	"octave {n}: the keys' bottom row is C-{m}": "octave {n} : la rangée du bas des touches est C-{m}",
+	"step 1: the cursor moves 1 line after a note": "pas 1 : le curseur avance d'1 ligne après une note",
+	"step {n}: the cursor moves {m} lines after a note": "pas {n} : le curseur avance de {m} lignes après une note",
+	"nothing selected": "rien de sélectionné",
+	"selected 1 line": "sélectionné 1 ligne",
+	"selected {n} lines": "sélectionné {n} lignes",
+	"copied 1 line": "copié 1 ligne",
+	"copied {n} lines": "copié {n} lignes",
+	"cut 1 line": "coupé 1 ligne",
+	"cut {n} lines": "coupé {n} lignes",
+	"cleared 1 line": "effacé 1 ligne",
+	"cleared {n} lines": "effacé {n} lignes",
+	"transposed {n}": "transposé de {n}",
+	"{n} lines": "{n} lignes",
+	"1 line": "1 ligne",
+	"pasted at line {l}, {track}": "collé à la ligne {l}, {track}",
+	"a line inserted at {l}": "une ligne insérée en {l}",
+	"line {l} deleted": "ligne {l} supprimée",
+	"for other trackers: .bmed keeps everything": "pour les autres trackers : .bmed garde tout",
+	"med autosave on to try again": "med autosave on pour réessayer",
+	"no song in songs/ yet: N for a new one, or put a .bmed, .med or .mod in songs/": "aucun morceau dans songs/ : N pour un nouveau, ou mets un .bmed, .med ou .mod dans songs/",
+	"the mix's level while playing: a bar each 6 dB, all six from −3 dB · LIM: the limiter is turning a peak down 3 dB or more (now and then on a loud song; all the time: too loud)": "le niveau du mix pendant la lecture : une barre tous les 6 dB, les six dès −3 dB · LIM : le limiteur baisse une crête de 3 dB ou plus (de temps en temps sur un morceau fort ; tout le temps : trop fort)",
+	"alt PgUp · alt PgDn": "alt pg préc · alt pg suiv",
+	"↑↓ ←→ · PgUp PgDn": "↑↓ ←→ · pg préc pg suiv",
+	"tab · ⇧Tab": "tabulation · ⇧ tabulation",
+	"alt PgUp": "alt pg préc",
+	"alt PgDn": "alt pg suiv",
+	"⇧ alt PgUp": "⇧ alt pg préc",
+	"⇧ alt PgDn": "⇧ alt pg suiv"
 };
 export { FR, activate, deactivate };
