@@ -1,7 +1,7 @@
 /**
  * BreakerMED — the vintage mode: an instrument heard through an old machine's
  * converters, whatever it is (a sample, a synth, a kit). Per instrument
- * (`med vintage <n> amiga|akai|off`, alt Y), kept in the song.
+ * (`med vintage <n> amiga|akai|off`, alt T), kept in the song.
  *
  *   amiga  the A500's Paula: 8 bits, each value held for the note's own period
  *          (the rate goes up and down with the pitch, ≤ 28 867 Hz), no

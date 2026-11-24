@@ -120,7 +120,8 @@ export interface Deck {
   press(k: KeyInput): boolean;
 }
 
-export function makeDeck(): Deck {
+/** opts.t: the deck's t() (default: English as written) — a French table, the deck's ⌘ → Ctrl… */
+export function makeDeck(opts: { t?: (s: string) => string } = {}): Deck {
   const files = new Map<string, string | Uint8Array>();
   const store = new Map<string, unknown>();
   let cmd: { run(ctx: never): unknown } | null = null;
@@ -175,7 +176,7 @@ export function makeDeck(): Deck {
     audio: { available: () => true, stream: async (): Promise<StreamLike> => ({ rate: 48000, low: 800, high: 2400, write() {}, close() {} }), stop: async () => {}, onStop: () => () => {} },
     lib: {
       BOLD: 1,
-      t: (s: string) => s,
+      t: opts.t ?? ((s: string) => s),
       addTranslations() {},
       truncate: (s: string, w: number) => (s.length > w ? s.slice(0, Math.max(0, w - 1)) + "…" : s),
       q: (s: string) => (/[\s"']/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s),

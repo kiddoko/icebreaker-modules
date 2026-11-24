@@ -1,5 +1,16 @@
 # BreakerMED — changes
 
+## 0.13.1 (beta)
+
+From the Windows test bench (0.13.0, AMD Radeon + NVIDIA overlays, Swiss QWERTZ).
+
+**Fixed**
+- **alt T** for the vintage mode. alt Y and alt R never reached the page on that machine: AMD's and NVIDIA's overlays keep Alt+R and Alt+Z for themselves, and on a QWERTZ keyboard the key marked Y is where QWERTY has its Z (the page reads keys by place). T is the same key in the same place on QWERTY, QWERTZ and AZERTY. The INSTRUMENT button, `med vintage`, the guide, `med -h`, the README and the INSTRUMENT screen's status line ("alt T vintage") say it; alt Y / alt R still work where they arrive, unsaid.
+- The page in French: the sequence's header (« pos    bloc »), a new song's name (« sans titre »: the file and the song keep "untitled").
+- The guide in French: its keys' column is as wide as its widest key once the deck has said it ("med saveas · Ctrl+Shift+S" was cut to « Ctrl+Sh… » on Windows); « ⇧ espace » beside « espace » (no longer « ⇧Space »; a keycap would have cut « ⇧e »); « ou clic sur « éditer » » as the button reads; the 16 keys still in English (caps lock, delete, drag, the sequence, right-click…) in French.
+- `med new` / `med open`: the numbers first, one in the singular: « untitled · 8 tracks · 1 block · 1 position · 5 instruments · 0:07 ». ICEBREAKER 0.7.2 reads a module's lines with its own table first, so in French: « sans titre · 8 pistes · 1 bloc · 1 position · 5 instruments · 0:07 » (an older deck may still say « morceaux »).
+- Checked: the 0.13.0 on the STORE has `med new` (a test now loads the built main.js and runs it).
+
 ## 0.13.0 (beta)
 
 From Fable's hands-on review of 0.12.1 and the six answers it asked for.

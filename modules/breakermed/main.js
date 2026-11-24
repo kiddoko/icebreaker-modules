@@ -6574,7 +6574,7 @@ var GUIDE = [
 			["med sample <n> chop 8", "8 slices, each a new instrument · chop onsets: a slice an attack"],
 			["med bounce", "this block, rendered into a new instrument"],
 			["med pack", "the starter sounds: recorded by people, computed placeholders until then (med pack load <name>)"],
-			["alt Y · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"]
+			["alt T · med vintage", "the instrument heard through an Amiga (8 bits, the A500's filter) or an Akai S900 / S950-style sampler (12 bits, aliasing)"]
 		]
 	},
 	{
@@ -6611,7 +6611,8 @@ function makeGuide(ib) {
 		const all = lines();
 		height = Math.max(1, inner.h - 1);
 		scroll = Math.max(0, Math.min(scroll, all.length - height));
-		const keyW = Math.min(22, Math.max(10, Math.floor(inner.w / 3)));
+		const widest = Math.max(...all.map((row) => "keys" in row ? [...t(row.keys)].length : 0));
+		const keyW = Math.max(10, Math.min(widest + 1, Math.floor(inner.w * .4)));
 		for (let k = 0; k < height && scroll + k < all.length; k++) {
 			const row = all[scroll + k], y = inner.y + k;
 			if ("title" in row) ui.text(inner.x + 1, y, row.title ? t(row.title) : "", {
@@ -6928,6 +6929,7 @@ var HEX = "0123456789abcdef";
 var stable = (v) => v && typeof v === "object" ? Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v).sort().map((k) => `${k}:${stable(v[k])}`).join(",")}}` : JSON.stringify(v);
 function makeApp(ib, engine, st) {
 	const { BOLD, t, truncate, ListView, mix, q } = ib.lib;
+	const shownTitle = (title) => /^untitled( \d+)?$/i.test(title) ? title.replace(/^untitled/i, t("untitled")) : title;
 	const run = (line) => void ib.shell.run(line);
 	const seqList = new ListView();
 	const instList = new ListView();
@@ -7254,7 +7256,7 @@ function makeApp(ib, engine, st) {
 			if (bx > r.x + 20) ui.button(bx, r.y, label, () => {}, {
 				cmd: `med vintage ${n} ${next}`,
 				quiet: !v,
-				tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt Y")}: ${next}`
+				tip: t(v ? VINTAGE_SAID[v.kind] : "vintage: heard through an Amiga's Paula or an old Akai sampler") + ` · ${t("click or alt T")}: ${next}`
 			});
 		}
 		const sk = synthOf(ins);
@@ -7814,7 +7816,7 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "guide") st.screen = st.back === "guide" ? "block" : st.back;
 			if (!st.song || !e?.dirty) return true;
 			await a?.flush();
-			const name = !st.path.startsWith("songs/") ? t("this new song") : `“${st.song.title || st.path.split("/").pop() || "untitled"}”`;
+			const name = !st.path.startsWith("songs/") ? t("this new song") : `“${shownTitle(st.song.title || st.path.split("/").pop() || "untitled")}”`;
 			const pick = await ib.ui.choose(`${t("save the changes to")} ${name}?`, [
 				{ label: t("save") },
 				{ label: t("don't save") },
@@ -7840,7 +7842,8 @@ function makeApp(ib, engine, st) {
 			if (st.screen === "instrument") {
 				const ins = st.song.instruments[st.inst];
 				const keys = ins?.kind === "drums" ? t("↑↓ a drum · ←→ a setting · ⇧←→ its value") : synthOf(ins) ? t("↑↓ a setting · ←→ its value") : t("alt ←→ another instrument");
-				return `${where} · ${t("the keys play it")} · ${keys} · alt B ${t("the block")}`;
+				const vintage = ins && ins.kind !== "empty" ? ` · alt T ${t("vintage")}` : "";
+				return `${where} · ${t("the keys play it")} · ${keys}${vintage} · alt B ${t("the block")}`;
 			}
 			const transport = engine.playing ? st.edit ? `● ${t("rec")} · ${t("space")} ${t("stop")}` : `${t("space")} ${t("stop")}` : `⏎ ${t("play")} · ${t("space")} ${st.edit ? t("stop editing") : t("edit")}`;
 			return `${where} · ${t("step")} ${st.step}${chordHere()}${cmdHere()} · ${transport} · ${leave}`;
@@ -7855,7 +7858,7 @@ function makeApp(ib, engine, st) {
 				st.seq = now.seq;
 				st.line = now.line;
 			}
-			const name = s ? s.title || st.path.split("/").pop() || "" : "";
+			const name = s ? shownTitle(s.title || st.path.split("/").pop() || "") : "";
 			let x = ui.text(r.x + 1, r.y, "BreakerMED", {
 				fg: c.accent,
 				attrs: BOLD
@@ -8082,7 +8085,7 @@ function makeApp(ib, engine, st) {
 				};
 				if (st.screen !== "guide") lookRescue();
 				start.setSong(s ? {
-					title: s.title || st.path.split("/").pop() || "untitled",
+					title: shownTitle(s.title || st.path.split("/").pop() || "untitled"),
 					dirty: !!st.editor?.dirty
 				} : null);
 				return st.screen === "guide" ? guide.draw(ui, page, focused) : start.draw(ui, page, st.error);
@@ -8107,7 +8110,7 @@ function makeApp(ib, engine, st) {
 			});
 			seqList.items = s.sequence.map((_, i) => i);
 			if (seqList.selected !== st.seq) seqList.select(st.seq);
-			ui.text(seqBox.x, seqBox.y, "pos    block", { fg: c.subtle });
+			ui.text(seqBox.x, seqBox.y, t("pos    block"), { fg: c.subtle }, seqBox.w);
 			const free = s.blocks.length - new Set(s.sequence).size;
 			const listBox = {
 				x: seqBox.x,
@@ -8466,6 +8469,7 @@ function makeApp(ib, engine, st) {
 					case "KeyN": return unselect(), run(`med seq new ${dec(st.seq)}`), true;
 					case "KeyD": return unselect(), run(`med seq copy ${dec(st.seq)}`), true;
 					case "Backspace": return s.sequence.length > 1 ? (unselect(), run(`med seq rm ${dec(st.seq)}`)) : ib.ui.notify(t("the sequence keeps one position at least"), "warning"), true;
+					case "KeyT":
 					case "KeyY":
 					case "KeyR": {
 						const ins = s.instruments[st.inst];
@@ -11445,7 +11449,7 @@ var USAGE = [
 	"med mute <track> · med solo <track>   (again: back) · alt M, ⇧ alt M on the page",
 	"med track <n> name <text> · med track <n> vol <0–64> · med track <n> pan <-100–100> · med track <n> strum <0–200 ms>",
 	"med paula on|off           stepped like the Amiga (on), or smooth",
-	"med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt Y)",
+	"med vintage <01–3F|.> amiga | akai [7500–40000] | off   an instrument heard through an Amiga's Paula or an old Akai sampler (alt T)",
 	"med edit on|off            typing writes in the block (space on the page)",
 	"med view center|edges      the block's view: the cursor's line in the middle (the default), or scrolling at the edges",
 	"med follow on|off          while playing, the cursor follows the song (off: it stays where you edit · alt F)",
@@ -11666,7 +11670,10 @@ function registerCommands(ib, engine, st) {
 		st.error = "";
 		await engine.load(song);
 		const len = songLength(song);
-		ctx.out(`${fmt.green("♫")} ${song.title || path}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · tracks ${song.tracks} · blocks ${song.blocks.length} · positions ${song.sequence.length} · ${song.instruments.filter((i) => i.kind !== "empty").length} instruments · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
+		const count = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+		const title = /^untitled( \d+)?$/i.test(song.title) ? song.title.replace(/^untitled/i, t("untitled")) : song.title || path;
+		const used = song.instruments.filter((i) => i.kind !== "empty").length;
+		ctx.out(`${fmt.green("♫")} ${title}${/\.bmed$/i.test(path) ? "" : ` · ${song.format}`} · ${count(song.tracks, "track")} · ${count(song.blocks.length, "block")} · ${count(song.sequence.length, "position")} · ${count(used, "instrument")} · ${Math.floor(len.seconds / 60)}:${String(Math.floor(len.seconds % 60)).padStart(2, "0")}\n`);
 	};
 	/** an autosaved copy on the page, as the song it's a copy of (unsaved: ● until med save) */
 	const recover = async (ctx, rec) => {
@@ -13073,7 +13080,29 @@ var FR = {
 	"a command: 4 hex digits (? the list)": "une commande : 4 chiffres hexa (? la liste)",
 	"a note would go past C-1…B-9: nothing moved": "une note sortirait de C-1…B-9 : rien n'a bougé",
 	"vintage": "vintage",
-	"click or alt Y": "clic ou alt Y",
+	"click or alt T": "clic ou alt T",
+	untitled: "sans titre",
+	"pos    block": "pos    bloc",
+	"{n} tracks": "{n} pistes",
+	"1 track": "1 piste",
+	"{n} blocks": "{n} blocs",
+	"1 block": "1 bloc",
+	"⇧Space": "⇧ espace",
+	"the letter keys": "les touches de lettres",
+	"` · 1 · caps lock": "` · 1 · verr. maj",
+	"delete · ⌫": "suppr · ⌫",
+	"alt ⏎ · insert": "alt ⏎ · inser",
+	"⇧ arrows · drag": "⇧ flèches · glisser",
+	"playing, edit mode on": "en lecture, mode édition",
+	"the status line": "la ligne d'état",
+	"the numbers": "les numéros",
+	"the wheel on the block": "la molette sur le bloc",
+	"alt F · scroll lock": "alt F · arrêt défil",
+	"the sequence": "la séquence",
+	"the track's ■": "le ■ de la piste",
+	"the top line": "la ligne du haut",
+	"right-click": "clic droit",
+	"INSTRUMENT tab": "onglet INSTRUMENT",
 	"the kit's grit: fewer bits, each value held longer": "le grain du kit : moins de bits, chaque valeur tenue plus longtemps",
 	"solo this track": "cette piste en solo",
 	"this new song": "ce nouveau morceau",
@@ -13090,7 +13119,7 @@ var FR = {
 	"stop editing": "quitter l'édition",
 	"REC": "REC",
 	"recording: the keys write where the song is · click: stop writing": "enregistrement : les touches écrivent là où en est le morceau · clic : arrêter d'écrire",
-	"play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧Space from the cursor": "jouer le morceau depuis le début de ce bloc · ⏎ · ⇧⏎ ce bloc en boucle · ⇧espace depuis le curseur",
+	"play the song from the top of this block · ⏎ · ⇧⏎ this block, looped · ⇧Space from the cursor": "jouer le morceau depuis le début de ce bloc · ⏎ · ⇧⏎ ce bloc en boucle · ⇧ espace depuis le curseur",
 	"the mix's level (the last bar: −1 dB, the most it goes) · LIM: the limiter is turning it down 3 dB or more, so it never clips": "le niveau du mix (la dernière barre : −1 dB, le maximum) · LIM : le limiteur le baisse de 3 dB ou plus, pour qu'il ne sature jamais",
 	"the octave the keys play · F1–F8 · alt ↑↓ · the wheel": "l'octave que jouent les touches · F1–F8 · alt ↑↓ · la molette",
 	"the sequence keeps one position at least": "la séquence garde au moins une position",
@@ -13187,7 +13216,7 @@ var FR = {
 	"play the song from the top of this block · again while it plays: the block starts over": "jouer le morceau depuis le début de ce bloc · encore pendant la lecture : le bloc repart du début",
 	"this block, looped, from its top": "ce bloc en boucle, depuis son début",
 	"play from the cursor's line": "jouer depuis la ligne du curseur",
-	"stop · when stopped: EDIT MODE on / off (or click “edit” at the top)": "stop · à l'arrêt : MODE ÉDITION oui / non (ou clic sur « édition » en haut)",
+	"stop · when stopped: EDIT MODE on / off (or click “edit” at the top)": "stop · à l'arrêt : MODE ÉDITION oui / non (ou clic sur « éditer » en haut)",
 	"a song with changes asks first: save, don't save, cancel": "un morceau modifié demande d'abord : enregistrer, ne pas enregistrer, annuler",
 	"the octave the keys play (alt ↑↓ too)": "l'octave que jouent les touches (alt ↑↓ aussi)",
 	"clear the column · delete the line (⇧: in every track) — in edit mode only": "effacer la colonne · supprimer la ligne (⇧ : dans toutes les pistes) — en mode édition seulement",
@@ -13221,4 +13250,4 @@ var FR = {
 	"Akai S900 / S950-style: 12 bits, a lower rate, aliasing": "façon Akai S900 / S950 : 12 bits, une fréquence plus basse, du repliement",
 	"vintage: heard through an Amiga's Paula or an old Akai sampler": "vintage : entendu à travers la Paula d'un Amiga ou un vieux sampler Akai"
 };
-export { activate, deactivate };
+export { FR, activate, deactivate };
